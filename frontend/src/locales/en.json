@@ -227,6 +227,7 @@
     "K3_CONFIG": "Kingdee connection changed",
     "K3_CONFIG_TEST": "Kingdee connection test",
     "ORDER_SYNC": "Order sync",
+    "ORDER_SYNC_CONFIG": "Sync settings changed",
     "ORDER_ATTACH_FILL": "Attachment item filled",
     "ORDER_LENGTH_FILL": "Length filled",
     "ORDER_UNIT_FILL": "Unit filled",
@@ -1013,6 +1014,23 @@
       "all": "fetching all lines",
       "rows": "{done} rows fetched",
       "write": "writing the snapshot"
+    },
+    "syncCfg": {
+      "button": "Sync settings",
+      "title": "Sync settings",
+      "desc": "Automatic sync = scheduled compare sync + the sync when this page is opened; every compare sync also refreshes the business and picking status of the material lines. A longer interval puts less load on Kingdee but order changes arrive later. While paused, \"Compare sync now\", \"Sync bill\" and \"Full rebuild\" still work. Takes effect within a minute after saving; no restart needed.",
+      "auto": "Automatic sync",
+      "running": "On",
+      "paused": "Paused",
+      "interval": "Compare sync interval",
+      "minutes": "minutes",
+      "sourcePage": "Set on this page (SN_SYNC_INTERVAL_MINUTES in .env is no longer used)",
+      "sourceEnv": "Currently follows SN_SYNC_INTERVAL_MINUTES in .env ({n} minutes); once you change and save it, this page's value is used",
+      "updated": "Last changed",
+      "pausedHint": "While paused, Kingdee order changes, un-approvals and status changes are not synced automatically; resume it as soon as possible",
+      "saved": "Sync settings saved",
+      "pausedTag": "Auto sync paused",
+      "every": "every {n} min"
     }
   },
   "query": {

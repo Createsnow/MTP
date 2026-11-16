@@ -9,6 +9,10 @@
         </el-button>
         <el-button v-if="store.isAdmin" :loading="syncing === 'rebuild'" @click="rebuild">{{ t("orders.rebuild") }}</el-button>
         <!-- 金蝶连接：最近测试未通过或密钥解不开时按钮右上角红点 -->
+        <!-- 同步设置：定时比对同步间隔、暂停自动同步；暂停时按钮右上角红点 -->
+        <el-badge v-if="store.isAdmin" is-dot :hidden="!meta?.compare?.paused" class="k3-badge">
+          <el-button @click="syncCfgOpen = true"><el-icon><Timer /></el-icon><span>{{ t("orders.syncCfg.button") }}</span></el-button>
+        </el-badge>
         <el-badge v-if="store.isAdmin" is-dot :hidden="!k3Warn" class="k3-badge">
           <el-button @click="k3Open = true"><el-icon><Setting /></el-icon><span>{{ t("k3.button") }}</span></el-button>
         </el-badge>
@@ -35,6 +39,9 @@
           </el-tag>
         </template>
         <span v-else class="muted">—</span>
+        <!-- 自动同步：暂停时醒目提示；否则显示间隔 -->
+        <el-tag v-if="meta?.compare?.paused" size="small" type="warning" class="ml">{{ t("orders.syncCfg.pausedTag") }}</el-tag>
+        <span v-else-if="meta?.compare?.interval_minutes" class="muted ml">{{ t("orders.syncCfg.every", { n: meta.compare.interval_minutes }) }}</span>
       </span>
       <el-button link :type="meta?.open_alerts ? 'danger' : 'info'" @click="tab = 'alerts'">
         {{ t("orders.openAlerts", { n: meta?.open_alerts ?? 0 }) }}
@@ -256,6 +263,7 @@
       </template>
     </el-dialog>
 
+    <SyncConfigDialog v-if="store.isAdmin" v-model="syncCfgOpen" @saved="refresh()" />
     <K3ConfigDrawer v-if="store.isAdmin" v-model="k3Open" @saved="(c: any) => (k3 = c)" @update:model-value="(v: boolean) => !v && loadK3()" />
   </div>
 </template>
@@ -272,6 +280,7 @@ import { useTime } from "@/composables/useTime";
 import PageHead from "@/components/PageHead.vue";
 import FactorySelect from "@/components/FactorySelect.vue";
 import K3ConfigDrawer from "./orders/K3ConfigDrawer.vue";
+import SyncConfigDialog from "./orders/SyncConfigDialog.vue";
 import { firstSyncThisLogin } from "@/utils/syncOnce";
 import { leaveStateLabel, suspendLabel } from "@/constants";
 import type { BillState, OrderBill, OrderLine } from "@/types/api";
@@ -316,6 +325,8 @@ const syncing = ref<"" | "one" | "compare" | "rebuild">("");
 const k3 = ref<any>(null);
 const k3Warn = computed(() => !!k3.value && (k3.value.secret_unreadable || k3.value.last_test?.ok === false));
 const k3Open = ref(false);
+/** 同步设置（只有系统管理员）：定时比对同步间隔、暂停自动同步 */
+const syncCfgOpen = ref(false);
 const loadK3 = async () => {
   if (store.isAdmin) k3.value = await api.k3Config().catch(() => k3.value);
 };

@@ -56,6 +56,7 @@ E = {
 "ORDER_NOT_FOUND": ("Production order {bill_no} is not in the snapshot (not approved, or not synced yet)", "Lệnh sản xuất {bill_no} không có trong ảnh chụp (chưa duyệt hoặc chưa đồng bộ)"),
 "ORDER_LINE_NOT_FOUND": ("Material line {bill_no} / {seq} is not in the snapshot", "Dòng vật tư {bill_no} / {seq} không có trong ảnh chụp"),
 "ORDER_SYNC_BUSY": ("Order sync is running, please retry later", "Đang đồng bộ lệnh, vui lòng thử lại sau"),
+"SYNC_INTERVAL_INVALID": ("The sync interval must be a whole number of minutes from {min} to {max}", "Khoảng đồng bộ phải là số phút nguyên từ {min} đến {max}"),
 "ATTACH_INVALID": ("Attachment item cannot be empty and must be at most 64 characters", "Hạng mục đính kèm không được trống, tối đa 64 ký tự"),
 "ATTACH_FILL_K3": ("Kingdee already has the attachment item; it cannot be changed on the page", "Kingdee đã có hạng mục đính kèm, không thể sửa trên trang"),
 "LENGTH_FILL_INVALID": ("Length must be at most 64 characters and cannot be empty when set in batch", "Chiều dài tối đa 64 ký tự; khi đặt hàng loạt không được để trống"),

@@ -38,6 +38,7 @@ FACTORY_MES_TEST = "FACTORY_MES_TEST"
 K3_CONFIG = "K3_CONFIG"
 K3_CONFIG_TEST = "K3_CONFIG_TEST"
 ORDER_SYNC = "ORDER_SYNC"
+ORDER_SYNC_CONFIG = "ORDER_SYNC_CONFIG"
 ORDER_ATTACH_FILL = "ORDER_ATTACH_FILL"
 ORDER_LENGTH_FILL = "ORDER_LENGTH_FILL"
 ORDER_UNIT_FILL = "ORDER_UNIT_FILL"
@@ -237,6 +238,7 @@ _PATH_ACTIONS = (
     (r"/api/orders/length", ORDER_LENGTH_FILL),
     (r"/api/orders/unit", ORDER_UNIT_FILL),
     (r"/api/orders/alerts/\d+/handle", ORDER_ALERT_HANDLE),
+    (r"/api/orders/sync-config", ORDER_SYNC_CONFIG),
     (r"/api/orders/.*", ORDER_SYNC),
     (r"/api/rules/line-(select|clear)", RULE_LINE_SELECT),
     (r"/api/rules/pi-binding", RULE_PI_BIND),

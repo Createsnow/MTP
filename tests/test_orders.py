@@ -437,6 +437,81 @@ def test_scheduled_compare_skips_within_interval(w, sql):
     assert w.compare() is not None, "手动触发不去重"
 
 
+def _reset_sync_config(sql) -> None:
+    sql.exec(
+        "UPDATE sn_sync_state SET interval_minutes = NULL, paused = 0, config_by = NULL, config_at = NULL WHERE id = 1"
+    )
+
+
+def test_sync_config_interval_and_pause(w, api, sql):
+    """同步设置：间隔页面保存的优先（没保存过用 .env）；暂停后定时、进页同步都不执行、不调金蝶，
+    立即比对同步、按单据同步照常；只有系统管理员能看、能改；改动留痕，没有变化不留痕。"""
+    from app.core.security import CurrentUser
+    from app.services import orders
+
+    try:
+        _reset_sync_config(sql)
+        cfg = ok(api.get("/api/orders/sync-config", w.admin)).body
+        assert cfg["source"] == "ENV" and cfg["interval_minutes"] == cfg["env_interval_minutes"] == 10
+        assert cfg["paused"] is False
+
+        # 改间隔：页面值优先，定时去重按新间隔
+        cfg = ok(api.put("/api/orders/sync-config", {"interval_minutes": 30}, w.admin)).body
+        assert (cfg["source"], cfg["interval_minutes"], cfg["paused"]) == ("PAGE", 30, False)
+        assert cfg["updated_by"] == "admin" and cfg["updated_at"]
+        a = sql.one(
+            "SELECT * FROM sn_audit WHERE action = 'ORDER_SYNC_CONFIG' AND result = 'OK' ORDER BY id DESC LIMIT 1"
+        )
+        assert a is not None and "interval 10 -> 30" in a["detail"] and "paused 0 -> 0" in a["detail"]
+        n_audit = sql.count("SELECT COUNT(*) FROM sn_audit WHERE action = 'ORDER_SYNC_CONFIG'")
+        ok(api.put("/api/orders/sync-config", {"interval_minutes": 30, "paused": False}, w.admin))
+        assert sql.count("SELECT COUNT(*) FROM sn_audit WHERE action = 'ORDER_SYNC_CONFIG'") == n_audit, (
+            "没有变化不留痕"
+        )
+
+        w.compare()
+        sql.exec("UPDATE sn_sync_state SET last_run_at = DATE_SUB(last_run_at, INTERVAL 11 MINUTE) WHERE id = 1")
+        calls = len(conftest.K3.calls)
+        assert orders.compare_sync(CurrentUser.system(), "SCHEDULED") is None, "间隔 30 分钟：11 分钟前同步过，不到期"
+        assert len(conftest.K3.calls) == calls
+        sql.exec("UPDATE sn_sync_state SET last_run_at = DATE_SUB(last_run_at, INTERVAL 20 MINUTE) WHERE id = 1")
+        assert orders.compare_sync(CurrentUser.system(), "SCHEDULED") is not None, "31 分钟前：到期执行"
+
+        # 暂停：定时（即使到期）、进页都不执行；meta 带出暂停状态
+        cfg = ok(api.put("/api/orders/sync-config", {"paused": True}, w.admin)).body
+        assert cfg["paused"] is True and cfg["interval_minutes"] == 30
+        assert ok(api.get("/api/orders/meta", w.admin)).body["compare"]["paused"] is True
+        sql.exec("UPDATE sn_sync_state SET last_run_at = DATE_SUB(last_run_at, INTERVAL 1 DAY) WHERE id = 1")
+        calls = len(conftest.K3.calls)
+        orders.run_scheduled()
+        assert orders.compare_sync(CurrentUser.system(), "PAGE") is None
+        assert ok(api.post("/api/orders/page-sync", {}, w.admin)).body["started"] is False
+        assert len(conftest.K3.calls) == calls, "暂停：自动同步不调金蝶"
+        # 手动同步照常
+        assert w.compare() is not None
+        org = w.org(uid("O")[:10])
+        bill = uid("MO")
+        w.order(bill, org, "C1", uid("PI"), ("M1", 1))
+        assert sql.count("SELECT COUNT(*) FROM sn_prd_mo WHERE bill_no = %s", bill) == 1
+
+        # 恢复：到期的定时同步照常
+        ok(api.put("/api/orders/sync-config", {"paused": False}, w.admin))
+        sql.exec("UPDATE sn_sync_state SET last_run_at = DATE_SUB(last_run_at, INTERVAL 1 DAY) WHERE id = 1")
+        assert orders.compare_sync(CurrentUser.system(), "SCHEDULED") is not None
+
+        # 校验与权限
+        for bad in (4, 1441, 0, -1):
+            assert (
+                api.put("/api/orders/sync-config", {"interval_minutes": bad}, w.admin).code == "SYNC_INTERVAL_INVALID"
+            )
+        tok = w.user(conftest.emp("F"), "operator", None, [org])
+        assert api.get("/api/orders/sync-config", tok).status == 403
+        assert api.put("/api/orders/sync-config", {"paused": True}, tok).status == 403
+        assert ok(api.get("/api/orders/sync-config", w.admin)).body["paused"] is False
+    finally:
+        _reset_sync_config(sql)
+
+
 def test_material_unrelated_does_not_reopen_on_next_compare(w, api, sql):
     """失去对应「确认无关」后，该单再有别的变化（如数量）重新比对时，同一物料行不再重复提醒、不再暂停。"""
     org, pi, bill = issued(w, ("M1", 5), ("M2", 5))

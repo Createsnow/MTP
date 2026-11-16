@@ -227,6 +227,7 @@
     "K3_CONFIG": "修改金蝶连接",
     "K3_CONFIG_TEST": "金蝶连接测试",
     "ORDER_SYNC": "同步生产订单",
+    "ORDER_SYNC_CONFIG": "修改同步设置",
     "ORDER_ATTACH_FILL": "填写附件项次",
     "ORDER_LENGTH_FILL": "填写米数",
     "ORDER_UNIT_FILL": "填写产品单位",
@@ -1013,6 +1014,23 @@
       "all": "拉取全部明细",
       "rows": "已拉取 {done} 行",
       "write": "写入快照"
+    },
+    "syncCfg": {
+      "button": "同步设置",
+      "title": "同步设置",
+      "desc": "自动同步 = 定时比对同步 + 进入本页时的同步，每次比对同步都会刷新物料行的业务状态、领料状态。间隔越长对金蝶的压力越小，但订单变化到达本系统越晚。暂停后「立即比对同步」「按单据同步」「全量重建」照常可用。保存后一分钟内生效，不用重启。",
+      "auto": "自动同步",
+      "running": "运行",
+      "paused": "暂停",
+      "interval": "比对同步间隔",
+      "minutes": "分钟",
+      "sourcePage": "已在页面设置（不再使用 .env 的 SN_SYNC_INTERVAL_MINUTES）",
+      "sourceEnv": "当前沿用 .env 的 SN_SYNC_INTERVAL_MINUTES（{n} 分钟）；改了间隔保存后以页面为准",
+      "updated": "最后修改",
+      "pausedHint": "暂停期间金蝶的订单变化、反审核、业务状态变化都不会自动同步，请在处理完后及时恢复",
+      "saved": "同步设置已保存",
+      "pausedTag": "自动同步已暂停",
+      "every": "每 {n} 分钟"
     }
   },
   "query": {

@@ -176,6 +176,10 @@ CREATE TABLE sn_sync_state (
   last_message  VARCHAR(500) NOT NULL DEFAULT '',
   last_bills    INT          NULL COMMENT '最近一次变动的单据数',
   last_full_at  DATETIME     NULL COMMENT '最近一次全量重建',
+  interval_minutes INT       NULL COMMENT '定时比对同步间隔（分钟，生产订单页「同步设置」保存）；空 = 用 .env 的 SN_SYNC_INTERVAL_MINUTES',
+  paused        TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '暂停自动同步（定时比对同步、进页同步）；手动同步不受影响',
+  config_by     VARCHAR(64)  NULL COMMENT '同步设置最后修改人',
+  config_at     DATETIME     NULL COMMENT '同步设置最后修改时间',
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='订单同步状态';
 

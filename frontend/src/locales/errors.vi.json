@@ -52,6 +52,7 @@
   "ORDER_NOT_FOUND": "Lệnh sản xuất {bill_no} không có trong ảnh chụp (chưa duyệt hoặc chưa đồng bộ)",
   "ORDER_LINE_NOT_FOUND": "Dòng vật tư {bill_no} / {seq} không có trong ảnh chụp",
   "ORDER_SYNC_BUSY": "Đang đồng bộ lệnh, vui lòng thử lại sau",
+  "SYNC_INTERVAL_INVALID": "Khoảng đồng bộ phải là số phút nguyên từ {min} đến {max}",
   "ATTACH_INVALID": "Hạng mục đính kèm không được trống, tối đa 64 ký tự",
   "ATTACH_FILL_K3": "Kingdee đã có hạng mục đính kèm, không thể sửa trên trang",
   "LENGTH_FILL_INVALID": "Chiều dài tối đa 64 ký tự; khi đặt hàng loạt không được để trống",

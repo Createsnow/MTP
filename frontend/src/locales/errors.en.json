@@ -52,6 +52,7 @@
   "ORDER_NOT_FOUND": "Production order {bill_no} is not in the snapshot (not approved, or not synced yet)",
   "ORDER_LINE_NOT_FOUND": "Material line {bill_no} / {seq} is not in the snapshot",
   "ORDER_SYNC_BUSY": "Order sync is running, please retry later",
+  "SYNC_INTERVAL_INVALID": "The sync interval must be a whole number of minutes from {min} to {max}",
   "ATTACH_INVALID": "Attachment item cannot be empty and must be at most 64 characters",
   "ATTACH_FILL_K3": "Kingdee already has the attachment item; it cannot be changed on the page",
   "LENGTH_FILL_INVALID": "Length must be at most 64 characters and cannot be empty when set in batch",

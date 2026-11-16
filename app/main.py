@@ -153,8 +153,9 @@ async def lifespan(app: FastAPI):
     gen_recover = scheduler.start_every(
         generate.RECOVER_INTERVAL_SECONDS, generate.recover_interrupted, "sn-gen-recover"
     )
+    # 定时比对同步：每分钟检查一次是否到期（间隔、暂停在生产订单页「同步设置」改，下一分钟内生效）
     order_sync = (
-        scheduler.start_every(settings.sync_interval_minutes * 60, orders.run_scheduled, "sn-order-sync")
+        scheduler.start_every(orders.SCHEDULE_TICK_SECONDS, orders.run_scheduled, "sn-order-sync")
         if settings.get_bool("SN_SYNC_ENABLED", True)
         else None
     )

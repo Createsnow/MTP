@@ -227,6 +227,7 @@
     "K3_CONFIG": "Sửa kết nối Kingdee",
     "K3_CONFIG_TEST": "Kiểm tra kết nối Kingdee",
     "ORDER_SYNC": "Đồng bộ lệnh",
+    "ORDER_SYNC_CONFIG": "Sửa cài đặt đồng bộ",
     "ORDER_ATTACH_FILL": "Điền hạng mục đính kèm",
     "ORDER_LENGTH_FILL": "Điền chiều dài",
     "ORDER_UNIT_FILL": "Điền đơn vị",
@@ -1013,6 +1014,23 @@
       "all": "đang lấy toàn bộ dòng",
       "rows": "đã lấy {done} dòng",
       "write": "đang ghi ảnh chụp"
+    },
+    "syncCfg": {
+      "button": "Cài đặt đồng bộ",
+      "title": "Cài đặt đồng bộ",
+      "desc": "Đồng bộ tự động = đồng bộ so sánh theo lịch + đồng bộ khi mở trang này; mỗi lần đồng bộ so sánh đều làm mới trạng thái nghiệp vụ, lĩnh liệu của các dòng vật tư. Khoảng càng dài thì tải lên Kingdee càng ít nhưng thay đổi lệnh đến hệ thống càng muộn. Khi tạm dừng, \"Đồng bộ so sánh ngay\", \"Đồng bộ chứng từ\" và \"Dựng lại toàn bộ\" vẫn dùng được. Có hiệu lực trong vòng một phút sau khi lưu, không cần khởi động lại.",
+      "auto": "Đồng bộ tự động",
+      "running": "Bật",
+      "paused": "Tạm dừng",
+      "interval": "Khoảng đồng bộ so sánh",
+      "minutes": "phút",
+      "sourcePage": "Đã đặt trên trang (không còn dùng SN_SYNC_INTERVAL_MINUTES trong .env)",
+      "sourceEnv": "Hiện dùng SN_SYNC_INTERVAL_MINUTES trong .env ({n} phút); sau khi đổi và lưu sẽ dùng giá trị trên trang",
+      "updated": "Sửa lần cuối",
+      "pausedHint": "Trong khi tạm dừng, thay đổi lệnh, hủy duyệt và thay đổi trạng thái trên Kingdee sẽ không tự đồng bộ; hãy bật lại sớm",
+      "saved": "Đã lưu cài đặt đồng bộ",
+      "pausedTag": "Đã tạm dừng đồng bộ tự động",
+      "every": "mỗi {n} phút"
     }
   },
   "query": {

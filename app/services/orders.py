@@ -10,6 +10,10 @@
 3. 进页同步：进入订单页时在后台触发一次比对同步；正有同步在运行时跳过。
 4. 全量重建：完整拉取后写入新表、原子换表（RENAME），失败旧快照完整保留；完成后对全部已出号单据比对。
 各种同步共用一把同步锁：按单据同步、全量重建最多排队 30 秒，比对同步和进页同步直接跳过。
+
+同步设置（生产订单页「同步设置」，只有系统管理员；存 sn_sync_state）：定时比对同步的间隔（分钟，没在页面设置过时
+用 .env 的 SN_SYNC_INTERVAL_MINUTES）与暂停自动同步。暂停只停定时比对同步和进页同步；立即比对同步、按单据同步、
+全量重建照常。后台每分钟看一次是否到期（距上次比对同步满一个间隔），改了间隔、暂停或恢复下一分钟内生效，不用重启。
 """
 
 from __future__ import annotations
@@ -176,12 +180,17 @@ def sync_progress() -> dict:
 
 
 def compare_sync(cu: CurrentUser, trigger: str = "SCHEDULED") -> dict | None:
-    """比对同步；拿不到同步锁（已有同步在运行）返回 None。trigger = SCHEDULED / PAGE / MANUAL。"""
+    """比对同步；拿不到同步锁（已有同步在运行）、自动同步已暂停（定时、进页）或定时未到期时返回 None。
+    trigger = SCHEDULED / PAGE / MANUAL；MANUAL（立即比对同步）不看暂停与间隔。"""
+    # 先不拿锁地看一眼：后台每分钟检查一次，未到期、已暂停时不必占用同步锁的连接
+    if trigger != "MANUAL" and not _auto_due(trigger):
+        return None
     held = locks.sync_lock(wait=False)
     if held is None:
         return None
     try:
-        if trigger == "SCHEDULED" and _compared_recently():
+        # 锁内再确认（多实例：别的实例刚跑完一轮，或刚被暂停）
+        if trigger != "MANUAL" and not _auto_due(trigger):
             return None
         progress = _Progress(cu, "COMPARE", trigger)
         try:
@@ -196,17 +205,80 @@ def compare_sync(cu: CurrentUser, trigger: str = "SCHEDULED") -> dict | None:
 SCHEDULE_SLACK_SECONDS = 30
 
 
-def _compared_recently() -> bool:
-    """距上次比对同步（任一触发方式，成功或失败都算）不到一个同步间隔：定时触发跳过。
+def _auto_due(trigger: str) -> bool:
+    """自动同步能否执行：暂停时都不执行；定时触发（SCHEDULED）还须距上次比对同步满一个间隔。
 
-    多实例下每个实例都按自己的启动时间每 SN_SYNC_INTERVAL_MINUTES 触发一次；同步锁只防同时执行，
-    靠这一步才不会变成每个间隔同步 N 次（金蝶不可用时也不会 N 倍重试）。须在同步锁内调用。
+    距上次比对同步（任一触发方式，成功或失败都算）不到一个间隔：定时触发跳过。多实例下每个实例每分钟都检查一次；
+    同步锁只防同时执行，靠这一步才不会变成每个间隔同步 N 次（金蝶不可用时也不会 N 倍重试）。
     """
-    last = db.scalar("SELECT last_run_at FROM sn_sync_state WHERE id = 1")
-    if last is None:
+    st = db.one("SELECT last_run_at, interval_minutes, paused FROM sn_sync_state WHERE id = 1") or {}
+    if st.get("paused"):
         return False
-    gap = max(0, settings.sync_interval_minutes * 60 - SCHEDULE_SLACK_SECONDS)
-    return (util.now() - last).total_seconds() < gap
+    if trigger != "SCHEDULED":
+        return True
+    last = st.get("last_run_at")
+    if last is None:
+        return True
+    gap = max(0, _interval_of(st.get("interval_minutes")) * 60 - SCHEDULE_SLACK_SECONDS)
+    return (util.now() - last).total_seconds() >= gap
+
+
+# ================================================================== 同步设置
+
+#: 页面可设的定时比对同步间隔（分钟）
+INTERVAL_MIN, INTERVAL_MAX = 5, 1440
+#: 后台检查定时比对同步是否到期的周期（秒）
+SCHEDULE_TICK_SECONDS = 60
+
+
+def _interval_of(stored) -> int:
+    """生效的间隔：页面保存过的优先，否则 .env 的 SN_SYNC_INTERVAL_MINUTES。"""
+    return int(stored) if stored else settings.sync_interval_minutes
+
+
+def sync_config() -> dict:
+    """同步设置：生效的间隔与来源（PAGE 页面保存 / ENV .env）、.env 的间隔、是否暂停、最后修改。"""
+    st = db.one("SELECT * FROM sn_sync_state WHERE id = 1") or {}
+    stored = st.get("interval_minutes")
+    return {
+        "interval_minutes": _interval_of(stored),
+        "source": "PAGE" if stored else "ENV",
+        "env_interval_minutes": settings.sync_interval_minutes,
+        "paused": bool(st.get("paused")),
+        "min_minutes": INTERVAL_MIN,
+        "max_minutes": INTERVAL_MAX,
+        "updated_by": st.get("config_by"),
+        "updated_at": util.fmt(st.get("config_at")),
+    }
+
+
+def save_sync_config(cu: CurrentUser, interval_minutes: int | None, paused: bool | None) -> dict:
+    """改同步设置（只有系统管理员）：不传的项不变（间隔没在页面设置过时仍用 .env）；没有变化不写、不留痕。
+    下一分钟内生效。"""
+    st = db.one("SELECT interval_minutes, paused FROM sn_sync_state WHERE id = 1") or {}
+    old_stored, old_paused = st.get("interval_minutes"), bool(st.get("paused"))
+    if interval_minutes is not None and not (INTERVAL_MIN <= interval_minutes <= INTERVAL_MAX):
+        raise biz(ErrorCode.SYNC_INTERVAL_INVALID, min=INTERVAL_MIN, max=INTERVAL_MAX)
+    new_stored = old_stored if interval_minutes is None else interval_minutes
+    new_paused = old_paused if paused is None else paused
+    if (new_stored, new_paused) == (old_stored, old_paused):
+        return sync_config()
+    with db.tx():
+        db.exec(
+            "UPDATE sn_sync_state SET interval_minutes = %s, paused = %s, config_by = %s, config_at = %s WHERE id = 1",
+            new_stored,
+            1 if new_paused else 0,
+            cu.emp_no,
+            util.now(),
+        )
+        audit.record(
+            cu,
+            audit.entry(audit.ORDER_SYNC_CONFIG).info(
+                f"interval {_interval_of(old_stored)} -> {_interval_of(new_stored)}"
+                f" paused {int(old_paused)} -> {int(new_paused)}"
+            ),
+        )
+    return sync_config()
 
 
 def _compare(cu: CurrentUser, trigger: str, progress: _Progress) -> dict:
@@ -298,7 +370,7 @@ def _finish(ts, ok: bool, message: str, bills: int | None) -> None:
 
 
 def run_scheduled() -> None:
-    """后台定时：每个周期一次（多实例：同步锁防同时执行，按上次比对同步时间去重）。"""
+    """后台每分钟检查一次：未暂停且距上次比对同步满一个间隔才执行（多实例：同步锁防同时执行，按上次比对同步时间去重）。"""
     try:
         compare_sync(CurrentUser.system(), "SCHEDULED")
     except BizError as e:
@@ -309,7 +381,9 @@ _page_thread_lock = threading.Lock()
 
 
 def page_entry_sync(cu: CurrentUser) -> bool:
-    """进页同步：后台触发一次比对同步，立即返回；正有同步在运行时跳过（返回 False）。"""
+    """进页同步：后台触发一次比对同步，立即返回；正有同步在运行、自动同步已暂停时跳过（返回 False）。"""
+    if not _auto_due("PAGE"):
+        return False
     if not _page_thread_lock.acquire(blocking=False):
         return False
 
@@ -961,6 +1035,8 @@ def meta(cu: CurrentUser) -> dict:
             "last_message": st.get("last_message") or "",
             "last_bills": st.get("last_bills"),
             "last_full_at": util.fmt(st.get("last_full_at")),
+            "interval_minutes": _interval_of(st.get("interval_minutes")),
+            "paused": bool(st.get("paused")),
         },
         "open_alerts": changes.open_alert_count(cu),
     }

@@ -200,6 +200,7 @@ M = {
 "actions.K3_CONFIG": ("修改金蝶连接", "Kingdee connection changed", "Sửa kết nối Kingdee"),
 "actions.K3_CONFIG_TEST": ("金蝶连接测试", "Kingdee connection test", "Kiểm tra kết nối Kingdee"),
 "actions.ORDER_SYNC": ("同步生产订单", "Order sync", "Đồng bộ lệnh"),
+"actions.ORDER_SYNC_CONFIG": ("修改同步设置", "Sync settings changed", "Sửa cài đặt đồng bộ"),
 "actions.ORDER_ATTACH_FILL": ("填写附件项次", "Attachment item filled", "Điền hạng mục đính kèm"),
 "actions.ORDER_LENGTH_FILL": ("填写米数", "Length filled", "Điền chiều dài"),
 "actions.ORDER_UNIT_FILL": ("填写产品单位", "Unit filled", "Điền đơn vị"),

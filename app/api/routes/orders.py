@@ -5,7 +5,7 @@ from fastapi import APIRouter
 
 from app.api.deps import AdminDep, OperatorDep, page_of
 from app.schemas.common import OptInt
-from app.schemas.misc import AlertHandleIn, AttachIn, SyncIn
+from app.schemas.misc import AlertHandleIn, AttachIn, SyncConfigIn, SyncIn
 from app.services import changes, orders
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -70,9 +70,28 @@ def order_compare(cu: OperatorDep) -> dict:
     return {"skipped": True} if r is None else r
 
 
-@router.post("/page-sync", summary="进页同步：后台触发一次比对同步，立即返回")
+@router.post(
+    "/page-sync", summary="进页同步：后台触发一次比对同步，立即返回；自动同步已暂停时不触发（started = False）"
+)
 def order_page_sync(cu: OperatorDep) -> dict:
     return {"started": orders.page_entry_sync(cu)}
+
+
+@router.get(
+    "/sync-config",
+    summary="同步设置（只有系统管理员）：定时比对同步间隔（页面保存的优先，否则 .env）、是否暂停自动同步、最后修改",
+)
+def order_sync_config(cu: AdminDep) -> dict:
+    return orders.sync_config()
+
+
+@router.put(
+    "/sync-config",
+    summary="改同步设置（只有系统管理员）：间隔 5–1440 分钟、暂停 / 恢复自动同步（定时、进页）；"
+    "立即比对同步、按单据同步、全量重建不受影响；下一分钟内生效",
+)
+def order_sync_config_save(body: SyncConfigIn, cu: AdminDep) -> dict:
+    return orders.save_sync_config(cu, body.interval_minutes, body.paused)
 
 
 @router.post("/rebuild", summary="全量重建快照（首次上线导入、怀疑快照与金蝶不一致时）")

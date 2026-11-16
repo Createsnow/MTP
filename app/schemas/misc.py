@@ -49,6 +49,13 @@ class K3ConfigIn(In):
     page_retry_seconds: int | None = None
 
 
+class SyncConfigIn(In):
+    """同步设置：定时比对同步间隔（分钟）、暂停自动同步；不传的项不变。"""
+
+    interval_minutes: int | None = None
+    paused: bool | None = None
+
+
 class MesToggleIn(In):
     enabled: bool = False
 
