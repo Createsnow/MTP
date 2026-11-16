@@ -88,7 +88,7 @@ def rule_line_clear(body: LineClearIn, cu: OperatorDep) -> dict:
     return rules.clear_lines(cu, body.pi_no, [x.model_dump() for x in body.lines or []])
 
 
-@router.put("/pi-binding", summary="给 PI 绑定规则作各物料行的默认（版本已归属别的 PI 时须填 new_prefix）")
+@router.put("/pi-binding", summary="给 PI 绑定规则作各物料行的默认（已归属别的 PI 时默认共用前缀，可填 new_prefix）")
 def rule_pi_bind(body: PiBindIn, cu: OperatorDep) -> dict:
     return rules.bind_pi(cu, body.pi_no, body.rule_id, body.new_prefix)
 

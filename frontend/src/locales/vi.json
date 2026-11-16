@@ -526,6 +526,7 @@
       "USE": "Thuộc PI này",
       "CLAIM": "Sẽ thuộc PI này",
       "NEW": "Phiên bản mới",
+      "SHARE": "Dùng chung tiền tố",
       "PREFIX": "Cần tiền tố mới"
     },
     "rule": {

@@ -31,9 +31,11 @@
         </div>
         <div v-if="!filtered.length" class="empty">{{ t("common.empty") }}</div>
       </div>
-      <el-form v-if="picked?.plan === 'PREFIX'" label-width="120px" class="mt" @submit.prevent>
-        <el-form-item :label="t('generate.rule.newPrefix')" required>
-          <el-input v-model="newPrefix" maxlength="32" class="w200" />
+      <!-- 共用前缀（SHARE）时新前缀选填：不填共用该前缀，填了为本 PI 换前缀另出版本 -->
+      <el-form v-if="picked?.plan === 'PREFIX' || picked?.plan === 'SHARE'" label-width="120px" class="mt" @submit.prevent>
+        <el-form-item :label="t('generate.rule.newPrefix')" :required="picked.plan === 'PREFIX'">
+          <el-input v-model="newPrefix" maxlength="32" class="w200"
+            :placeholder="picked.plan === 'SHARE' ? picked.current_prefix ?? '' : ''" />
         </el-form-item>
       </el-form>
     </template>
@@ -478,7 +480,7 @@ function onOpen() {
 
 function pick(o: any) {
   picked.value = o;
-  // 须为本 PI 换前缀时同样用默认前缀（点选的第一个单据编码后 7 位 / 已用前缀）
+  // 须为本 PI 换前缀时同样用默认前缀（点选的第一个单据编码后 7 位 / 已用前缀）；共用前缀时默认不填（共用）
   newPrefix.value = o.plan === "PREFIX" ? toSpec([...defaultHead(), newPart("SEQ")], partCtx.value).spec.prefix : "";
 }
 
@@ -571,7 +573,10 @@ async function save() {
     const body: Record<string, unknown> = { pi_no: props.pi, lines: refs() };
     if (mode.value === "LIBRARY") {
       body.rule_id = picked.value.rule_id;
-      if (picked.value.plan === "PREFIX") body.new_prefix = newPrefix.value.trim();
+      // 共用前缀时新前缀选填：不填即共用
+      if (picked.value.plan === "PREFIX" || (picked.value.plan === "SHARE" && newPrefix.value.trim())) {
+        body.new_prefix = newPrefix.value.trim();
+      }
     } else {
       // 请求体：prefix、base、seq_len、with_length、length_pad、sep_before、sep_after、with_unit、suffix、seq_start，
       // 另带 seq_grow（上限自动突破，后台不传按关闭）

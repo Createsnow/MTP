@@ -367,10 +367,12 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
     counts, fills, lens, units = orders.line_extras(keys)
     # 表头客户取本 PI 第一个非空的客户编码（客户编码为空的单据照常列出）
     customer = next((r["customer_code"] for r in snap if r["customer_code"]), None) or orders.customer_of_pi(pi) or ""
-    last = generate.last_seq(pi)
+    # 接号的最大号：共用前缀时为 max(本 PI 最大号, 共用前缀的别的 PI 的最大号)，不共用时即本 PI 最大号
+    sh = generate.shared_of(pi)
+    last = generate.after_seq(pi, sh)
     ls = {(x.bill_no, x.seq): x for x in generate._load_lines(pi, keys)}
     # 各物料行下次生成的第一个流水：有预留按预留（含起始号平移），否则最大号 + 1
-    firsts = generate.first_seqs(pi, list(ls.values()), last)
+    firsts = generate.first_seqs(pi, list(ls.values()), last, sh)
     bills: dict[str, dict] = {}
     for r in snap:
         k = (r["bill_no"], r["seq"])
@@ -450,10 +452,10 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
 
     states = changes.bill_states(list(bills))
     # 单据号段：现有号的号段数与枚数、本单据删号腾出的空闲号段数与枚数（单据头标签，点开看明细）
-    gap = generate.gaps_of(pi)
+    gap = generate.gaps_of(pi, sh)
     seg_counts = generate.bill_segment_counts(pi, list(bills), facs)
     free_counts: dict[str, list[int]] = {}
-    for g in generate.free_segments(pi, gap["last_seq"]) if gap["truncated"] else gap["segments"]:
+    for g in generate.free_segments(pi, gap["last_seq"], sh) if gap["truncated"] else gap["segments"]:
         c = free_counts.setdefault(g["bill_no"], [0, 0])
         c[0] += 1
         c[1] += g["qty"]

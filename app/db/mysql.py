@@ -36,6 +36,8 @@ _depth: contextvars.ContextVar[int] = contextvars.ContextVar("sn_db_depth", defa
 _after: contextvars.ContextVar[list[Callable[[], None]] | None] = contextvars.ContextVar("sn_db_after", default=None)
 #: 当前事务提交前、在事务里要做的事（单据汇总标脏，见 services/bill_stats）：抛错则整笔回滚
 _before: contextvars.ContextVar[list[Callable[[], None]] | None] = contextvars.ContextVar("sn_db_before", default=None)
+#: 当前事务内的小块状态（如本事务已持有的前缀锁，见 services/locks.hold_prefix）：随事务开始新建、结束丢弃
+_local: contextvars.ContextVar[dict | None] = contextvars.ContextVar("sn_db_local", default=None)
 
 #: MySQL 错误号
 ER_DUP_ENTRY = 1062
@@ -231,6 +233,11 @@ class Db:
             pending.append(fn)
 
     @staticmethod
+    def tx_local() -> dict | None:
+        """当前事务的小块状态（事务内共享、事务结束丢弃）；不在事务里时 None。"""
+        return _local.get()
+
+    @staticmethod
     def before_commit(fn: Callable[[], None]) -> bool:
         """当前事务提交前（仍在事务里）执行 fn，返回 True；不在事务里时不登记、返回 False（由调用方马上执行）。
         同一事务登记多次的由调用方自行合并。"""
@@ -253,6 +260,7 @@ class Db:
         dtoken = _depth.set(depth + 1)
         atoken = _after.set([])
         btoken = _before.set([])
+        ltoken = _local.set({})
         broken = False
         try:
             conn.begin()
@@ -272,6 +280,7 @@ class Db:
             raise
         finally:
             pending = _after.get() or []
+            _local.reset(ltoken)
             _before.reset(btoken)
             _after.reset(atoken)
             _depth.reset(dtoken)

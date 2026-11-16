@@ -28,6 +28,7 @@ M = {
 "generate.plan.USE": ("已属本 PI", "Owned by this PI", "Thuộc PI này"),
 "generate.plan.CLAIM": ("首次归属本 PI", "Will be claimed by this PI", "Sẽ thuộc PI này"),
 "generate.plan.NEW": ("新建版本", "New version", "Phiên bản mới"),
+"generate.plan.SHARE": ("共用前缀", "Shared prefix", "Dùng chung tiền tố"),
 "generate.plan.PREFIX": ("须换前缀", "New prefix needed", "Cần tiền tố mới"),
 "generate.rule.dialogTitle": ("SN 规则", "SN rule", "Quy tắc SN"),
 "generate.rule.library": ("规则库", "Library", "Thư viện"),

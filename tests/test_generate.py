@@ -215,7 +215,8 @@ def test_rule_list_and_options_show_versions_pis_and_bindings(w, api):
     rid = w.rule(P())
     ok(w.bind_pi(pi1, rid))
     w.generate(pi1)
-    assert w.bind_pi(pi2, rid).code == "RULE_PREFIX_CHANGE_REQUIRED"
+    # 版本已归属 pi1：不填新前缀即共用前缀（生成时才另出版本）；填了新前缀则换前缀另出版本
+    assert ok(w.bind_pi(pi2, rid))["rule"]["plan"] == "SHARE"
     ok(w.bind_pi(pi2, rid, new_prefix=P()))
     listed = [x for x in ok(api.get("/api/rules", w.admin)).body if x["rule"]["id"] == rid]
     assert len(listed) == 1
@@ -231,7 +232,7 @@ def test_rule_list_and_options_show_versions_pis_and_bindings(w, api):
 
     assert (option(pi1)["plan"], option(pi1)["used_pis"]) == ("USE", 2)
     assert option(pi2)["plan"] == "USE", "已为本 PI 换前缀另出的版本"
-    assert (option(pi3)["plan"], option(pi3)["other_pi"]) == ("PREFIX", pi1)
+    assert (option(pi3)["plan"], option(pi3)["other_pi"]) == ("SHARE", pi1), "别的 PI 已用：可共用前缀"
 
 
 def test_used_version_format_change_keeps_prefix_unless_serial_changes(w, api, sql):
@@ -270,14 +271,15 @@ def test_used_version_format_change_keeps_prefix_unless_serial_changes(w, api, s
     assert api.delete(f"/api/rules/{rid}", w.admin).code == "RULE_IN_USE"
 
 
-def test_other_pi_must_change_prefix(w, sql):
+def test_other_pi_may_change_prefix(w, sql):
+    """别的 PI 用同一条规则：默认共用前缀；也可以填新前缀，按原格式另出属于它的版本。"""
     org, p1, b1 = mk(w, ("M1", 10))
     _, p2, b2 = mk(w, ("M1", 10), org=org)
     rid = w.rule("HX" + uid("").replace("-", "")[-4:], seq_len=6)
     ok(w.bind_pi(p1, rid))
     w.generate(p1)
     r = w.bind_pi(p2, rid)
-    assert r.code == "RULE_PREFIX_CHANGE_REQUIRED"
+    assert ok(r)["rule"]["plan"] == "SHARE"
     newp = "HY" + uid("").replace("-", "")[-4:]
     ok(w.bind_pi(p2, rid, newp))
     w.generate(p2)
@@ -339,12 +341,13 @@ def test_custom_rule_shared_by_lines_generated_separately(w, sql):
 
 
 def test_custom_prefix_taken_after_select_flagged_in_preview(w):
-    """两张 PI 选了同一前缀的自定义规则：一张先生成后，另一张预演即标「规则须换前缀」，不等生成时才失败。"""
+    """两张 PI 选了同一前缀、不同位数的自定义规则：一张先生成后，另一张预演即标「规则须换前缀」，不等生成时才失败
+    （同格式时可共用前缀，见 test_shared_prefix_*）。"""
     _, pa, ba = mk(w, ("M1", 2))
     _, pb, bb = mk(w, ("M1", 2))
     c = m(prefix=P(), base=10, seq_len=6, with_length=False)
     ok(w.select(pa, [(ba, 1)], custom=c))
-    ok(w.select(pb, [(bb, 1)], custom=c))
+    ok(w.select(pb, [(bb, 1)], custom={**c, "seq_len": 5}))
     w.generate(pa)
     p = ok(w.preview(pb))
     assert p["generatable"] is False and p["issues"][0]["issues"] == ["RULE_PREFIX"]
@@ -354,7 +357,8 @@ def test_custom_prefix_taken_after_select_flagged_in_preview(w):
 
 def test_pi_bills_share_first_bill_prefix(w, api, sql):
     """「选规则」前缀默认取 PI 第一张单据编码后 7 位：第一张单据用它生成后，第二张单据用同一前缀、同一格式沿用那一版，
-    流水接续；同一 PI 换进制或位数报格式锁定，只换米数、单位、后缀可共用前缀；别的 PI 用这个前缀报前缀冲突。"""
+    流水接续；同一 PI 换进制或位数报格式锁定，只换米数、单位、后缀可共用前缀；别的 PI 同格式可共用这个前缀，
+    换进制或位数报格式锁定。"""
     stem = uid("").replace("-", "")
     org, pi, first = mk(w, ("M1", 2), bill="MOA" + stem)
     _, _, second = mk(w, ("M2", 3), pi=pi, org=org, bill="MOB" + stem)
@@ -375,9 +379,10 @@ def test_pi_bills_share_first_bill_prefix(w, api, sql):
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert sns == [f"{prefix}{i:04d}" for i in range(1, 6)]
-    # 别的 PI 用这个前缀：全局唯一，冲突
+    # 别的 PI 用这个前缀：同格式可共用，换位数报格式锁定
     _, other, ob = mk(w, ("M1", 1))
-    assert w.select(other, [(ob, 1)], custom=c).code == "RULE_PREFIX_CONFLICT"
+    assert w.select(other, [(ob, 1)], custom={**c, "seq_len": 5}).code == "RULE_PREFIX_FORMAT_LOCKED"
+    ok(w.select(other, [(ob, 1)], custom=c))
 
 
 def test_pi_prefix_stays_after_first_bill_changes(w, api, sql):
@@ -456,16 +461,21 @@ def test_pi_prefix_kept_until_all_sns_deleted(w, api):
 
 
 def test_custom_prefix_taken_before_run_reports_conflict(w, api):
-    """确认生成时再查前缀是否全局唯一：预演后前缀被别的 PI 先用，生成报前缀冲突（页面弹窗），不只是「预演已改变」。"""
+    """确认生成时再查前缀能否用：预演后前缀被别的 PI 按别的位数先用，生成报格式锁定（页面弹窗），不只是「预演已改变」；
+    同格式时可共用，但流水要接在别的 PI 之后，原预演已失效。"""
     _, pa, ba = mk(w, ("M1", 2))
     _, pb, bb = mk(w, ("M1", 2))
+    _, pc, bc = mk(w, ("M1", 2))
     c = m(prefix=P(), base=10, seq_len=6, with_length=False)
     ok(w.select(pa, [(ba, 1)], custom=c))
-    ok(w.select(pb, [(bb, 1)], custom=c))
+    ok(w.select(pb, [(bb, 1)], custom={**c, "seq_len": 5}))
+    ok(w.select(pc, [(bc, 1)], custom=c))
     token = ok(w.preview(pb))["token"]
+    token_c = ok(w.preview(pc))["token"]
     w.generate(pa)
     r = api.post("/api/generate/run", m(token=token), w.admin)
-    assert r.code == "RULE_PREFIX_CONFLICT"
+    assert r.code == "RULE_PREFIX_FORMAT_LOCKED"
+    assert api.post("/api/generate/run", m(token=token_c), w.admin).code == "GEN_PREVIEW_CHANGED"
 
 
 def test_custom_rule_seq_start(w, api, sql):

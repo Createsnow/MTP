@@ -72,8 +72,8 @@ export interface LineRule {
   /** LINE 物料行选定 / PI 绑定 */
   source: "LINE" | "PI";
   mode: "LIBRARY" | "CUSTOM";
-  /** USE 已归属本 PI / CLAIM 首次归属 / NEW 新建版本 / PREFIX 须换前缀 */
-  plan: "USE" | "CLAIM" | "NEW" | "PREFIX";
+  /** USE 已归属本 PI / CLAIM 首次归属 / NEW 新建版本 / SHARE 共用别的 PI 的前缀 / PREFIX 须换前缀 */
+  plan: "USE" | "CLAIM" | "NEW" | "SHARE" | "PREFIX";
   rule_id: number | null;
   rule_code: string | null;
   rule_name: string | null;

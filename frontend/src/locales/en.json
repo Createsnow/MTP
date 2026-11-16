@@ -526,6 +526,7 @@
       "USE": "Owned by this PI",
       "CLAIM": "Will be claimed by this PI",
       "NEW": "New version",
+      "SHARE": "Shared prefix",
       "PREFIX": "New prefix needed"
     },
     "rule": {

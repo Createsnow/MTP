@@ -86,7 +86,8 @@ def test_grow_crosses_width_and_each_width_is_a_version(w, api, sql):
     assert sql.count("SELECT COUNT(*) FROM sn_rule_version WHERE rule_id = %s", rid) == 2
     # 同一前缀下仍按原版本的流水格式锁定：2 位可沿用，改成 3 位须换前缀
     _, pi2, bill2 = mk(w, ("M1", 1), org=org)
-    assert w.select(pi2, [(bill2, 1)], custom=c).code == "RULE_PREFIX_CONFLICT", "别的 PI 不能用这个前缀"
+    assert w.select(pi2, [(bill2, 1)], custom={**c, "seq_len": 3}).code == "RULE_PREFIX_FORMAT_LOCKED"
+    ok(w.select(pi2, [(bill2, 1)], custom=c))  # 别的 PI 同格式可共用这个前缀
     assert w.select(pi, [(bill, 1)], custom={**c, "seq_len": 3}).code == "RULE_PREFIX_FORMAT_LOCKED"
     # 规则库：突破版本列在版本里，当前版本仍是原版本
     view = next(r for r in ok(api.get(f"/api/rules?q={pi}", w.admin)).body if r["rule"]["id"] == rid)
