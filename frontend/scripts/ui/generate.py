@@ -225,7 +225,7 @@ M = {
 "generate.scopeSelHint": ("不分单据按附件项次排号，项次相同按ERP行号", "All lines by attachment no.; ties by ERP line No.", "Tất cả dòng theo số hạng mục đính kèm; trùng thì theo số dòng ERP"),
 "generate.attachMissingJump": ("单据 {bill} ERP行号 {seq} 附件项次未填写，请先补全再选规则（共 {n} 行未填）", "Bill {bill} ERP line No. {seq} has no attachment no.; fill it before picking a rule ({n} line(s) missing)", "Chứng từ {bill} dòng ERP {seq} chưa có số hạng mục đính kèm; hãy điền trước khi chọn quy tắc ({n} dòng còn thiếu)"),
 "generate.attachDupTitle": ("存在相同附件项次", "Duplicate attachment numbers", "Số hạng mục đính kèm trùng nhau"),
-"generate.attachDupHint": ("存在相同附件项次，将按ERP行号从小到大生成 SN（行号也相同按单据勾选先后），再接着生成后面的项次：", "Some attachment numbers are the same; those lines get SNs in ERP line No. order (same line No.: bill pick order), then the next attachment no.:", "Có số hạng mục đính kèm trùng nhau; các dòng này tạo SN theo số dòng ERP (trùng số dòng thì theo thứ tự chọn chứng từ), sau đó đến hạng mục tiếp theo:"),
+"generate.attachDupHint": ("存在相同附件项次，同一项次内按单据勾选先后、单据内按ERP行号从小到大生成 SN，排完再接着生成后面的项次：", "Some attachment numbers are the same; within one attachment no., SNs follow the bill pick order, and ERP line No. order within a bill, then the next attachment no.:", "Có số hạng mục đính kèm trùng nhau; trong cùng một hạng mục, SN tạo theo thứ tự chọn chứng từ, trong mỗi chứng từ theo số dòng ERP, sau đó đến hạng mục tiếp theo:"),
 "generate.attachDupItem": ("附件项次 {attach}：{lines}", "Attachment no. {attach}: {lines}", "Hạng mục {attach}: {lines}"),
 "generate.attachDupLine": ("单据 {bill} ERP行号 {seq}", "bill {bill} ERP line {seq}", "chứng từ {bill} dòng ERP {seq}"),
 "generate.attachDupGoOn": ("继续选规则", "Continue to rules", "Tiếp tục chọn quy tắc"),

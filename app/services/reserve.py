@@ -2,7 +2,8 @@
 
 同一 PI 下的单据可能分属不同生产组织、分几次生成。为了各次生成后整张 PI 仍按附件项次接号，第一次生成时
 （表 sn_pi_reserve_head 还没有本 PI）把本 PI 快照里全部还有额度、附件项次不为空的物料行（不分组织）按
-「附件项次 → 行号 → 单据」排好（单据：本次勾选 / 点选的在前、按勾选先后，其余按单据编号），从预留起号起逐行预留号段
+「附件项次 → 单据 → 行号」排好（一个项次排完再排下一个；同一项次内单据：本次勾选 / 点选的在前、按勾选先后，
+其余按单据编号；同一单据内按行号），从预留起号起逐行预留号段
 （sn_pi_reserve，一行可有几段）。之后：
 
 - 物料行生成用自己预留号段里还空着的流水（删号后再生成回到原号段）；
@@ -126,7 +127,7 @@ def all_segs(rs: dict[tuple[str, int], list[Seg]], but: set[tuple[str, int]] | N
 
 def build(pi: str, picked_bills: list[str], start: int) -> list[tuple[str, int, int, int]]:
     """排预留（不落库）：本 PI 快照里全部还有额度、附件项次不为空、没有失效（line_void）的物料行，
-    按「附件项次 → 行号 → 单据」（单据：picked_bills 里的按其先后在前，其余按单据编号）从 start 起逐行接号。
+    按「附件项次 → 单据 → 行号」（单据：picked_bills 里的按其先后在前，其余按单据编号）从 start 起逐行接号。
     返回 [(单据, 序号, 起, 止)]。"""
     from app.services import generate, line_void, orders
 
@@ -143,7 +144,7 @@ def build(pi: str, picked_bills: list[str], start: int) -> list[tuple[str, int, 
         attach, _src = orders.effective_attach(r, fills.get(k))
         if quota > 0 and attach and not vrule.is_void(r):
             lines.append((generate.attach_order(attach), int(r["seq"]), r["bill_no"], quota))
-    lines.sort(key=lambda x: (x[0], x[1], (0, rank[x[2]], "") if x[2] in rank else (1, 0, x[2])))
+    lines.sort(key=lambda x: (x[0], (0, rank[x[2]], "") if x[2] in rank else (1, 0, x[2]), x[1]))
     out = []
     pos = start
     for _o, seq, bill, quota in lines:

@@ -2,7 +2,8 @@
 没有预留（后补附件项次、预留后才同步的单据）或预留不够的接在最大号之后（见 app/services/reserve.py）。
 
 例子（与 PRD 相同）：单据 A（组织 1）行 1/2/3 附件项次 3/1/2，单据 B（组织 2）行 1/2/3 附件项次 2/4/1，各 10 枚，
-预留：A-2 1～10、B-3 11～20、B-1 21～30、A-3 31～40、A-1 41～50、B-2 51～60。"""
+先勾选 A（同一项次内 A 的行先排完再排 B），预留：
+A-2 1～10、B-3 11～20、A-3 21～30、B-1 31～40、A-1 41～50、B-2 51～60。"""
 
 from __future__ import annotations
 
@@ -50,16 +51,16 @@ def state(w, pi: str) -> tuple[list, list, int]:
 def test_separate_orgs_follow_attach_order(w, sql):
     """1. 不改起始号：A 先生成、B 后生成，整张 PI 1～60 按附件项次接号。"""
     pi, a, b, _c = setup(w)
-    assert seqs(sql, a) == {2: [(1, 10)], 3: [(31, 40)], 1: [(41, 50)]}
-    assert state(w, pi) == ([], [(b, 3, 11, 20), (b, 1, 21, 30), (b, 2, 51, 60)], 60), "B 没勾选也预留了位置"
+    assert seqs(sql, a) == {2: [(1, 10)], 3: [(21, 30)], 1: [(41, 50)]}
+    assert state(w, pi) == ([], [(b, 3, 11, 20), (b, 1, 31, 40), (b, 2, 51, 60)], 60), "B 没勾选也预留了位置"
     p = ok(w.preview(pi, bills=[b]))
     assert [(x["seq"], x["seq_src"], x["segs"], x["tail_qty"]) for x in p["items"]] == [
         (3, "RESERVE", [[11, 20]], 0),
-        (1, "RESERVE", [[21, 30]], 0),
+        (1, "RESERVE", [[31, 40]], 0),
         (2, "RESERVE", [[51, 60]], 0),
     ]
     w.generate(pi, bills=[b])
-    assert seqs(sql, b) == {3: [(11, 20)], 1: [(21, 30)], 2: [(51, 60)]}
+    assert seqs(sql, b) == {3: [(11, 20)], 1: [(31, 40)], 2: [(51, 60)]}
     assert state(w, pi) == ([], [], 60)
 
 
@@ -70,8 +71,8 @@ def test_start_number_shifts_reserved_lines(w, sql):
     p = ok(w.preview(pi, bills=[b]))
     assert {x["seq"]: x["seq_src"] for x in p["items"]} == {1: "SHIFT", 2: "SHIFT", 3: "SHIFT"}
     w.generate(pi, bills=[b])
-    assert seqs(sql, b) == {3: [(5011, 5020)], 1: [(5021, 5030)], 2: [(5051, 5060)]}
-    assert state(w, pi) == ([(11, 30), (51, 5010), (5031, 5050)], [], 5060)
+    assert seqs(sql, b) == {3: [(5011, 5020)], 1: [(5031, 5040)], 2: [(5051, 5060)]}
+    assert state(w, pi) == ([(11, 20), (31, 40), (51, 5010), (5021, 5030), (5041, 5050)], [], 5060)
 
 
 def test_start_number_shifts_single_line(w, sql):
@@ -80,11 +81,11 @@ def test_start_number_shifts_single_line(w, sql):
     ok(w.select(pi, [(b, 2)], custom={**c, "seq_start": 5001}))
     w.generate(pi, lines=[(b, 2)])
     assert seqs(sql, b) == {2: [(5051, 5060)]}
-    assert state(w, pi) == ([(51, 5050)], [(b, 3, 11, 20), (b, 1, 21, 30)], 5060)
+    assert state(w, pi) == ([(51, 5050)], [(b, 3, 11, 20), (b, 1, 31, 40)], 5060)
     # 平移后与已有的号重叠：不能生成
-    ok(w.select(pi, [(b, 3)], custom={**c, "seq_start": 21}))
+    ok(w.select(pi, [(b, 3)], custom={**c, "seq_start": 11}))
     r = w.preview(pi, lines=[(b, 3)])
-    assert r.code == "GEN_SHIFT_CONFLICT", "11～20 平移到 31～40，与 A-3 的号重叠"
+    assert r.code == "GEN_SHIFT_CONFLICT", "11～20 平移到 21～30，与 A-3 的号重叠"
 
 
 def test_range_rest_after_max_or_into_chosen_gaps(w, sql):
@@ -113,7 +114,7 @@ def test_range_rest_after_max_or_into_chosen_gaps(w, sql):
     w.generate(pi, lines=[(b, 2)])
     w.generate(pi, lines=[(b, 3)], seq=(11, 15), gaps=[[100, 199]])
     assert seqs(sql, b)[3] == [(11, 15), (100, 104)]
-    assert state(w, pi) == ([(16, 20), (51, 99), (105, 5050)], [(b, 1, 21, 30)], 5060)
+    assert state(w, pi) == ([(16, 20), (51, 99), (105, 5050)], [(b, 1, 31, 40)], 5060)
 
 
 def test_range_rest_default_after_max(w, sql):
@@ -121,7 +122,7 @@ def test_range_rest_default_after_max(w, sql):
     pi, a, b, _c = setup(w)
     w.generate(pi, lines=[(b, 3)], seq=(11, 15))
     assert seqs(sql, b) == {3: [(11, 15), (61, 65)]}
-    assert state(w, pi) == ([(16, 20)], [(b, 1, 21, 30), (b, 2, 51, 60)], 65)
+    assert state(w, pi) == ([(16, 20)], [(b, 1, 31, 40), (b, 2, 51, 60)], 65)
 
 
 def test_unreserved_lines_append_after_max(w, api, sql):
@@ -161,7 +162,7 @@ def test_context_rule_first_sn_and_reserve_start(w, api):
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     assert ctx["counter"]["reserve_start"] == 1
     first = {x["seq"]: x["rule"]["first_sn"] for bb in ctx["bills"] if bb["bill_no"] == b for x in bb["lines"]}
-    assert first == {1: f"{c['prefix']}0021", 2: f"{c['prefix']}0051", 3: f"{c['prefix']}0011"}
+    assert first == {1: f"{c['prefix']}0031", 2: f"{c['prefix']}0051", 3: f"{c['prefix']}0011"}
     ok(w.select(pi, [(b, 2)], custom={**c, "seq_start": 5001}))
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     line = next(x for bb in ctx["bills"] if bb["bill_no"] == b for x in bb["lines"] if x["seq"] == 2)

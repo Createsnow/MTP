@@ -584,7 +584,7 @@ const ruleDlg = reactive({ open: false, lines: [] as OrderLine[] });
 /** 底部「选规则」与行内「选规则 / 改规则」打开同一个规则对话框（默认自定义页签，前缀默认点选的第一个单据编码后 7 位，本 PI 已生成的号还在时沿用已用的前缀）。
  *  打开前先查附件项次（只查还有额度、要生成的行；生成时所选物料行不分单据按附件项次从小到大排号）：
  *  1. 有没填的：跳到第一条没填的行（按排号顺序），提示补全，不打开；
- *  2. 有相同的（不分单据）：跳到这些行，提示将按行号（单据序号）从小到大生成，可继续选规则或回去修改。 */
+ *  2. 有相同的（不分单据）：跳到这些行，提示同一项次内按单据勾选先后、单据内按行号生成，可继续选规则或回去修改。 */
 async function openRuleDialog(lines: OrderLine[]) {
   const keys = lines.map(lineKey);
   busy.value = "rule";
@@ -733,8 +733,8 @@ function lineClass({ row }: { row: OrderLine }) {
     .filter(Boolean)
     .join(" ");
 }
-/** 生成时的排号顺序（与后台一致）：所选物料行不分单据按附件项次从小到大（按数字比），项次相同按行号从小到大，
- *  行号也相同按单据勾选 / 点选先后。勾选框旁的数字按这个顺序标（单据头标单据第一次出现的次序，物料行标排号次序）。 */
+/** 生成时的排号顺序（与后台一致）：所选物料行不分单据按附件项次从小到大（按数字比），一个项次排完再排下一个；
+ *  项次相同按单据勾选 / 点选先后，同一单据内按行号从小到大。勾选框旁的数字按这个顺序标（单据头标单据第一次出现的次序，物料行标排号次序）。 */
 const genRows = computed(() => genOrder(pickedRows.value, attachOf) as OrderLine[]);
 const genIdx = (l: LineRef) => genRows.value.findIndex((x) => sameLine(x, l));
 const billIdx = (no: string) => [...new Set(genRows.value.map((x) => x.bill_no))].indexOf(no);

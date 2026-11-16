@@ -759,7 +759,7 @@
     "scopeSelHint": "All lines by attachment no.; ties by ERP line No.",
     "attachMissingJump": "Bill {bill} ERP line No. {seq} has no attachment no.; fill it before picking a rule ({n} line(s) missing)",
     "attachDupTitle": "Duplicate attachment numbers",
-    "attachDupHint": "Some attachment numbers are the same; those lines get SNs in ERP line No. order (same line No.: bill pick order), then the next attachment no.:",
+    "attachDupHint": "Some attachment numbers are the same; within one attachment no., SNs follow the bill pick order, and ERP line No. order within a bill, then the next attachment no.:",
     "attachDupItem": "Attachment no. {attach}: {lines}",
     "attachDupLine": "bill {bill} ERP line {seq}",
     "attachDupGoOn": "Continue to rules",

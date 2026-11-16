@@ -90,30 +90,37 @@ test("attachment numbers compare as numbers; non-numbers go after, by text", () 
   assert.equal(compareAttach(" 3 ", "3"), 0);
 });
 
-test("generation order: attachment no. first across bills, then line no., then bill pick order", () => {
+test("generation order: attachment no. first across bills, then bill pick order, then line no.", () => {
   // 单据 A：行1 项次3、行2 项次1、行3 项次2；单据 B：行1 项次2、行2 项次4、行3 项次1；先勾 B 再勾 A
   const att = { "A#1": "3", "A#2": "1", "A#3": "2", "B#1": "2", "B#2": "4", "B#3": "1" };
   const of = (l) => att[`${l.bill_no}#${l.seq}`];
   const picked = [L("B", 1), L("B", 2), L("B", 3), L("A", 1), L("A", 2), L("A", 3)];
-  assert.deepEqual(genOrder(picked, of), [L("A", 2), L("B", 3), L("B", 1), L("A", 3), L("A", 1), L("B", 2)]);
+  assert.deepEqual(genOrder(picked, of), [L("B", 3), L("A", 2), L("B", 1), L("A", 3), L("A", 1), L("B", 2)]);
   assert.deepEqual(picked[0], L("B", 1), "不改原数组");
-  // 项次、行号都相同：按单据第一次出现的先后；项次按数字比（2 与 02 相同，2 在 10 前，不是数字的排后）
+  // 项次相同：按单据第一次出现的先后，同一单据内按行号；项次按数字比（2 与 02 相同，2 在 10 前，不是数字的排后）
   const att2 = { "A#1": "5", "B#1": "5", "A#2": "10", "B#2": "02", "A#3": "X", "B#3": "2" };
   const of2 = (l) => att2[`${l.bill_no}#${l.seq}`];
   assert.deepEqual(genOrder(picked, of2), [L("B", 2), L("B", 3), L("B", 1), L("A", 1), L("A", 2), L("A", 3)]);
+  // 同一项次多张单据、每张多行：先点选的单据把该项次排完再接下一张，该项次排完再排下一个项次
+  const att3 = { "A#1": "2", "A#2": "1", "A#3": "1", "B#1": "1", "B#2": "2" };
+  const of3 = (l) => att3[`${l.bill_no}#${l.seq}`];
+  const ab = [L("A", 1), L("A", 2), L("A", 3), L("B", 1), L("B", 2)];
+  assert.deepEqual(genOrder(ab, of3), [L("A", 2), L("A", 3), L("B", 1), L("A", 1), L("B", 2)]);
+  const ba = [L("B", 2), L("A", 1), L("B", 1), L("A", 3), L("A", 2)];
+  assert.deepEqual(genOrder(ba, of3), [L("B", 1), L("A", 2), L("A", 3), L("B", 2), L("A", 1)], "点选物料行：单据按第一次点选的先后");
 });
 
 test("duplicate attachment numbers are grouped across bills, lines in generation order", () => {
   const att = { "A#1": "1", "A#2": "01", "A#3": "2", "B#1": "2", "B#2": "", "B#3": "", "C#1": "1" };
   const of = (l) => att[`${l.bill_no}#${l.seq}`];
-  const lines = [L("B", 1), L("B", 2), L("B", 3), L("A", 3), L("A", 2), L("C", 1), L("A", 1)];
+  const picked = [L("B", 1), L("B", 2), L("B", 3), L("A", 3), L("A", 2), L("C", 1), L("A", 1)];
   assert.deepEqual(
-    dupAttach(lines, of),
+    dupAttach(genOrder(picked, of), of),
     [
-      { attach: "01", lines: [L("A", 1), L("C", 1), L("A", 2)] },
+      { attach: "1", lines: [L("A", 1), L("A", 2), L("C", 1)] },
       { attach: "2", lines: [L("B", 1), L("A", 3)] },
     ],
-    "跨单据也算；组内按行号，行号相同按单据先后；空项次不算；各组按项次从小到大",
+    "跨单据也算；组内保持生成顺序（单据按点选先后，单据内按行号）；空项次不算；各组按项次从小到大",
   );
 });
 

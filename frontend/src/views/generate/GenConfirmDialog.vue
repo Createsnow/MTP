@@ -8,7 +8,7 @@
       <el-alert v-if="tails.length" type="warning" :closable="false" show-icon class="usage" :title="t('generate.tailHint')">
         <div v-for="x in tails" :key="x.bill_no + '#' + x.seq">{{ t("generate.tailItem", { bill: x.bill_no, seq: x.seq, n: num(x.tail_qty) }) }}</div>
       </el-alert>
-      <!-- 附件项次相同（不分单据）：提示将按 ERP行号从小到大生成（不拦截） -->
+      <!-- 附件项次相同（不分单据）：提示同一项次内按单据勾选先后、单据内按 ERP行号生成（不拦截） -->
       <el-alert v-if="dups.length" type="warning" :closable="false" show-icon class="usage" :title="t('generate.attachDupHint')">
         <div v-for="g in dups" :key="g.attach">
           {{ t("generate.attachDupItem", { attach: g.attach, lines: g.lines.map((l: any) => t("generate.attachDupLine", { bill: l.bill_no, seq: l.seq })).join("、") }) }}
@@ -87,7 +87,7 @@
 /** 确认生成：只列本次各物料行的物料编码、订单数量、前缀、进制、流水位数、流水号、十进制流水号、附件项次、米数、产品单位与开始 / 结束 SN；
  *  用空号段时一个物料行可有几段号，每段一行（流水号、十进制流水号、开始 / 结束 SN 对齐）；手动起止号时顶部提示用了多少个空闲流水、
  *  溢出多少枚从最大号之后接着编；
- *  附件项次相同（不分单据）时顶部提示将按行号（单据序号）从小到大生成；没有预留号段或预留不够、号接在最大号之后的物料行另行提示；
+ *  附件项次相同（不分单据）时顶部提示同一项次内按单据勾选先后、单据内按行号（单据序号）从小到大生成；没有预留号段或预留不够、号接在最大号之后的物料行另行提示；
  *  「号来源」列：预留号段 / 起始号平移 / 指定起止号 / 接在最后（另注接在最后、用空号段的枚数）；
  *  超过单次默认上限（unlockLimit > 0）时须先勾选解除限制。确认后由父组件凭预演令牌生成。 */
 import { computed, ref, watch } from "vue";

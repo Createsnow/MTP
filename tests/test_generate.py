@@ -778,14 +778,14 @@ def test_whole_bill_order(w, sql):
 
 
 def test_gen_order_bills_by_pick_then_attach_as_number_ties_by_line(w, api, sql):
-    """排号顺序：不分单据按附件项次（按数字比，2 在 10 前），项次相同按行号，行号也相同按单据勾选 / 点选先后；
+    """排号顺序：不分单据按附件项次（按数字比，2 在 10 前），项次相同按单据勾选 / 点选先后，同一单据内按行号；
     页面改过的项次照样参与排序。"""
     org, pi, a = mk(w, ("M1", 2, "100", "10"), ("M2", 2, "100", "2"), ("M3", 2, "100", "02"), ("M4", 2, "100", "A"))
     _, _, b = mk(w, ("M5", 1, "100", "5"), ("M6", 1, "100", "1"), pi=pi, org=org)
     ok(w.bind_pi(pi, w.rule(P())))
     p = ok(w.preview(pi, bills=[b, a]))
     assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 2), (a, 2), (a, 3), (b, 1), (a, 1), (a, 4)], (
-        "不分单据按项次 1、2、02、5、10、A；2 与 02 相同按行号；不是数字的排最后"
+        "不分单据按项次 1、2、02、5、10、A；2 与 02 相同（同一单据）按行号；不是数字的排最后"
     )
     p = ok(w.preview(pi, lines=[(a, 1), (b, 1), (a, 4), (b, 2)]))
     assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 2), (b, 1), (a, 1), (a, 4)], (
@@ -811,13 +811,14 @@ def test_gen_order_bills_by_pick_then_attach_as_number_ties_by_line(w, api, sql)
 
 
 def test_gen_order_attach_first_across_bills_and_orgs(w, sql):
-    """同 PI 多单据（不同组织）一次生成：不分单据按附件项次接号；项次相同按行号，行号也相同按单据勾选先后。"""
+    """同 PI 多单据（不同组织）一次生成：不分单据按附件项次接号，一个项次排完再排下一个；项次相同按单据勾选先后，
+    同一单据内按行号。"""
     # 单据 A（组织 1）：行1 项次3、行2 项次1、行3 项次2；单据 B（组织 2）：行1 项次2、行2 项次4、行3 项次1
     _, pi, a = mk(w, ("M1", 10, "100", "3"), ("M2", 10, "100", "1"), ("M3", 10, "100", "2"))
     _, _, b = mk(w, ("M4", 10, "100", "2"), ("M5", 10, "100", "4"), ("M6", 10, "100", "1"), pi=pi)
     ok(w.bind_pi(pi, w.rule(P())))
     p = ok(w.preview(pi, bills=[b, a]))
-    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(a, 2), (b, 3), (b, 1), (a, 3), (a, 1), (b, 2)]
+    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 3), (a, 2), (b, 1), (a, 3), (a, 1), (b, 2)]
     w.generate(pi, bills=[b, a])
     rows = {
         (r["bill_no"], r["bill_seq"]): (r["a"], r["b"])
@@ -828,13 +829,56 @@ def test_gen_order_attach_first_across_bills_and_orgs(w, sql):
         )
     }
     assert rows == {
-        (a, 2): (1, 10),
-        (b, 3): (11, 20),
+        (b, 3): (1, 10),
+        (a, 2): (11, 20),
         (b, 1): (21, 30),
         (a, 3): (31, 40),
         (a, 1): (41, 50),
         (b, 2): (51, 60),
-    }, "项次 1：A-2、B-3；项次 2：B-1、A-3；再项次 3、4"
+    }, "先勾 B 再勾 A。项次 1：B-3、A-2；项次 2：B-1、A-3；再项次 3、4"
+
+
+def test_gen_order_same_attach_bill_by_pick_then_line(w, sql):
+    """同一项次有多张单据、每张多行：先点选的单据把该项次的行（按行号）排完，再接下一张单据，该项次排完再排下一个项次。
+    单据 A：行1 项次2、行2 项次1、行3 项次1；单据 B：行1 项次1、行2 项次2。先点 A 再点 B：A-2、A-3、B-1、A-1、B-2。"""
+    _, pi, a = mk(w, ("M1", 2, "100", "2"), ("M2", 2, "100", "1"), ("M3", 2, "100", "1"))
+    _, _, b = mk(w, ("M4", 2, "100", "1"), ("M5", 2, "100", "2"), pi=pi)
+    ok(w.bind_pi(pi, w.rule(P())))
+    want = [(a, 2), (a, 3), (b, 1), (a, 1), (b, 2)]
+    assert [(x["bill_no"], x["seq"]) for x in ok(w.preview(pi, bills=[a, b]))["items"]] == want
+    p = ok(w.preview(pi, lines=[(a, 1), (b, 2), (b, 1), (a, 2), (a, 3)]))
+    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == want, "点选物料行：单据按第一次点选的先后"
+    p = ok(w.preview(pi, bills=[b, a]))
+    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 1), (a, 2), (a, 3), (b, 2), (a, 1)], "先点 B 再点 A"
+    w.generate(pi, bills=[a, b])
+    rows = {
+        (r["bill_no"], r["bill_seq"]): (r["a"], r["b"])
+        for r in sql.all(
+            "SELECT bill_no, bill_seq, MIN(seq_dec) a, MAX(seq_dec) b FROM sn_item WHERE pi_no = %s "
+            "GROUP BY bill_no, bill_seq",
+            pi,
+        )
+    }
+    assert rows == {(a, 2): (1, 2), (a, 3): (3, 4), (b, 1): (5, 6), (a, 1): (7, 8), (b, 2): (9, 10)}
+
+
+def test_reserve_same_attach_picked_bill_first_then_others(w, sql):
+    """第一次只生成 A：整张 PI 预留时同一项次内 A（本次勾选）的行先排完，再排没勾选的 B（按单据编号）；
+    之后单独生成 B 回到预留号段。"""
+    _, pi, a = mk(w, ("M1", 2, "100", "2"), ("M2", 2, "100", "1"), ("M3", 2, "100", "1"))
+    _, _, b = mk(w, ("M4", 2, "100", "1"), ("M5", 2, "100", "2"), pi=pi)
+    ok(w.bind_pi(pi, w.rule(P())))
+    w.generate(pi, bills=[a])
+    w.generate(pi, bills=[b])
+    rows = {
+        (r["bill_no"], r["bill_seq"]): (r["a"], r["b"])
+        for r in sql.all(
+            "SELECT bill_no, bill_seq, MIN(seq_dec) a, MAX(seq_dec) b FROM sn_item WHERE pi_no = %s "
+            "GROUP BY bill_no, bill_seq",
+            pi,
+        )
+    }
+    assert rows == {(a, 2): (1, 2), (a, 3): (3, 4), (b, 1): (5, 6), (a, 1): (7, 8), (b, 2): (9, 10)}
 
 
 def test_gen_order_same_attach_and_line_by_bill_pick(w):

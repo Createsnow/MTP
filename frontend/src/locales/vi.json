@@ -759,7 +759,7 @@
     "scopeSelHint": "Tất cả dòng theo số hạng mục đính kèm; trùng thì theo số dòng ERP",
     "attachMissingJump": "Chứng từ {bill} dòng ERP {seq} chưa có số hạng mục đính kèm; hãy điền trước khi chọn quy tắc ({n} dòng còn thiếu)",
     "attachDupTitle": "Số hạng mục đính kèm trùng nhau",
-    "attachDupHint": "Có số hạng mục đính kèm trùng nhau; các dòng này tạo SN theo số dòng ERP (trùng số dòng thì theo thứ tự chọn chứng từ), sau đó đến hạng mục tiếp theo:",
+    "attachDupHint": "Có số hạng mục đính kèm trùng nhau; trong cùng một hạng mục, SN tạo theo thứ tự chọn chứng từ, trong mỗi chứng từ theo số dòng ERP, sau đó đến hạng mục tiếp theo:",
     "attachDupItem": "Hạng mục {attach}: {lines}",
     "attachDupLine": "chứng từ {bill} dòng ERP {seq}",
     "attachDupGoOn": "Tiếp tục chọn quy tắc",
