@@ -189,3 +189,108 @@ def test_material_map_moves_reserve_with_counts(w, api, sql):
     ok(w.select(pi, [(a, 4)], custom=c))
     w.generate(pi, lines=[(a, 4)])
     assert seqs(sql, a)[4] == [(41, 50)], "删号后再生成回到原号段"
+
+
+def mk3(w):
+    """与生成页截图相同的三张单据（同一组织）：592 行1/2 项次 1/2；-001 行1 项次 2；-002 行1/2 项次 1/2。"""
+    pi = uid("PI")
+    org = w.org(uid("O")[:10])
+    base = uid("ADT")
+    m592, m001, m002 = base, base + "-001", base + "-002"
+    w.order(m002, org, "C1", pi, ("FC1", 144, "100", "1"), ("FC2", 144, "100", "2"))
+    w.order(m592, org, "C1", pi, ("FC1", 1356, "100", "1"), ("FC2", 1316, "100", "2"))
+    w.order(m001, org, "C1", pi, ("FC2", 40, "100", "2"))
+    c = m(prefix=P(), base=10, seq_len=4, with_length=False)
+    ok(w.select(pi, [(m592, 1), (m592, 2), (m001, 1), (m002, 1), (m002, 2)], custom=c))
+    return pi, m592, m001, m002
+
+
+def ranges(sql, pi: str) -> list[tuple[str, int, int, int]]:
+    """本 PI 各物料行的号（按流水）：[(单据, 序号, 起, 止)]。"""
+    return [
+        (r["bill_no"], r["bill_seq"], r["s"], r["e"])
+        for r in sql.all(
+            "SELECT bill_no, bill_seq, MIN(seq_dec) s, MAX(seq_dec) e FROM sn_item WHERE pi_no = %s "
+            "GROUP BY bill_no, bill_seq ORDER BY s",
+            pi,
+        )
+    ]
+
+
+def test_all_deleted_regenerate_follows_new_pick_order(w, sql):
+    """整张 PI 的号全部删掉后再生成（默认）：丢弃旧预留，按本次点选先后从原预留起号重排；最大号不变、没有空号段。"""
+    pi, a, b, c2 = mk3(w)
+    w.generate(pi, bills=[c2, a, b])
+    assert ranges(sql, pi) == [
+        (c2, 1, 1, 144),
+        (a, 1, 145, 1500),
+        (c2, 2, 1501, 1644),
+        (a, 2, 1645, 2960),
+        (b, 1, 2961, 3000),
+    ]
+    ok(w.delete(pi, bills=[c2, a, b]))
+    assert state(w, pi)[1][0] == (c2, 1, 1, 144), "删号后预留照旧显示"
+    p = ok(w.preview(pi, bills=[a, c2, b]))
+    assert [(x["bill_no"], x["seq"], x["segs"]) for x in p["items"]] == [
+        (a, 1, [[1, 1356]]),
+        (c2, 1, [[1357, 1500]]),
+        (a, 2, [[1501, 2816]]),
+        (c2, 2, [[2817, 2960]]),
+        (b, 1, [[2961, 3000]]),
+    ]
+    w.generate(pi, bills=[a, c2, b])
+    assert ranges(sql, pi) == [
+        (a, 1, 1, 1356),
+        (c2, 1, 1357, 1500),
+        (a, 2, 1501, 2816),
+        (c2, 2, 2817, 2960),
+        (b, 1, 2961, 3000),
+    ]
+    assert state(w, pi) == ([], [], 3000)
+    got = sql.all("SELECT bill_no, seq, start_seq, end_seq FROM sn_pi_reserve WHERE pi_no = %s ORDER BY start_seq", pi)
+    assert [(r["bill_no"], r["seq"], r["start_seq"], r["end_seq"]) for r in got] == ranges(sql, pi), "预留按新顺序重建"
+
+
+def test_all_deleted_partial_regenerate_reserves_rest_in_new_order(w, sql):
+    """号全部删掉后只点选部分物料行：整张 PI 按本次点选先后（没点的单据按单据编号在后）重排预留，没点的行用新预留。"""
+    pi, a, b, c2 = mk3(w)
+    w.generate(pi, bills=[c2, a, b])
+    ok(w.delete(pi, bills=[c2, a, b]))
+    w.generate(pi, lines=[(b, 1), (c2, 2)])
+    assert ranges(sql, pi) == [(b, 1, 1501, 1540), (c2, 2, 1541, 1684)]
+    _gaps, res, last = state(w, pi)
+    assert res == [(c2, 1, 1, 144), (a, 1, 145, 1500), (a, 2, 1685, 3000)] and last == 3000, (
+        "本次点选的单据 -001、-002 在前，没点的 592 在后"
+    )
+    w.generate(pi, bills=[a, c2])
+    assert state(w, pi) == ([], [], 3000)
+
+
+def test_partly_deleted_keeps_reservation(w, sql):
+    """PI 还有号（只删了部分单据）：预留不重排，再生成回到原号段，与点选先后无关。"""
+    pi, a, b, c2 = mk3(w)
+    w.generate(pi, bills=[c2, a, b])
+    before = ranges(sql, pi)
+    ok(w.delete(pi, bills=[c2, a]))
+    w.generate(pi, bills=[a, c2])
+    assert ranges(sql, pi) == before
+
+
+def test_all_deleted_range_keeps_reservation(w, sql):
+    """号全部删掉后用手动起止号：不重排预留（照旧：本次的行放弃预留，不占别的行的预留）。"""
+    pi, a, b, c2 = mk3(w)
+    w.generate(pi, bills=[c2, a, b])
+    ok(w.delete(pi, bills=[c2, a, b]))
+    w.generate(pi, lines=[(b, 1)], seq=(1, 40))
+    assert ranges(sql, pi) == [(b, 1, 3001, 3040)], "1～40 是 -002 行1 的预留，不能用，接在最大号之后"
+    assert (c2, 1, 1, 144) in state(w, pi)[1]
+
+
+def test_all_deleted_context_first_sn_from_reserve_start(w, api):
+    """号全部删掉后，生成页规则列的「第一个号」都按原预留起号估算（下次按点选先后重排）。"""
+    pi, a, b, c2 = mk3(w)
+    w.generate(pi, bills=[c2, a, b])
+    ok(w.delete(pi, bills=[c2, a, b]))
+    ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
+    firsts = {x["rule"]["first_sn"][-4:] for bb in ctx["bills"] for x in bb["lines"]}
+    assert firsts == {"0001"} and ctx["counter"]["reserve_start"] == 1

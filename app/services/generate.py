@@ -276,6 +276,9 @@ def first_seqs(pi: str, lines: list[Line], last: int) -> dict[tuple[str, int], i
     """各物料行下次按预留生成时的第一个流水（生成页规则列的「第一个号」用）：预留里第一个空着的流水，
     起始号与预留起号不同时按平移；没有预留（或预留已用完）的不列，按最大号 + 1（及起始号）算。"""
     start = reserve.start_of(pi)
+    if start is not None and not reserve.has_items(pi):
+        # 号已全部删掉：下次按默认生成时重排预留（见 reserve.rebuildable），各行都从原预留起号估算
+        return {(x.bill_no, x.seq): start for x in lines}
     rs = reserve.rows(pi) if start is not None else {}
     if not rs:
         return {}
@@ -525,17 +528,20 @@ class _Taker:
 def _assign(pi: str, keys: list[tuple[str, int]], todo: list[Line], base: int, seq: dict) -> dict:
     """按排号顺序给每个物料行切号（见 reserve）：
     - MAX：用该行预留号段里空着的流水；起始号与预留起号不同时平移；没有预留或不够的接在最大号之后；
+      本 PI 的号已全部删掉时视为第一次生成：丢弃旧预留，按本次勾选 / 点选先后从原预留起号起重排（reserve.rebuildable）；
     - RANGE：放弃预留，用起止号内空着的流水，再用所选空号段，仍不够的接在最大号之后。
     都不占别的物料行的预留号段。返回各行号段与来源、本次要落库的预留、最大号（含新建的预留）与各来源枚数。"""
     run = [(x.bill_no, x.seq) for x in todo]
     run_set = set(run)
     start = reserve.start_of(pi)
-    rs = reserve.rows(pi)
-    new = start is None
+    rebuild = seq["mode"] == SEQ_MAX and reserve.rebuildable(pi) is not None
+    rs = {} if rebuild else reserve.rows(pi)
+    new = start is None or rebuild
     layout: list[tuple[str, int, int, int]] = []
     top = base
     if new:
-        start = base + 1
+        # 第一次生成从最大号 + 1 起；号全部删掉后重排从原预留起号起（1～最大号此时都空着）
+        start = start if rebuild else base + 1
         if seq["mode"] == SEQ_MAX:
             # 第一次生成就填了起始号：预留表从起始号排（填的不一样时取最小的，其余的行按平移）
             firsts = [x.res.seq_start for x in todo if x.res.seq_start and x.res.seq_start > start]
@@ -613,6 +619,7 @@ def _assign(pi: str, keys: list[tuple[str, int]], todo: list[Line], base: int, s
             keep[k] = reserve.merge(base_keep + segs)
     plan_reserve = {
         "new": new,
+        "rebuild": rebuild,
         "start": start,
         "others": [[b, q, a, e] for b, q, a, e in layout if (b, q) not in run_set],
         "set": [{"bill_no": k[0], "seq": k[1], "segs": [list(g) for g in keep[k]]} for k in run],
@@ -1187,6 +1194,9 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
         raise biz(ErrorCode.GEN_CANCELED)
     if c["last_seq_dec"] != plan["base_last_seq"]:
         raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=plan["base_last_seq"], actual=c["last_seq_dec"])
+    # 重排预留（号已全部删掉）：写号之前本 PI 仍须有预留、且仍没有号
+    if (plan.get("reserve") or {}).get("rebuild") and reserve.rebuildable(pi) is None:
+        raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=plan["base_last_seq"], actual=c["last_seq_dec"])
     # 事务内按最新快照和计数表重新校验额度（锁计数行）；预演后物料行失效（改了失效条件或状态刷新）也算计划已变
     vrule = line_void.current()
     for x in plan["items"]:
@@ -1296,7 +1306,7 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
         )
     # 号段预留：第一次生成时建预留表，本次生成的物料行改为计划给出的号段（早先的计划没有 reserve）
     if plan.get("reserve"):
-        if plan["reserve"].get("new") and reserve.start_of(pi) is not None:
+        if plan["reserve"].get("new") and not plan["reserve"].get("rebuild") and reserve.start_of(pi) is not None:
             raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=plan["base_last_seq"], actual=c["last_seq_dec"])
         reserve.save(pi, plan["reserve"], cu.emp_no)
     # 最大号只增不减（含预留号段）：用预留号段、空号段生成时可能不变

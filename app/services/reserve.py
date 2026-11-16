@@ -7,6 +7,8 @@
 （sn_pi_reserve，一行可有几段）。之后：
 
 - 物料行生成用自己预留号段里还空着的流水（删号后再生成回到原号段）；
+- 整张 PI 的号都删掉了（号池里没有占本 PI 流水的号）再按默认（从最大号之后 / 预留）生成时，视为第一次生成：
+  丢弃旧预留，按本次勾选 / 点选的单据先后从原预留起号起重新排预留（rebuildable；手动起止号时不重排，照旧预留）；
 - 没有预留（后补附件项次、预留之后才同步进来的单据或物料行）或预留不够（数量调大）的部分接在 PI 最大号之后，
   接上的号段记为该行新的预留；数量调小时生成后多出的预留退回成空号段；
 - 自定义起始号与预留起号不同时，该行按「新号 = 原预留号 − 预留起号 + 起始号」平移，原预留空着的部分退回成空号段；
@@ -107,6 +109,19 @@ def start_of(pi: str) -> int | None:
     return None if v is None else int(v)
 
 
+def has_items(pi: str) -> bool:
+    """号池里有没有占本 PI 流水的号（按流水归属 PI：转走的号仍算原 PI 的，SN 导入的号不占流水）。"""
+    return db.exists("SELECT EXISTS(SELECT 1 FROM sn_item WHERE seq_pi_no = %s)", pi)
+
+
+def rebuildable(pi: str) -> int | None:
+    """本 PI 已有预留、但号已全部删掉：再按默认生成时重排预留，返回原预留起号（从它起重排）；否则 None。"""
+    start = start_of(pi)
+    if start is None or has_items(pi):
+        return None
+    return start
+
+
 def rows(pi: str) -> dict[tuple[str, int], list[Seg]]:
     """各物料行的预留号段：(单据, 序号) → 号段（升序）。"""
     out: dict[tuple[str, int], list[Seg]] = {}
@@ -157,8 +172,12 @@ def build(pi: str, picked_bills: list[str], start: int) -> list[tuple[str, int, 
 
 
 def save(pi: str, plan_reserve: dict, emp_no: str) -> None:
-    """按计划写预留：new 时建表头与其他物料行的预留；本次生成的物料行改为计划给出的号段（set）。"""
+    """按计划写预留：new 时建表头与其他物料行的预留（rebuild 时先删掉本 PI 的旧预留）；
+    本次生成的物料行改为计划给出的号段（set）。"""
     now = util.now()
+    if plan_reserve.get("rebuild"):
+        db.exec("DELETE FROM sn_pi_reserve WHERE pi_no = %s", pi)
+        db.exec("DELETE FROM sn_pi_reserve_head WHERE pi_no = %s", pi)
     if plan_reserve.get("new"):
         db.exec(
             "INSERT INTO sn_pi_reserve_head(pi_no, start_seq, created_by, created_at) VALUES (%s,%s,%s,%s)",
