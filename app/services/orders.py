@@ -814,13 +814,10 @@ def list_bills(
     """左表：每张单据一行，金蝶修改日期新的在前（同一时间按单据编号大的在前）；订单数量、已生成、可生成（额度）按物料行汇总。"""
     where, args = _bill_filter(cu, q, customer, pi, factory)
     total = db.count("SELECT COUNT(DISTINCT m.bill_no) FROM sn_prd_mo m" + where, *args)
-    rows = db.all(
-        "SELECT m.bill_no, MAX(m.customer_code) customer_code, MAX(m.po) po, MAX(m.pi) pi, MAX(m.org_code) org_code, "
-        "MAX(m.org_name) org_name, MAX(m.modify_time) modify_time, SUM(FLOOR(m.qty)) total_qty, COUNT(*) line_count, "
-        "GROUP_CONCAT(DISTINCT NULLIF(m.dept_name, '') ORDER BY m.dept_name SEPARATOR '、') dept_name, "
-        "SUM(COALESCE(c.gen_count, 0)) gen_sum, "
-        "SUM(GREATEST(FLOOR(m.qty) - COALESCE(c.own_generated, 0), 0)) quota "
-        "FROM sn_prd_mo m LEFT JOIN sn_line_count c ON c.bill_no = m.bill_no AND c.seq = m.seq"
+    # 两步取：先只按排序字段选出本页的单据编号（不连计数表、不做汇总，快得多），再只对这一页的单据汇总；
+    # 顺序、各列的值与一次汇总全表相同（关键字按整张单据筛，第二步按单据取即可，其余条件照用）
+    page_bills = db.column(
+        "SELECT m.bill_no FROM sn_prd_mo m"
         + where
         + " GROUP BY m.bill_no ORDER BY MAX(m.modify_time) IS NULL, MAX(m.modify_time) DESC, m.bill_no DESC"
         " LIMIT %s, %s",
@@ -828,6 +825,26 @@ def list_bills(
         page.offset,
         page.size,
     )
+    rows: list[dict] = []
+    if page_bills:
+        where2, args2 = _bill_filter(cu, None, customer, pi, factory)
+        got = {
+            r["bill_no"]: r
+            for r in db.all(
+                "SELECT m.bill_no, MAX(m.customer_code) customer_code, MAX(m.po) po, MAX(m.pi) pi, "
+                "MAX(m.org_code) org_code, MAX(m.org_name) org_name, MAX(m.modify_time) modify_time, "
+                "SUM(FLOOR(m.qty)) total_qty, COUNT(*) line_count, "
+                "GROUP_CONCAT(DISTINCT NULLIF(m.dept_name, '') ORDER BY m.dept_name SEPARATOR '、') dept_name, "
+                "SUM(COALESCE(c.gen_count, 0)) gen_sum, "
+                "SUM(GREATEST(FLOOR(m.qty) - COALESCE(c.own_generated, 0), 0)) quota "
+                "FROM sn_prd_mo m LEFT JOIN sn_line_count c ON c.bill_no = m.bill_no AND c.seq = m.seq"
+                + where2
+                + f" AND m.bill_no IN ({marks(len(page_bills))}) GROUP BY m.bill_no",
+                *args2,
+                *page_bills,
+            )
+        }
+        rows = [got[b] for b in page_bills if b in got]
     states = changes.bill_states([r["bill_no"] for r in rows])
     items = [
         {

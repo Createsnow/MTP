@@ -1016,6 +1016,58 @@ def test_workbench_lists_status_and_buttons(w, api):
     assert tabs() == ([], [pi], [], [pi])
 
 
+def test_workbench_batched_line_checks_match_single_pi(w, api, sql):
+    """生成页列表一次判断多张 PI（generate.load_lines_of）：每张 PI 的状态、原因与单独列出时相同；
+    冻结、失去对应按单据判断，不串到同一次判断的别的 PI。"""
+    from app.services import generate
+
+    cust = uid("CB")
+    _, need, _ = mk(w, ("M1", 3), customer=cust)
+    _, ready, _ = mk(w, ("M1", 3), ("M2", 2), customer=cust)
+    ok(w.bind_pi(ready, w.rule(P())))
+    _, lost, lost_bill = mk(w, ("M1", 3), customer=cust)
+    ok(w.bind_pi(lost, w.rule(P())))
+    _, frozen, frozen_bill = mk(w, ("M1", 3), customer=cust)
+    ok(w.bind_pi(frozen, w.rule(P())))
+    sql.exec(
+        "INSERT INTO sn_order_alert(bill_no, alert_type, seq, status, created_at, updated_at) "
+        "VALUES (%s, 'MATERIAL', 1, 'OPEN', NOW(), NOW())",
+        lost_bill,
+    )
+    sql.exec(
+        "INSERT INTO sn_bill_ledger(bill_no, pi, customer_code, org_code, org_name, pi_frozen, created_at, updated_at) "
+        "SELECT bill_no, pi, customer_code, org_code, org_name, 1, NOW(), NOW() FROM sn_prd_mo WHERE bill_no = %s "
+        "LIMIT 1",
+        frozen_bill,
+    )
+    try:
+        pis = (need, ready, lost, frozen)
+        together = {x["pi_no"]: x for x in ok(api.get(f"/api/generate/pis?q={cust}", w.admin))["items"]}
+        assert set(together) == set(pis)
+        for pi in pis:
+            alone = ok(api.get(f"/api/generate/pis?q={pi}", w.admin))["items"][0]
+            assert (together[pi]["status"], together[pi]["reasons"]) == (alone["status"], alone["reasons"])
+        assert together[need]["status"] == "NEED_RULE"
+        assert together[ready]["status"] == "TO_GENERATE" and together[ready]["reasons"] == {}
+        assert (together[lost]["status"], together[lost]["reasons"]) == ("CANNOT", {"MATERIAL_LOST": 1})
+        assert (together[frozen]["status"], together[frozen]["reasons"]) == ("CANNOT", {"PI_FROZEN": 1})
+
+        keys = {
+            pi: [(r["bill_no"], r["seq"]) for r in sql.all("SELECT bill_no, seq FROM sn_prd_mo WHERE pi = %s", pi)]
+            for pi in pis
+        }
+
+        def brief(ls):
+            return [(x.bill_no, x.seq, x.quota, x.issues, x.block, None if x.res is None else x.res.plan) for x in ls]
+
+        batched = generate.load_lines_of(keys)
+        for pi in pis:
+            assert brief(batched[pi]) == brief(generate._load_lines(pi, keys[pi]))
+    finally:
+        sql.exec("DELETE FROM sn_order_alert WHERE bill_no = %s", lost_bill)
+        sql.exec("DELETE FROM sn_bill_ledger WHERE bill_no = %s", frozen_bill)
+
+
 def test_generating_pi_listed_first_under_to_generate(w, api, sql):
     _, running_pi, _ = mk(w, ("M1", 10))
     ok(w.bind_pi(running_pi, w.rule(P())))

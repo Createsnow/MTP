@@ -1128,7 +1128,12 @@ def line_rules_brief(pi: str, keys: list[tuple[str, int]]) -> dict[tuple[str, in
     sels = selections(keys)
     default = pi_default(pi)
     memo: dict[int, Resolved | None] = {}
-    return {k: info(effective(pi, sels.get(k), default, memo=memo)) for k in keys}
+    out = {}
+    for k in keys:
+        # PI 没绑规则（default 为 None）时不再逐行重查 PI 绑定
+        res = effective(pi, sels.get(k), use_default=False, memo=memo)
+        out[k] = info(default if res is None else res)
+    return out
 
 
 # ================================================================== 选取 / 绑定

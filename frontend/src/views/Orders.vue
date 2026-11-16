@@ -353,8 +353,9 @@ async function loadLines(billNo: string) {
 }
 
 async function refresh() {
-  meta.value = await api.orderMeta();
-  await load();
+  // 顶部统计与左表互不依赖，同时请求（不再先等统计再取列表）
+  const [m] = await Promise.all([api.orderMeta(), load()]);
+  meta.value = m;
   if (current.value) await loadLines(current.value.bill_no);
   if (tab.value === "alerts") await loadAlerts();
 }

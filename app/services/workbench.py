@@ -55,11 +55,12 @@ def _pi_sum() -> str:
 def _pi_rows(q: str | None, by_modify: bool = False, facs: tuple[str, ...] | None = None) -> list[dict]:
     """生成页：快照中的 PI。by_modify：按 PI 下单据的最新修改日期排；否则按最大单据编号排。
     facs = 授权范围（None = 全部）：只取范围内的单据，PI 的订单数、额度等也只按这些单据汇总。"""
-    where = " WHERE m.pi <> ''"
-    args: list = []
+    scope = " WHERE m.pi <> ''"
+    sargs: list = []
     fsql, fargs = factories.scope_sql(facs, "m.org_code")
-    where += fsql
-    args += fargs
+    scope += fsql
+    sargs += fargs
+    where, args = scope, list(sargs)
     text = util.trim(q)
     if text:
         like = util.like_any(text)
@@ -68,11 +69,25 @@ def _pi_rows(q: str | None, by_modify: bool = False, facs: tuple[str, ...] | Non
             "OR x.customer_code LIKE %s OR x.material_code LIKE %s)"
         )
         args += [like] * 5
-    return db.all(
-        _pi_sum() + where + " GROUP BY m.pi ORDER BY " + (_BY_MODIFY if by_modify else "last_bill DESC") + " LIMIT %s",
+    # 两步取：先只按排序字段选出要列的 PI（不连计数表、不做汇总，快得多），再只对这些 PI 汇总；
+    # 顺序、条数、各列的值与一次汇总全表相同（搜索条件按整张 PI 筛，第二步按 PI 取即可，只保留授权范围）
+    order = _BY_MODIFY if by_modify else "last_bill DESC"
+    picked = db.column(
+        "SELECT m.pi FROM sn_prd_mo m"
+        + where
+        + " GROUP BY m.pi ORDER BY "
+        + order.replace("last_bill", "MAX(m.bill_no)")
+        + " LIMIT %s",
         *args,
         LIST_LIMIT,
     )
+    if not picked:
+        return []
+    rows = {
+        r["pi"]: r
+        for r in db.all(_pi_sum() + scope + f" AND m.pi IN ({marks(len(picked))}) GROUP BY m.pi", *sargs, *picked)
+    }
+    return [rows[p] for p in picked if p in rows]
 
 
 def item_stats(pis: list[str], facs: tuple[str, ...] | None = None, gen_only: bool = False) -> dict[str, dict]:
@@ -145,24 +160,30 @@ def _running(pis: list[str]) -> dict[str, dict]:
     }
 
 
-def _line_issue_summary(pi: str, facs: tuple[str, ...] | None = None) -> tuple[bool, bool, dict]:
-    """（有额度的物料行中有未定规则的，全部不能生成，各原因的行数）；只看授权范围 facs 内的单据。"""
+def _line_issue_summaries(pis: list[str], facs: tuple[str, ...] | None = None) -> dict[str, tuple[bool, bool, dict]]:
+    """各 PI：（有额度的物料行中有未定规则的，全部不能生成，各原因的行数）；只看授权范围 facs 内的单据。
+    多张 PI 一次取（generate.load_lines_of），结果与逐张判断相同。"""
+    if not pis:
+        return {}
     fsql, fargs = factories.scope_sql(facs, "org_code")
-    keys = [
-        (r["bill_no"], r["seq"])
-        for r in db.all(
-            "SELECT bill_no, seq FROM sn_prd_mo WHERE pi = %s" + fsql + " ORDER BY bill_no, seq", pi, *fargs
-        )
-    ]
-    ls = generate._load_lines(pi, keys)
-    todo = [x for x in ls if x.quota > 0]
-    reasons: dict[str, int] = {}
-    for x in todo:
-        for i in x.issues:
-            reasons[i] = reasons.get(i, 0) + 1
-    need_rule = any("NO_RULE" in x.issues or "RULE_PREFIX" in x.issues for x in todo)
-    cannot = bool(todo) and all(x.issues for x in todo)
-    return need_rule, cannot, reasons
+    groups: dict[str, list[tuple[str, int]]] = {pi: [] for pi in pis}
+    for r in db.all(
+        f"SELECT pi, bill_no, seq FROM sn_prd_mo WHERE pi IN ({marks(len(pis))})" + fsql + " ORDER BY bill_no, seq",
+        *pis,
+        *fargs,
+    ):
+        groups[r["pi"]].append((r["bill_no"], r["seq"]))
+    out = {}
+    for pi, ls in generate.load_lines_of(groups).items():
+        todo = [x for x in ls if x.quota > 0]
+        reasons: dict[str, int] = {}
+        for x in todo:
+            for i in x.issues:
+                reasons[i] = reasons.get(i, 0) + 1
+        need_rule = any("NO_RULE" in x.issues or "RULE_PREFIX" in x.issues for x in todo)
+        cannot = bool(todo) and all(x.issues for x in todo)
+        out[pi] = (need_rule, cannot, reasons)
+    return out
 
 
 def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False) -> dict:
@@ -186,6 +207,9 @@ def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False
             *largs,
         )
     }
+    # 逐行判断「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行中还有额度、不在生成中的 PI 做，这些 PI 一次取
+    detail = [r["pi"] for r in rows[:DETAIL_ROWS] if r["pi"] not in running and int(r["quota"] or 0) > 0]
+    issues = _line_issue_summaries(detail, facs)
     out = []
     for i, r in enumerate(rows):
         s = stats.get(r["pi"], {})
@@ -196,7 +220,7 @@ def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False
         if r["pi"] in running:
             status = GENERATING
         elif quota > 0 and i < DETAIL_ROWS:
-            need_rule, cannot, reasons = _line_issue_summary(r["pi"], facs)
+            need_rule, cannot, reasons = issues[r["pi"]]
             status = CANNOT if cannot and not need_rule else (NEED_RULE if need_rule else None)
         if status is None:
             if interrupted:

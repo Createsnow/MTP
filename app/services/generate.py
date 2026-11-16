@@ -668,52 +668,69 @@ class Line:
 
 def _load_lines(pi: str, keys: list[tuple[str, int]]) -> list[Line]:
     """按给定顺序取物料行（快照 + 计数 + 附件项次 + 生效规则 + 单据冻结），并判断生成条件。"""
-    if not keys:
-        return []
-    bills = sorted({k[0] for k in keys})
+    return load_lines_of({pi: keys})[pi]
+
+
+def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Line]]:
+    """多张 PI 的 _load_lines 一次取（生成页列表逐 PI 判断「需先选规则 / 不能生成」用）：快照、计数、附件项次、
+    米数、产品单位、物料行选的规则、单据冻结、失效条件各一条 SQL，只有 PI 绑定的规则、前缀能否使用按 PI 查；
+    每张 PI 的结果与单独调用 _load_lines 相同。"""
+    out: dict[str, list[Line]] = {pi: [] for pi in groups}
+    all_keys = [k for keys in groups.values() for k in keys]
+    if not all_keys:
+        return out
+    bills = sorted({k[0] for k in all_keys})
     snap = {
         (r["bill_no"], r["seq"]): r
         for r in db.all(f"SELECT * FROM sn_prd_mo WHERE bill_no IN ({marks(len(bills))})", *bills)
     }
-    counts, fills, lens, units = orders.line_extras(keys)
-    sels = rules.selections(keys)
-    default = rules.pi_default(pi)
-    memo: dict[int, rules.Resolved | None] = {}
-    taken: dict = {}
-    blocks = {b: changes.generation_block(b) for b in bills}
+    counts, fills, lens, units = orders.line_extras(all_keys)
+    sels = rules.selections(all_keys)
+    blocks = changes.generation_blocks(bills)
     vrule = line_void.current()
-    out = []
-    for k in keys:
-        r = snap.get(k)
-        if r is None:
-            raise biz(ErrorCode.ORDER_LINE_NOT_FOUND, bill_no=k[0], seq=k[1])
-        if r["pi"] != pi:
-            raise biz(ErrorCode.GEN_SCOPE_INVALID)
-        c = counts.get(k)
-        attach, _src = orders.effective_attach(r, fills.get(k))
-        length, length_src = orders.effective_length(r, lens.get(k))
-        unit, unit_src = orders.effective_unit(r, units.get(k))
-        line = Line(
-            r["bill_no"],
-            r["seq"],
-            r["material_code"],
-            r["customer_code"],
-            r["org_code"],
-            r["pi"],
-            orders.sn_qty(r),
-            0 if c is None else int(c["own_generated"]),
-            length,
-            length_src,
-            unit,
-            unit_src,
-            attach,
-            rules.effective(pi, sels.get(k), default, memo=memo),
-            blocks[r["bill_no"]],
-            void=vrule.is_void(r),
-        )
-        _check(line, taken)
-        out.append(line)
+    for pi, keys in groups.items():
+        if not keys:
+            continue
+        default = rules.pi_default(pi)
+        memo: dict[int, rules.Resolved | None] = {}
+        taken: dict = {}
+        for k in keys:
+            r = snap.get(k)
+            if r is None:
+                raise biz(ErrorCode.ORDER_LINE_NOT_FOUND, bill_no=k[0], seq=k[1])
+            if r["pi"] != pi:
+                raise biz(ErrorCode.GEN_SCOPE_INVALID)
+            c = counts.get(k)
+            attach, _src = orders.effective_attach(r, fills.get(k))
+            length, length_src = orders.effective_length(r, lens.get(k))
+            unit, unit_src = orders.effective_unit(r, units.get(k))
+            line = Line(
+                r["bill_no"],
+                r["seq"],
+                r["material_code"],
+                r["customer_code"],
+                r["org_code"],
+                r["pi"],
+                orders.sn_qty(r),
+                0 if c is None else int(c["own_generated"]),
+                length,
+                length_src,
+                unit,
+                unit_src,
+                attach,
+                _effective(pi, sels.get(k), default, memo),
+                blocks[r["bill_no"]],
+                void=vrule.is_void(r),
+            )
+            _check(line, taken)
+            out[pi].append(line)
     return out
+
+
+def _effective(pi: str, sel: dict | None, default: rules.Resolved | None, memo: dict) -> rules.Resolved | None:
+    """物料行生效的规则（同 rules.effective）；PI 没绑规则（default 为 None）时不再逐行重查 PI 绑定。"""
+    res = rules.effective(pi, sel, use_default=False, memo=memo)
+    return default if res is None else res
 
 
 def _check(line: Line, taken: dict | None = None) -> None:

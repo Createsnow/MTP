@@ -124,6 +124,24 @@ def generation_block(bill_no: str) -> str | None:
     return None
 
 
+def generation_blocks(bills: list[str]) -> dict[str, str | None]:
+    """多张单据的 generation_block，一次取（两条 SQL，不再逐单据查）；判断与 generation_block 相同：
+    PI 冻结优先于「失去对应」。"""
+    if not bills:
+        return {}
+    ph = marks(len(bills))
+    frozen = set(db.column(f"SELECT bill_no FROM sn_bill_ledger WHERE bill_no IN ({ph}) AND pi_frozen <> 0", *bills))
+    lost = set(
+        db.column(
+            f"SELECT DISTINCT bill_no FROM sn_order_alert WHERE bill_no IN ({ph}) AND alert_type = %s "
+            "AND status = 'OPEN'",
+            *bills,
+            MATERIAL,
+        )
+    )
+    return {b: "PI_FROZEN" if b in frozen else ("MATERIAL_LOST" if b in lost else None) for b in bills}
+
+
 def allocation_block(bill_no: str) -> str | None:
     """该单不能分配的原因：PI 冻结 / 反审核中 / 暂停交付。"""
     L = ledger(bill_no)
