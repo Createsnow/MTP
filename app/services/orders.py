@@ -194,7 +194,9 @@ def compare_sync(cu: CurrentUser, trigger: str = "SCHEDULED") -> dict | None:
             return None
         progress = _Progress(cu, "COMPARE", trigger)
         try:
-            return _compare(cu, trigger, progress)
+            # 本周期调用金蝶（表头、明细、离开快照与反审核复查的按单号查看、状态）共用一次登录
+            with k3.session():
+                return _compare(cu, trigger, progress)
         finally:
             progress.close()
     finally:
@@ -450,7 +452,13 @@ def sync_bill(cu: CurrentUser, bill_no: str | None) -> dict:
 
 
 def rebuild(cu: CurrentUser) -> dict:
-    """全量重建：完整拉取 → 写入新表 → 原子换表；失败整体回滚，旧快照完整保留。"""
+    """全量重建：完整拉取 → 写入新表 → 原子换表；失败整体回滚，旧快照完整保留。
+    本次调用金蝶（全部明细、生产组织、重建后离开快照单据的按单号查看）共用一次登录。"""
+    with k3.session():
+        return _rebuild(cu)
+
+
+def _rebuild(cu: CurrentUser) -> dict:
     held = locks.sync_lock(wait=True)
     if held is None:
         raise biz(ErrorCode.ORDER_SYNC_BUSY)

@@ -15,15 +15,20 @@
   不参与比对、变更提醒；金蝶不认这些列时本进程改用基本列（这几列留空，状态为空的物料行不会失效），同步照常。
 - 连接参数：生产订单页「金蝶连接」保存过的（sn_k3_config，应用密钥加密保存）优先，没有时读 .env 的 K3_*；
   每次调用金蝶时读取，保存后下一次同步即生效。
+- 登录复用（session）：比对同步、全量重建一个周期内共用一个连接、只登录一次（表头、明细、状态、按单号查看、
+  组织机构），参数在周期内第一次调用金蝶时读取；闲置超过 SESSION_IDLE_SECONDS 或上一次调用失败后，下一次调用先重新登录。
+  不在周期内的调用（按单据同步、连接测试、每日同步生产组织）照旧每次读参数、登录。请求内容不变，只少了登录请求。
 """
 
 from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -475,6 +480,74 @@ def _login(http: httpx.Client, c: _Config) -> None:
         http.cookies.set("kdservice-sessionid", text(sid), domain=host, path="/")
 
 
+# ------------------------------------------------------------------ 登录复用（一个同步周期一次）
+
+#: 共用的登录闲置超过这么久（秒），下一次调用前先重新登录（周期内写库、变更比对可能耗时，避免会话过期）
+SESSION_IDLE_SECONDS = 300
+
+
+class _Session:
+    """一个同步周期共用的连接与登录（只在开启它的线程内使用）。"""
+
+    def __init__(self) -> None:
+        self.http: httpx.Client | None = None
+        self.config: _Config | None = None
+        self.logged_in = False
+        self.used_at = 0.0
+        self.logins = 0
+
+
+_local = threading.local()
+
+
+@contextmanager
+def session() -> Iterator[None]:
+    """同步周期：期间本线程调用金蝶共用一个连接，只登录一次（首次调用时读参数、登录，用不到金蝶就不登录）。
+    已在周期内时沿用外层的。结束时关闭连接。"""
+    if getattr(_local, "session", None) is not None:
+        yield
+        return
+    s = _Session()
+    _local.session = s
+    try:
+        yield
+    finally:
+        _local.session = None
+        if s.logins:
+            structlog.get_logger().info("k3_session_closed", logins=s.logins)
+        if s.http is not None:
+            s.http.close()
+
+
+@contextmanager
+def _open(c: _Config | None = None) -> Iterator[tuple[httpx.Client, _Config]]:
+    """取一个已登录的连接：在同步周期内（且没有指定参数）复用周期的连接；否则新建连接、登录，用完关闭。
+    周期内调用失败后标记为未登录：下一次调用先重新登录（会话可能已失效，例如金蝶重启）。"""
+    s: _Session | None = getattr(_local, "session", None)
+    if s is None or c is not None:
+        cfg = c or _config()
+        with _client() as http:
+            _login(http, cfg)
+            yield http, cfg
+        return
+    if s.config is None:
+        s.config = _config()
+    if s.http is None:
+        s.http = _client()
+    if not s.logged_in or time.monotonic() - s.used_at > SESSION_IDLE_SECONDS:
+        s.logged_in = False
+        _login(s.http, s.config)
+        s.logged_in = True
+        s.logins += 1
+    try:
+        yield s.http, s.config
+    except BizError:
+        s.logged_in = False
+        raise
+    finally:
+        s.used_at = time.monotonic()
+
+
 def _query(http: httpx.Client, c: _Config, data: dict) -> list:
     page = _post(
         http,
@@ -566,9 +639,7 @@ def _detail_paged(http: httpx.Client, c: _Config, filter_string: str, on_rows: P
 
 def fetch_approved_heads() -> list[Head]:
     """比对同步：已审核单据的编号与修改时间（按明细返回多行时本地去重）。"""
-    c = _config()
-    with _client() as http:
-        _login(http, c)
+    with _open() as (http, c):
         raw = _paged(http, c, "FBillNo,FModifyDate", APPROVED_FILTER, "FBillNo ASC")
     out: dict[str, Head] = {}
     for o in raw:
@@ -587,10 +658,8 @@ def fetch_bills(bill_nos: list[str], on_bills: Progress = None) -> list[Row]:
     """按单据编号批量拉已审核单据的全部物料行（不按业务状态过滤）。每批后回调已拉完的单据数。"""
     if not bill_nos:
         return []
-    c = _config()
     rows: list[Row] = []
-    with _client() as http:
-        _login(http, c)
+    with _open() as (http, c):
         for i in range(0, len(bill_nos), BILLS_PER_QUERY):
             part = bill_nos[i : i + BILLS_PER_QUERY]
             flt = f"{APPROVED_FILTER} AND FBillNo IN ({','.join(_quote(b) for b in part)})"
@@ -605,9 +674,7 @@ def fetch_bills(bill_nos: list[str], on_bills: Progress = None) -> list[Row]:
 
 def fetch_all(on_rows: Progress = None) -> list[Row]:
     """全量重建：按已审核条件完整拉取。任何一页失败即整体失败，调用方不写快照。每页后回调已拉到的行数。"""
-    c = _config()
-    with _client() as http:
-        _login(http, c)
+    with _open() as (http, c):
         raw = _detail_paged(http, c, APPROVED_FILTER, on_rows)
     return [r for r in (_row_of_query(o) for o in raw if isinstance(o, list)) if r is not None]
 
@@ -616,9 +683,7 @@ def fetch_line_status() -> dict[tuple[str, int], tuple[str, str]]:
     """比对同步：已审核单据各物料行的业务状态、领料状态（(单据, 行号) → (业务状态, 领料状态)）。
     这两项由执行操作、领料单回写改变，不改金蝶修改日期，按修改日期比对拉不到。只拉 4 列、不重试；失败抛出，
     调用方只记日志（本周期不刷新状态，订单快照照常同步）。"""
-    c = _config()
-    with _client() as http:
-        _login(http, c)
+    with _open() as (http, c):
         raw = _paged(http, c, ",".join(STATUS_KEYS), APPROVED_FILTER, ORDER_BY, False)
     out: dict[tuple[str, int], tuple[str, str]] = {}
     for o in raw:
@@ -631,9 +696,7 @@ def fetch_line_status() -> dict[tuple[str, int], tuple[str, str]]:
 
 def view_bill(bill_no: str) -> BillView:
     """按单据编号查询（不带单据状态条件）。查无此单返回 found = False；调用失败抛出。"""
-    c = _config()
-    with _client() as http:
-        _login(http, c)
+    with _open() as (http, c):
         data = {"CreateOrgId": 0, "Number": bill_no, "Id": "", "IsSortBySeq": True}
         body = _post(
             http,
@@ -642,14 +705,15 @@ def view_bill(bill_no: str) -> BillView:
             c.view_timeout,
             ErrorCode.K3_QUERY_FAILED,
         )
-    result = body.get("Result") if isinstance(body, dict) and isinstance(body.get("Result"), dict) else {}
-    st = result.get("ResponseStatus") if isinstance(result.get("ResponseStatus"), dict) else {}
-    if st.get("IsSuccess") is not True:
-        # MsgCode 10 = 未找到对应数据：单据已删除
-        code = st.get("MsgCode")
-        if isinstance(code, (int, float)) and not isinstance(code, bool) and int(code) == 10:
-            return BillView(False, "", [])
-        raise biz(ErrorCode.K3_QUERY_FAILED, message=error_of(body) or "View failed")
+        result = body.get("Result") if isinstance(body, dict) and isinstance(body.get("Result"), dict) else {}
+        st = result.get("ResponseStatus") if isinstance(result.get("ResponseStatus"), dict) else {}
+        if st.get("IsSuccess") is not True:
+            # MsgCode 10 = 未找到对应数据：单据已删除
+            code = st.get("MsgCode")
+            if isinstance(code, (int, float)) and not isinstance(code, bool) and int(code) == 10:
+                return BillView(False, "", [])
+            # 在连接内抛出：周期内共用登录时下一次调用先重新登录（会话可能已失效）
+            raise biz(ErrorCode.K3_QUERY_FAILED, message=error_of(body) or "View failed")
     doc = result.get("Result") if isinstance(result.get("Result"), dict) else {}
     rows = [r for r in rows_from_view(doc) if r.bill_no == bill_no]
     return BillView(True, text(doc.get("DocumentStatus")), rows)
@@ -657,9 +721,7 @@ def view_bill(bill_no: str) -> BillView:
 
 def fetch_organizations(c: _Config | None = None) -> list[Org]:
     """组织机构（含已禁用的：FForbidStatus 不是 A 即禁用）。c 为空 = 当前生效的连接参数（连接测试传入待测参数）。"""
-    c = c or _config()
-    with _client() as http:
-        _login(http, c)
+    with _open(c) as (http, c):
         raw = []
         start = 0
         while True:

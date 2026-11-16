@@ -7,6 +7,8 @@ import time
 import conftest
 from conftest import BILLS, K3_FAIL, MES, m, ok, uid
 
+from app.core.exceptions import BizError
+
 
 def P() -> str:
     return "P" + uid("").replace("-", "")
@@ -510,6 +512,75 @@ def test_sync_config_interval_and_pause(w, api, sql):
         assert ok(api.get("/api/orders/sync-config", w.admin)).body["paused"] is False
     finally:
         _reset_sync_config(sql)
+
+
+def _k3_count(start: int, part: str) -> int:
+    return sum(part in c.path for c in conftest.K3.calls[start:])
+
+
+def test_one_k3_login_per_sync_cycle(w, api, sql):
+    """比对同步、全量重建一个周期只登录金蝶一次：表头、明细、状态、离开快照与反审核复查的按单号查看共用；
+    请求内容不变（各查询、查看照常发出）。按单据同步不在周期内，照旧单独登录。"""
+    bills = [issued(w, ("M1", 2))[2] for _ in range(2)]
+    for b in bills:
+        w.touch(b, status="D")
+    changed = uid("MO")
+    w.order(changed, w.org(uid("O")[:10]), "C1", uid("PI"), ("M1", 1))
+    w.touch(changed)
+
+    i = len(conftest.K3.calls)
+    w.compare()
+    assert _k3_count(i, "LoginByAppSecret") == 1
+    # 两张已出号单据离开快照：各按单号查看一次，同一周期反审核复查再各查一次（原有行为，本次不改）
+    assert _k3_count(i, "View") == 4
+    assert _k3_count(i, "ExecuteBillQuery") >= 3, "表头、变动单据明细、状态各至少一次"
+    for b in bills:
+        assert sql.scalar("SELECT leave_state FROM sn_bill_ledger WHERE bill_no = %s", b) == "REVERSAL"
+
+    i = len(conftest.K3.calls)
+    w.compare()
+    assert _k3_count(i, "LoginByAppSecret") == 1
+    assert _k3_count(i, "View") == 2, "反审核中的单据每个周期按单号复查"
+
+    i = len(conftest.K3.calls)
+    ok(api.post("/api/orders/rebuild", {}, w.admin))
+    assert _k3_count(i, "LoginByAppSecret") == 1, "全量重建：明细、生产组织、离开快照单据的查看共用一次登录"
+    assert _k3_count(i, "View") == 2
+
+    i = len(conftest.K3.calls)
+    ok(api.post("/api/orders/sync", m(bill_no=changed), w.admin))
+    assert _k3_count(i, "LoginByAppSecret") == 1
+
+
+def test_k3_session_relogin_after_failure_or_idle(w, monkeypatch):
+    """周期内调用失败后、闲置超过 SESSION_IDLE_SECONDS 后，下一次调用先重新登录；
+    周期结束关闭连接，之后的调用照旧单独登录。"""
+    from app.services import k3
+
+    org, pi, bill = issued(w, ("M1", 1))
+    i = len(conftest.K3.calls)
+    with k3.session():
+        assert k3.view_bill(bill).found
+        assert k3.view_bill(bill).found
+        assert _k3_count(i, "LoginByAppSecret") == 1
+        K3_FAIL["view"] = True
+        try:
+            k3.view_bill(bill)
+            raise AssertionError("应当失败")
+        except BizError:
+            pass
+        K3_FAIL["view"] = False
+        assert k3.view_bill(bill).found
+        assert _k3_count(i, "LoginByAppSecret") == 2, "失败后重新登录"
+        assert k3.view_bill(bill).found
+        assert _k3_count(i, "LoginByAppSecret") == 2
+        monkeypatch.setattr(k3, "SESSION_IDLE_SECONDS", -1)
+        assert k3.view_bill(bill).found
+        assert _k3_count(i, "LoginByAppSecret") == 3, "闲置超时重新登录"
+    i = len(conftest.K3.calls)
+    k3.view_bill(bill)
+    k3.view_bill(bill)
+    assert _k3_count(i, "LoginByAppSecret") == 2, "周期外：每次调用单独登录"
 
 
 def test_material_unrelated_does_not_reopen_on_next_compare(w, api, sql):
