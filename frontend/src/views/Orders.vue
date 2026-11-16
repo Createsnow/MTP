@@ -8,27 +8,23 @@
           <el-icon><Refresh /></el-icon><span>{{ t("orders.compareNow") }}</span>
         </el-button>
         <el-button v-if="store.isAdmin" :loading="syncing === 'rebuild'" @click="rebuild">{{ t("orders.rebuild") }}</el-button>
-        <!-- 金蝶连接：最近测试未通过或密钥解不开时按钮右上角红点 -->
-        <!-- 同步设置：定时比对同步间隔、暂停自动同步；暂停时按钮右上角红点 -->
-        <el-badge v-if="store.isAdmin" is-dot :hidden="!meta?.compare?.paused" class="k3-badge">
-          <el-button @click="syncCfgOpen = true"><el-icon><Timer /></el-icon><span>{{ t("orders.syncCfg.button") }}</span></el-button>
-        </el-badge>
-        <el-badge v-if="store.isAdmin" is-dot :hidden="!k3Warn" class="k3-badge">
-          <el-button @click="k3Open = true"><el-icon><Setting /></el-icon><span>{{ t("k3.button") }}</span></el-button>
+        <!-- 金蝶同步设置（连接参数 + 自动同步两个页签）：金蝶连接最近测试未通过、密钥解不开或自动同步已暂停时按钮右上角红点 -->
+        <el-badge v-if="store.isAdmin" is-dot :hidden="!k3Warn && !meta?.compare?.paused" class="k3-badge">
+          <el-button @click="openSettings('conn')"><el-icon><Setting /></el-icon><span>{{ t("k3.button") }}</span></el-button>
         </el-badge>
       </template>
     </PageHead>
 
     <el-alert v-if="meta?.compare?.last_ok === false" type="error" show-icon :closable="false"
       :title="t('orders.syncFailed', { time: fmt(meta.compare.last_run_at), msg: meta.compare.last_message })">
-      <el-button v-if="store.isAdmin" link type="primary" @click="k3Open = true">{{ t("k3.check") }}</el-button>
+      <el-button v-if="store.isAdmin" link type="primary" @click="openSettings('conn')">{{ t("k3.check") }}</el-button>
     </el-alert>
 
     <div class="surface meta">
       <span>{{ t("orders.syncedAt") }}：<b>{{ fmt(meta?.synced_at) }}</b></span>
       <span>{{ t("orders.bills") }}：<b class="num">{{ meta?.bills ?? 0 }}</b></span>
       <span>{{ t("orders.rows") }}：<b class="num">{{ meta?.rows ?? 0 }}</b></span>
-      <span class="muted">{{ t("orders.emptyCustomer", { n: meta?.empty_customer_bills ?? 0 }) }}</span>
+      <span v-if="meta?.empty_customer_bills" class="muted">{{ t("orders.emptyCustomer", { n: meta.empty_customer_bills }) }}</span>
       <span>{{ t("orders.attachPending") }}：<b class="num" :class="{ warn: meta?.attach_pending }">{{ meta?.attach_pending ?? 0 }}</b></span>
       <span>
         {{ t("orders.compare") }}：
@@ -39,13 +35,12 @@
           </el-tag>
         </template>
         <span v-else class="muted">—</span>
-        <!-- 自动同步：暂停时醒目提示；否则显示间隔 -->
-        <el-tag v-if="meta?.compare?.paused" size="small" type="warning" class="ml">{{ t("orders.syncCfg.pausedTag") }}</el-tag>
+        <!-- 自动同步：暂停时醒目提示（系统管理员点击直接打开「自动同步」页签）；否则显示间隔 -->
+        <el-tag v-if="meta?.compare?.paused" size="small" type="warning" class="ml" :class="{ link: store.isAdmin }"
+          @click="store.isAdmin && openSettings('sync')">{{ t("orders.syncCfg.pausedTag") }}</el-tag>
         <span v-else-if="meta?.compare?.interval_minutes" class="muted ml">{{ t("orders.syncCfg.every", { n: meta.compare.interval_minutes }) }}</span>
       </span>
-      <el-button link :type="meta?.open_alerts ? 'danger' : 'info'" @click="tab = 'alerts'">
-        {{ t("orders.openAlerts", { n: meta?.open_alerts ?? 0 }) }}
-      </el-button>
+      <!-- 未处理变更提醒数显示在下方「订单变更提醒」页签的角标上，统计栏不再重复 -->
       <!-- 同步进行中（任一触发方式、任一操作人）：统计栏多出一行进度，结束后消失 -->
       <span v-if="prog?.running" class="run">
         <el-icon class="is-loading"><Loading /></el-icon>
@@ -263,8 +258,8 @@
       </template>
     </el-dialog>
 
-    <SyncConfigDialog v-if="store.isAdmin" v-model="syncCfgOpen" @saved="refresh()" />
-    <K3ConfigDrawer v-if="store.isAdmin" v-model="k3Open" @saved="(c: any) => (k3 = c)" @update:model-value="(v: boolean) => !v && loadK3()" />
+    <K3ConfigDrawer v-if="store.isAdmin" v-model="k3Open" :tab="k3Tab" :paused="!!meta?.compare?.paused"
+      @saved="(c: any) => (k3 = c)" @sync-saved="refresh()" @update:model-value="(v: boolean) => !v && loadK3()" />
   </div>
 </template>
 
@@ -280,7 +275,6 @@ import { useTime } from "@/composables/useTime";
 import PageHead from "@/components/PageHead.vue";
 import FactorySelect from "@/components/FactorySelect.vue";
 import K3ConfigDrawer from "./orders/K3ConfigDrawer.vue";
-import SyncConfigDialog from "./orders/SyncConfigDialog.vue";
 import { firstSyncThisLogin } from "@/utils/syncOnce";
 import { leaveStateLabel, suspendLabel } from "@/constants";
 import type { BillState, OrderBill, OrderLine } from "@/types/api";
@@ -321,12 +315,16 @@ const detail = ref<(OrderBill & { lines: OrderLine[]; state: BillState }) | null
 const linesLoading = ref(false);
 const syncBillNo = ref("");
 const syncing = ref<"" | "one" | "compare" | "rebuild">("");
-/** 金蝶连接（只有系统管理员）：按钮打开配置抽屉；最近测试未通过或密钥解不开时按钮上显示红点 */
+/** 金蝶同步设置（只有系统管理员）：一个按钮打开抽屉，内含「连接参数」「自动同步」两个页签；
+ *  金蝶连接最近测试未通过、密钥解不开或自动同步已暂停时按钮上显示红点 */
 const k3 = ref<any>(null);
 const k3Warn = computed(() => !!k3.value && (k3.value.secret_unreadable || k3.value.last_test?.ok === false));
 const k3Open = ref(false);
-/** 同步设置（只有系统管理员）：定时比对同步间隔、暂停自动同步 */
-const syncCfgOpen = ref(false);
+const k3Tab = ref<"conn" | "sync">("conn");
+const openSettings = (pane: "conn" | "sync") => {
+  k3Tab.value = pane;
+  k3Open.value = true;
+};
 const loadK3 = async () => {
   if (store.isAdmin) k3.value = await api.k3Config().catch(() => k3.value);
 };
@@ -540,6 +538,7 @@ onMounted(async () => {
 .run-bar { width: 200px; }
 .k3-badge :deep(.el-badge__content.is-dot) { top: 4px; right: 6px; }
 .ml { margin-left: 6px; }
+.link { cursor: pointer; }
 .mb { margin-bottom: 12px; }
 .warn { color: var(--el-color-warning); }
 .err { color: var(--el-color-danger); }

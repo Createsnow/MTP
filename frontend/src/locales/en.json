@@ -809,8 +809,10 @@
     "ownReserved": "Own reserved · line {seq}"
   },
   "k3": {
-    "button": "Kingdee connection",
-    "title": "Kingdee connection",
+    "button": "Kingdee sync settings",
+    "settingsTitle": "Kingdee sync settings",
+    "paneConn": "Connection",
+    "paneSync": "Automatic sync",
     "desc": "Visible to the system admin only. Saving first runs a connection test with the new settings and saves only if it passes; the next sync uses them, no restart needed. Only how this system reads Kingdee changes; the MES integration is not affected.",
     "check": "Check the Kingdee connection",
     "source": "Settings from",
@@ -942,7 +944,6 @@
     "compare": "Compare sync",
     "compareOk": "OK",
     "compareFail": "Failed",
-    "openAlerts": "{n} open change alerts",
     "tabBills": "Production orders",
     "tabAlerts": "Order change alerts",
     "search": "Bill / PI / PO / material / customer",
@@ -1016,8 +1017,6 @@
       "write": "writing the snapshot"
     },
     "syncCfg": {
-      "button": "Sync settings",
-      "title": "Sync settings",
       "desc": "Automatic sync = scheduled compare sync + the sync when this page is opened; every compare sync also refreshes the business and picking status of the material lines. A longer interval puts less load on Kingdee but order changes arrive later. While paused, \"Compare sync now\", \"Sync bill\" and \"Full rebuild\" still work. Takes effect within a minute after saving; no restart needed.",
       "auto": "Automatic sync",
       "running": "On",

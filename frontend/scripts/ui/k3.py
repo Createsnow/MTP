@@ -1,7 +1,9 @@
-# 生产订单页「金蝶连接」抽屉词条：key -> (简体中文, English, Tiếng Việt)
+# 生产订单页「金蝶同步设置」抽屉词条（连接参数、自动同步两个页签）：key -> (简体中文, English, Tiếng Việt)
 M = {
-"k3.button": ("金蝶连接", "Kingdee connection", "Kết nối Kingdee"),
-"k3.title": ("金蝶连接", "Kingdee connection", "Kết nối Kingdee"),
+"k3.button": ("金蝶同步设置", "Kingdee sync settings", "Cài đặt đồng bộ Kingdee"),
+"k3.settingsTitle": ("金蝶同步设置", "Kingdee sync settings", "Cài đặt đồng bộ Kingdee"),
+"k3.paneConn": ("连接参数", "Connection", "Kết nối"),
+"k3.paneSync": ("自动同步", "Automatic sync", "Đồng bộ tự động"),
 "k3.desc": ("仅系统管理员可见。保存时先用新参数连接测试，通过才保存；保存后下一次同步即生效，无需重启服务。只改本系统读取金蝶的参数，MES 对接不受影响。",
   "Visible to the system admin only. Saving first runs a connection test with the new settings and saves only if it passes; the next sync uses them, no restart needed. Only how this system reads Kingdee changes; the MES integration is not affected.",
   "Chỉ quản trị hệ thống nhìn thấy. Khi lưu, hệ thống kiểm tra kết nối bằng tham số mới trước, chỉ lưu khi thành công; lần đồng bộ tiếp theo sẽ dùng tham số mới, không cần khởi động lại. Chỉ thay đổi cách hệ thống đọc Kingdee, không ảnh hưởng kết nối MES."),

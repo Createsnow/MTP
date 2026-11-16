@@ -809,8 +809,10 @@
     "ownReserved": "Dự trữ của dòng {seq}"
   },
   "k3": {
-    "button": "Kết nối Kingdee",
-    "title": "Kết nối Kingdee",
+    "button": "Cài đặt đồng bộ Kingdee",
+    "settingsTitle": "Cài đặt đồng bộ Kingdee",
+    "paneConn": "Kết nối",
+    "paneSync": "Đồng bộ tự động",
     "desc": "Chỉ quản trị hệ thống nhìn thấy. Khi lưu, hệ thống kiểm tra kết nối bằng tham số mới trước, chỉ lưu khi thành công; lần đồng bộ tiếp theo sẽ dùng tham số mới, không cần khởi động lại. Chỉ thay đổi cách hệ thống đọc Kingdee, không ảnh hưởng kết nối MES.",
     "check": "Kiểm tra kết nối Kingdee",
     "source": "Nguồn tham số",
@@ -942,7 +944,6 @@
     "compare": "Đồng bộ so sánh",
     "compareOk": "Thành công",
     "compareFail": "Thất bại",
-    "openAlerts": "{n} cảnh báo thay đổi chưa xử lý",
     "tabBills": "Lệnh sản xuất",
     "tabAlerts": "Cảnh báo thay đổi lệnh",
     "search": "Chứng từ / PI / PO / vật tư / khách hàng",
@@ -1016,8 +1017,6 @@
       "write": "đang ghi ảnh chụp"
     },
     "syncCfg": {
-      "button": "Cài đặt đồng bộ",
-      "title": "Cài đặt đồng bộ",
       "desc": "Đồng bộ tự động = đồng bộ so sánh theo lịch + đồng bộ khi mở trang này; mỗi lần đồng bộ so sánh đều làm mới trạng thái nghiệp vụ, lĩnh liệu của các dòng vật tư. Khoảng càng dài thì tải lên Kingdee càng ít nhưng thay đổi lệnh đến hệ thống càng muộn. Khi tạm dừng, \"Đồng bộ so sánh ngay\", \"Đồng bộ chứng từ\" và \"Dựng lại toàn bộ\" vẫn dùng được. Có hiệu lực trong vòng một phút sau khi lưu, không cần khởi động lại.",
       "auto": "Đồng bộ tự động",
       "running": "Bật",
