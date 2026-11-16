@@ -1,4 +1,5 @@
-"""/api 鉴权依赖：Bearer 令牌 → 账户（改密或被重置即拒绝、停用即拒绝；页面令牌在别的页面重新登录即拒绝）→ 角色。
+"""/api 鉴权依赖：Bearer 令牌 → 账户（改密或被重置即拒绝、停用即拒绝；
+普通操作员、审计员的页面令牌在别的页面重新登录即拒绝，系统管理员可多页签同时登录）→ 角色。
 
 当前账户挂到 request.state.user，全局 BizError 处理据此记失败痕迹。
 """
@@ -26,6 +27,12 @@ async def run_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
+def _session_replaced(sv: int | None, user: dict) -> bool:
+    """页面令牌已被同一账户在别的页面的登录挤掉：只对普通操作员、审计员生效；
+    系统管理员可多页签同时登录，对接方令牌（不带 sv）不做此校验。"""
+    return sv is not None and user["role"] in util.SINGLE_SESSION_ROLES and session_version(user["last_login_at"]) != sv
+
+
 def authenticate(request: Request) -> CurrentUser:
     header = request.headers.get("Authorization")
     token = None
@@ -45,7 +52,7 @@ def authenticate(request: Request) -> CurrentUser:
         raise biz(ErrorCode.PASSWORD_CHANGED)
     if user["status"] != "ACTIVE":
         raise biz(ErrorCode.ACCOUNT_DISABLED)
-    if claims.session_version is not None and session_version(user["last_login_at"]) != claims.session_version:
+    if _session_replaced(claims.session_version, user):
         raise biz(ErrorCode.SESSION_REPLACED)
     if user["role"] == util.MES:
         # MES 接口账户只能调 /api/mes/v1
@@ -132,7 +139,7 @@ def mes_user(request: Request) -> CurrentUser:
             raise MesError(401, "TOKEN_INVALID", "MES 接口账户请用 Authorization: Bearer <工号>:<密钥>")
         if user["status"] != "ACTIVE":
             raise MesError(403, "ACCOUNT_DISABLED", "账户已停用")
-        if claims.session_version is not None and session_version(user["last_login_at"]) != claims.session_version:
+        if _session_replaced(claims.session_version, user):
             raise MesError(401, "TOKEN_INVALID", "该账户已在其他页面登录")
         if user["role"] in util.SCOPED_ROLES and not users.read_scope(user["id"], user["role"], None):
             raise MesError(403, "ORG_NOT_ALLOWED", "账户未授权任何生产组织")

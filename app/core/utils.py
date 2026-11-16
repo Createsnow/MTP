@@ -55,6 +55,9 @@ MES = "mes"
 ROLES = frozenset((ADMIN, OPERATOR, AUDITOR, MES))
 #: 页面上绑定授权组织（一个或多个，必须至少一个）的角色
 SCOPED_ROLES = frozenset((OPERATOR, AUDITOR))
+#: 页面单会话的角色：同一账户只在最后登录的页面有效（新页签登录后旧页签失效）。
+#: 系统管理员不在内，可在多个页签同时登录；MES 接口账户不登录页面。
+SINGLE_SESSION_ROLES = frozenset((OPERATOR, AUDITOR))
 
 
 def is_super_admin(emp_no: str | None, role: str | None) -> bool:

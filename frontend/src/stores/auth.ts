@@ -5,8 +5,16 @@ import { clearSession, getSavedUser, getToken, goLogin, saveSession } from "@/ap
 import { normalizeLocale, setLocale, type Locale } from "@/i18n";
 import type { UserView } from "@/types/api";
 
-/** 本浏览器内的页面广播：某页登录（或带登录态打开 / 刷新）某账户时，其他页面上的同一账户退出。 */
+/**
+ * 本浏览器内的页面广播：某页登录（或带登录态打开 / 刷新）某账户时，其他页面上的同一账户退出。
+ * 只对普通操作员、审计员；系统管理员可多页签同时登录，既不广播也不响应（与后端 SINGLE_SESSION_ROLES 一致）。
+ */
 const PAGE_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+/** 页面单会话的角色（新页签登录后旧页签失效）。 */
+const SINGLE_SESSION_ROLES = ["operator", "auditor"];
+function singleSession(user: UserView | null | undefined): boolean {
+  return !!user && SINGLE_SESSION_ROLES.includes(user.role);
+}
 let channel: BroadcastChannel | null = null;
 try {
   channel = new BroadcastChannel("sn_session");
@@ -52,12 +60,13 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** 宣告本页正在使用该账户（复制标签页、刷新也算），同浏览器其他页上的该账户随即退出。 */
   function announce() {
-    if (token.value && profile.value) channel?.postMessage({ uid: profile.value.id, page: PAGE_ID });
+    if (token.value && singleSession(profile.value)) channel?.postMessage({ uid: profile.value!.id, page: PAGE_ID });
   }
 
   channel?.addEventListener("message", (e: MessageEvent) => {
     const msg = e.data as { uid?: number; page?: string } | null;
     if (!token.value || !profile.value || msg?.page === PAGE_ID || msg?.uid !== profile.value.id) return;
+    if (!singleSession(profile.value)) return;
     clear();
     goLogin("SESSION_REPLACED");
   });

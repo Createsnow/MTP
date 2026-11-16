@@ -19,7 +19,7 @@ def login(body: LoginIn, request: Request) -> dict:
     )
 
 
-#: 页面登录时前端带的请求头；不带的（MES 等对接方）不参与「一个账户只在一个页面有效」
+#: 页面登录时前端带的请求头；不带的（MES 等对接方）不参与「一个账户只在一个页面有效」（只限普通操作员、审计员）
 PAGE_CLIENT_HEADER = "X-SN-Client"
 
 

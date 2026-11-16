@@ -59,11 +59,29 @@ def test_only_one_system_admin(w, api, sql):
 
 
 def test_single_page_session(w, api):
-    e = emp()
-    t1 = w.user(e, "auditor", w.org(uid("O")[:10]))
-    t2 = ok(api.page_login(e, "Pass1234")).text("token")
-    assert api.get("/api/auth/me", t1).code == "SESSION_REPLACED"
-    assert api.get("/api/auth/me", t2).status == 200
+    """普通操作员、审计员：新页签登录后旧页签失效（页面接口 SESSION_REPLACED，MES 只读接口 TOKEN_INVALID）。"""
+    org = w.org(uid("O")[:10])
+    for role in ("auditor", "operator"):
+        e = emp()
+        t1 = w.user(e, role, org)
+        t2 = ok(api.page_login(e, "Pass1234")).text("token")
+        assert api.get("/api/auth/me", t1).code == "SESSION_REPLACED", role
+        assert api.post("/api/mes/v1/sn/delivered", m(orgCode=org), t1).code == "TOKEN_INVALID", role
+        assert api.get("/api/auth/me", t2).status == 200, role
+        t3 = ok(api.post("/api/auth/login", m(emp_no=e, password="Pass1234"), None)).text("token")
+        assert api.get("/api/auth/me", t2).status == 200, f"{role}：对接方登录不挤掉页面"
+        assert api.get("/api/auth/me", t3).status == 200, role
+
+
+def test_admin_multi_page_session(api):
+    """系统管理员：多页签同时登录，后登录的不挤掉先登录的；改密 / 重置的口令版本校验不受影响（见上一个用例）。"""
+    t1 = ok(api.page_login("admin", ADMIN_PASSWORD)).text("token")
+    t2 = ok(api.page_login("admin", ADMIN_PASSWORD)).text("token")
+    t3 = ok(api.page_login("admin", ADMIN_PASSWORD)).text("token")
+    for t in (t1, t2, t3):
+        assert api.get("/api/auth/me", t).status == 200, "系统管理员各页签都有效"
+        assert api.get("/api/users", t).status == 200
+        assert api.post("/api/mes/v1/sn/delivered", m(), t).code != "TOKEN_INVALID", "MES 只读接口同一规则"
 
 
 def test_password_change_and_reset_require_relogin_without_forced_change(w, api):

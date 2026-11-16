@@ -20,7 +20,7 @@ const enc = encodeURIComponent;
 
 export const api = {
   // ---------------- 账户与登录
-  /** 带 X-SN-Client: web：页面登录，同一账户只在最后登录的页面有效。 */
+  /** 带 X-SN-Client: web：页面登录，普通操作员、审计员同一账户只在最后登录的页面有效；系统管理员可多页签同时登录。 */
   login: (emp_no: string, password: string) =>
     http.post<any, any>("/auth/login", { emp_no, password }, { headers: { "X-SN-Client": "web" } }),
   me: () => get("/auth/me"),
