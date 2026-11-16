@@ -83,7 +83,7 @@
     </div>
 
     <!-- 详情：只管生成与删号。头部（数字、去分配）→ 物料行 / 生成记录 → 底部操作栏（范围、批量、生成）；不能生成的原因看物料行状态列 -->
-    <el-drawer :model-value="!!detailPi" size="min(1240px, 96vw)" class="gen-drawer" @close="closeDetail">
+    <el-drawer :model-value="!!detailPi" size="min(1600px, 96vw)" class="gen-drawer" @close="closeDetail">
       <template #header>
         <div v-if="ctx" class="dh">
           <div class="dh-title">
@@ -126,23 +126,10 @@
             <el-checkbox v-bind="allBillsMark" :disabled="!pickableBills.length" class="all-bills" @change="(v: any) => onAllBills(!!v)">{{ t("generate.selectAllBills") }}</el-checkbox>
             <el-button link type="primary" size="small" @click="foldAll(false)">{{ t("common.expandAll") }}</el-button>
             <el-button link type="primary" size="small" @click="foldAll(true)">{{ t("common.collapseAll") }}</el-button>
-            <!-- 物料行失效条件（全系统一套，改了立即生效）：勾选「失效」时，业务状态、领料状态都在所选范围内的物料行整行失效
-                 （置灰、状态为失效、不能勾选，不参与排号与计数）；取消勾选即恢复生效。两个下拉各至少选一项 -->
-            <span class="void-ops">
-              <el-select v-model="voidBiz" multiple collapse-tags collapse-tags-tooltip size="small" class="void-sel"
-                :disabled="voidSaving" @change="saveVoid">
-                <template #prefix><span class="void-lab">{{ t("generate.void.biz") }}</span></template>
-                <el-option v-for="c in BIZ_CODES" :key="c" :value="c" :label="t(`generate.void.bizStatus.${c}`)" />
-              </el-select>
-              <el-select v-model="voidPick" multiple collapse-tags collapse-tags-tooltip size="small" class="void-sel"
-                :disabled="voidSaving" @change="saveVoid">
-                <template #prefix><span class="void-lab">{{ t("generate.void.pick") }}</span></template>
-                <el-option v-for="c in PICK_CODES" :key="c" :value="c" :label="t(`generate.void.pickStatus.${c}`)" />
-              </el-select>
-              <el-checkbox v-model="voidOn" :disabled="voidSaving" class="void-on" @change="saveVoid">
-                {{ t("generate.void.label") }}<span v-if="voidCount" class="void-n num">{{ voidCount }}</span>
-              </el-checkbox>
-            </span>
+            <!-- 过滤配置（物料行失效条件，全系统一套）：点开弹窗设置业务状态、领料状态；有条件时按钮高亮，后面是本 PI 失效的行数 -->
+            <el-button size="small" :type="voidActive ? 'warning' : ''" :plain="voidActive" class="void-btn" @click="openVoidDlg">
+              <el-icon><Filter /></el-icon><span>{{ t("generate.void.button") }}</span><span v-if="voidActive" class="void-n num">{{ voidCount }}</span>
+            </el-button>
           </span>
         </div>
         <!-- 已分配的单据删号后（或数量增加后）还有额度的，照常勾选生成 -->
@@ -171,10 +158,11 @@
             <el-tag v-if="b.state.open_alerts" size="small" type="warning">{{ t("generate.openAlerts", { n: b.state.open_alerts }) }}</el-tag>
             <span class="push muted num">{{ t("generate.billCounts", { total: num(b.total_qty), gen: num(b.generated_qty), quota: num(b.quota) }) }}</span>
           </div>
-          <!-- 列依次为附件项次、物料编码、ERP行号、客户 P/N、米数、产品单位、数量、已生成、已分配、可生成、状态、开始 / 结束 SN 号、操作；
-               数字列收窄；行按附件项次从小到大（shownBills） -->
+          <!-- 列依次为附件项次、物料编码、ERP行号、客户 P/N、米数、产品单位、数量、已生成、已分配、可生成、状态、业务状态、开始 / 结束 SN 号、操作；
+               各列最小宽度按本 PI 全部物料行的内容与表头量出（lineW），单行完整显示、不截断不折行，放不下时表格左右滑动；
+               行按附件项次从小到大（shownBills） -->
           <el-table v-if="b.shown.length" v-show="!isFolded(b.bill_no)" :data="b.shown" size="small" class="lines" :row-class-name="lineClass" @row-click="onLineClick">
-            <el-table-column width="44">
+            <el-table-column :min-width="lineW.sel">
               <template #default="{ row }">
                 <span class="sel" @click.stop>
                   <el-checkbox :model-value="isPicked(row)" :disabled="!!row.void" @change="(v: any) => pickLine(row, !!v)" />
@@ -182,7 +170,7 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.attachNo')" width="88">
+            <el-table-column :label="t('common.attachNo')" :min-width="lineW.attach">
               <template #default="{ row }">
                 <!-- 金蝶有值也可改（页面值优先，留空即改回金蝶值）；生成时所选物料行不分单据按附件项次从小到大排号 -->
                 <span class="cell-input attach-cell" @click.stop>
@@ -193,18 +181,17 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.material')" min-width="88" show-overflow-tooltip>
+            <el-table-column :label="t('common.material')" :min-width="lineW.material">
               <template #default="{ row }">
                 {{ row.material_code || t("generate.noMaterial") }}
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.lineNo')" prop="seq" width="72" />
-            <!-- 客户 P/N：金蝶只显示字段，不参与生成；完整显示、单行不折行（不截断、无省略号），
-                 列宽按本 PI 全部物料行的值量出（pnW），放不下时单据物料行表格左右滑动 -->
-            <el-table-column :label="t('orders.customerPn')" :min-width="pnW" class-name="nowrap-cell" label-class-name="nowrap-cell">
+            <el-table-column :label="t('common.lineNo')" prop="seq" :min-width="lineW.seq" />
+            <!-- 客户 P/N：金蝶只显示字段，不参与生成 -->
+            <el-table-column :label="t('orders.customerPn')" :min-width="lineW.pn">
               <template #default="{ row }">{{ row.customer_pn || "—" }}</template>
             </el-table-column>
-            <el-table-column :label="t('common.length')" width="76">
+            <el-table-column :label="t('common.length')" :min-width="lineW.length">
               <template #default="{ row }">
                 <!-- 金蝶米数原样显示、原样使用，可改（留空即改回金蝶值）；金蝶为空时规则带米数须填写（标红） -->
                 <span class="cell-input" @click.stop>
@@ -214,7 +201,7 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.unit')" width="64">
+            <el-table-column :label="t('common.unit')" :min-width="lineW.unit">
               <template #default="{ row }">
                 <!-- 金蝶产品单位原样显示、原样使用（含中文也照用），可改（留空即改回金蝶值）；金蝶为空时规则带单位须填写（标红） -->
                 <span class="cell-input" @click.stop>
@@ -224,19 +211,19 @@
                 </span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.qty')" align="right" width="58">
+            <el-table-column :label="t('common.qty')" align="right" :min-width="lineW.qty">
               <template #default="{ row }"><span class="num">{{ num(row.qty) }}</span></template>
             </el-table-column>
-            <el-table-column :label="t('generate.generated')" align="right" width="58">
+            <el-table-column :label="t('generate.generated')" align="right" :min-width="lineW.generated">
               <template #default="{ row }"><span class="num">{{ num(row.generated_qty) }}</span></template>
             </el-table-column>
-            <el-table-column :label="t('generate.allocated')" align="right" width="58">
+            <el-table-column :label="t('generate.allocated')" align="right" :min-width="lineW.allocated">
               <template #default="{ row }"><span class="num">{{ num(row.allocated_qty) }}</span></template>
             </el-table-column>
-            <el-table-column :label="t('generate.quota')" align="right" width="58">
+            <el-table-column :label="t('generate.quota')" align="right" :min-width="lineW.quota">
               <template #default="{ row }"><span class="num" :class="{ zero: !row.quota }">{{ num(row.quota) }}</span></template>
             </el-table-column>
-            <el-table-column :label="t('common.status')" min-width="88">
+            <el-table-column :label="t('common.status')" :min-width="lineW.status">
               <template #default="{ row }">
                 <div v-if="row.quota && row.issues?.length" class="issue-tags">
                   <el-tag v-for="i in row.issues" :key="i" size="small" type="danger" effect="plain">{{ issueText(i) }}</el-tag>
@@ -244,15 +231,19 @@
                 <el-tag v-else size="small" :type="LINE_STATE_TAG[lineState(row)]" disable-transitions>{{ t(`generate.lineState.${lineState(row)}`) }}</el-tag>
               </template>
             </el-table-column>
+            <!-- 业务状态：金蝶明细的业务状态 / 领料状态（只显示；过滤配置按这两项判断失效），未取到为「—」 -->
+            <el-table-column :label="t('generate.void.column')" :min-width="lineW.k3Status">
+              <template #default="{ row }">{{ k3StatusText(row) }}</template>
+            </el-table-column>
             <!-- 开始 / 结束 SN 号：物料行现有号中最小、最大的完整 SN（与分配页物料行同一口径）；还没有号为「—」 -->
-            <el-table-column :label="t('generate.startSn')" :min-width="snW">
+            <el-table-column :label="t('generate.startSn')" :min-width="lineW.sn">
               <template #default="{ row }"><span class="sn-mono">{{ row.start_sn || "—" }}</span></template>
             </el-table-column>
-            <el-table-column :label="t('generate.endSn')" :min-width="snW">
+            <el-table-column :label="t('generate.endSn')" :min-width="lineW.sn">
               <template #default="{ row }"><span class="sn-mono">{{ row.end_sn || "—" }}</span></template>
             </el-table-column>
             <!-- 操作列按页签：待处理只有选规则；可生成有选规则和（有号时）删号；已生成只有删号（状态不限，已分配的也可删） -->
-            <el-table-column :label="t('common.actions')" width="80" align="right">
+            <el-table-column :label="t('common.actions')" :min-width="lineW.actions" align="right">
               <template #default="{ row }">
                 <span class="ops" @click.stop>
                   <el-button v-if="lineFilter !== 'GENERATED' && !row.void" link :type="row.rule ? 'primary' : 'danger'" size="small" @click="openRuleDialog([row])">
@@ -318,6 +309,33 @@
     <DeleteDialog v-if="ctx" ref="deleteDlg" :pi="ctx.pi_no" @done="afterDelete" />
 
     <SegmentsDialog v-if="ctx" ref="segDlg" :pi="ctx.pi_no" :gaps="ctx.gaps" @use="useRange" />
+
+    <!-- 过滤配置（物料行失效条件，全系统一套）：两项都空 = 不过滤；空的一项不限；两项都有值须同时满足。
+         命中的物料行不隐藏，整行置灰失效（不能勾选，不参与排号、计数及之后的操作）。点「确定」才保存 -->
+    <el-dialog v-model="voidDlg.open" :title="t('generate.void.button')" width="460px" :close-on-click-modal="false" append-to-body>
+      <el-form label-width="auto" class="void-form">
+        <el-form-item :label="t('generate.void.biz')">
+          <el-select v-model="voidDlg.biz" multiple clearable :placeholder="t('generate.void.any')">
+            <el-option v-for="c in BIZ_CODES" :key="c" :value="c" :label="t(`generate.void.bizStatus.${c}`)" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="t('generate.void.pick')">
+          <el-select v-model="voidDlg.pick" multiple clearable :placeholder="t('generate.void.any')">
+            <el-option v-for="c in PICK_CODES" :key="c" :value="c" :label="t(`generate.void.pickStatus.${c}`)" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="void-foot">
+          <span class="muted small">{{ voidUpdated }}</span>
+          <span>
+            <el-button @click="voidDlg.biz = []; voidDlg.pick = []">{{ t("generate.void.clear") }}</el-button>
+            <el-button @click="voidDlg.open = false">{{ t("common.cancel") }}</el-button>
+            <el-button type="primary" :loading="voidDlg.saving" @click="saveVoid">{{ t("common.confirm") }}</el-button>
+          </span>
+        </div>
+      </template>
+    </el-dialog>
 
     <!-- PI / 客户规则：整张 PI 的默认规则，不常用 -->
   </div>
@@ -736,39 +754,41 @@ function lineState(l: OrderLine): LineState {
 }
 const lineFilter = ref<Filter>("TODO");
 
-// ---------------- 物料行失效条件（全系统一套）：开关、业务状态、领料状态；改了立即保存并刷新详情
+// ---------------- 过滤配置（物料行失效条件，全系统一套）：业务状态、领料状态；弹窗里改，点「确定」保存并刷新详情
 
-const voidOn = ref(true);
-const voidBiz = ref<string[]>([]);
-const voidPick = ref<string[]>([]);
-const voidSaving = ref(false);
-function showVoidRule() {
-  const r = ctx.value?.void_rule;
-  if (!r) return;
-  voidOn.value = !!r.enabled;
-  voidBiz.value = [...r.biz_status];
-  voidPick.value = [...r.pick_status];
-}
-watch(() => ctx.value?.void_rule, showVoidRule);
-/** 本 PI（授权范围内）失效的物料行数，显示在「失效」后面 */
+/** 当前条件（详情接口带回）：两项都空 = 不过滤 */
+const voidRule = computed(() => ctx.value?.void_rule ?? null);
+const voidActive = computed(() => !!voidRule.value?.enabled && (voidRule.value.biz_status.length > 0 || voidRule.value.pick_status.length > 0));
+/** 本 PI（授权范围内）失效的物料行数，显示在「过滤配置」后面 */
 const voidCount = computed(() => allLines.value.filter((l) => l.void).length);
+const voidUpdated = computed(() =>
+  voidRule.value?.updated_by ? t("generate.void.updated", { by: voidRule.value.updated_by, at: fmtTime(voidRule.value.updated_at) }) : "",
+);
+const voidDlg = reactive({ open: false, saving: false, biz: [] as string[], pick: [] as string[] });
+function openVoidDlg() {
+  const r = voidRule.value;
+  voidDlg.biz = r?.enabled ? [...r.biz_status] : [];
+  voidDlg.pick = r?.enabled ? [...r.pick_status] : [];
+  voidDlg.open = true;
+}
 async function saveVoid() {
-  // 两个下拉各至少选一项：清掉最后一项时还原
-  if (!voidBiz.value.length || !voidPick.value.length) {
-    showVoidRule();
-    ElMessage.warning(t("generate.void.atLeastOne"));
-    return;
-  }
-  voidSaving.value = true;
+  voidDlg.saving = true;
   try {
-    await api.saveVoidRule({ enabled: voidOn.value, biz_status: voidBiz.value, pick_status: voidPick.value });
+    // enabled = 有没有条件（两项都空 = 不过滤）；接口字段不变
+    await api.saveVoidRule({ enabled: voidDlg.biz.length > 0 || voidDlg.pick.length > 0, biz_status: voidDlg.biz, pick_status: voidDlg.pick });
+    voidDlg.open = false;
     await reloadCtx();
     dropVoidPicks();
-  } catch {
-    showVoidRule();
   } finally {
-    voidSaving.value = false;
+    voidDlg.saving = false;
   }
+}
+/** 「业务状态」列：业务状态 / 领料状态（未取到的一项为「—」，两项都没取到为「—」） */
+function k3StatusText(l: OrderLine) {
+  if (!l.biz_status && !l.pick_status) return "—";
+  const b = l.biz_status ? t(`generate.void.bizStatus.${l.biz_status}`) : "—";
+  const p = l.pick_status ? t(`generate.void.pickStatus.${l.pick_status}`) : "—";
+  return `${b} / ${p}`;
 }
 /** 失效后从勾选里去掉：失效的物料行，以及没有生效物料行的单据。 */
 function dropVoidPicks() {
@@ -808,17 +828,53 @@ function foldAll(on: boolean) {
   folded.value = new Set(on ? (ctx.value?.bills ?? []).map((b: any) => b.bill_no as string) : []);
 }
 
-/** 物料行客户 P/N 列宽：按本 PI 全部物料行的值量出、不设上限（切页签时不跳动，各单据的表同宽、列对齐），
- *  完整单行显示；总宽超出详情宽度时单据物料行表格左右滑动。 */
-const pnW = computed(() => colWidth(t("orders.customerPn"), allLines.value.map((l) => textWidth(l.customer_pn || "—")), { min: 80 }));
+/** 小号输入框除文字外的宽度：左右内边距 7px×2 + 边框 1px×2 + 余量。 */
+const INPUT_PAD = 24;
+/** 勾选框宽度、生成顺序角标与勾选框的间距、角标左右内边距与最小宽度（.sel / .order） */
+const CHECKBOX_W = 14;
+/** 操作列两个按钮之间的间距（.ops 的 gap） */
+const BTN_GAP = 6;
+/** 小号链接按钮除文字外的宽度：左右内边距 2px×2 + 透明边框 1px×2 */
+const linkWidth = (text: string) => textWidth(text) + 6;
+/** 输入框里显示的内容：有值显示值，没有值显示占位文字 */
+const inputText = (v: string | null | undefined, placeholder: string) => textWidth(v || placeholder) + INPUT_PAD;
 
-/** 物料行开始 / 结束 SN 号列宽：按本 PI 全部物料行的完整 SN 量出（切页签时不跳动），SN 完整显示。 */
-const snW = computed(() =>
-  Math.max(
-    colWidth(t("generate.startSn"), allLines.value.map((l) => textWidth(l.start_sn || "—", { mono: true }))),
-    colWidth(t("generate.endSn"), allLines.value.map((l) => textWidth(l.end_sn || "—", { mono: true }))),
-  ),
-);
+/** 物料行各列最小宽度：按本 PI 全部物料行（不分页签，切页签时不跳动，各单据的表同宽、列对齐）的内容与表头量出，
+ *  内容单行完整显示、不截断不折行；总宽超出详情宽度时单据物料行表格左右滑动，富余时各列按比例放宽。 */
+const lineW = computed(() => {
+  const ls = allLines.value;
+  const nums = (f: (l: OrderLine) => unknown) => ls.map((l) => textWidth(num(f(l) as number)));
+  // 生成顺序角标最多到物料行数
+  const badge = Math.max(18, textWidth(String(ls.length)) + 8);
+  return {
+    sel: colWidth("", [CHECKBOX_W + 4 + badge]),
+    attach: colWidth(t("common.attachNo"), ls.map((l) =>
+      inputText(draftOf(l, "attach"), l.attach_k3 ? t("generate.attachK3Placeholder", { v: l.attach_k3 }) : t("generate.attachRequired")))),
+    material: colWidth(t("common.material"), ls.map((l) => textWidth(l.material_code || t("generate.noMaterial")))),
+    seq: colWidth(t("common.lineNo"), ls.map((l) => textWidth(String(l.seq)))),
+    pn: colWidth(t("orders.customerPn"), ls.map((l) => textWidth(l.customer_pn || "—"))),
+    length: colWidth(t("common.length"), ls.map((l) => inputText(draftOf(l, "length"), lengthPlaceholder(l)))),
+    unit: colWidth(t("common.unit"), ls.map((l) => inputText(draftOf(l, "unit"), unitPlaceholder(l)))),
+    qty: colWidth(t("common.qty"), nums((l) => l.qty)),
+    generated: colWidth(t("generate.generated"), nums((l) => l.generated_qty)),
+    allocated: colWidth(t("generate.allocated"), nums((l) => l.allocated_qty)),
+    quota: colWidth(t("generate.quota"), nums((l) => l.quota)),
+    // 多个原因标签时上下排列（每个标签完整显示），列宽按最宽的一个
+    status: colWidth(t("common.status"), ls.map((l) =>
+      l.quota && l.issues?.length
+        ? Math.max(...l.issues.map((i) => tagWidth(issueText(i))))
+        : tagWidth(t(`generate.lineState.${lineState(l)}`)))),
+    k3Status: colWidth(t("generate.void.column"), ls.map((l) => textWidth(k3StatusText(l)))),
+    sn: Math.max(
+      colWidth(t("generate.startSn"), ls.map((l) => textWidth(l.start_sn || "—", { mono: true }))),
+      colWidth(t("generate.endSn"), ls.map((l) => textWidth(l.end_sn || "—", { mono: true }))),
+    ),
+    // 选规则 / 改规则与删号都可能出现：按两个按钮都在量（各页签同宽）
+    actions: colWidth(t("common.actions"), [
+      Math.max(linkWidth(t("generate.pickRule")), linkWidth(t("generate.changeRule"))) + BTN_GAP + linkWidth(t("generate.delete")),
+    ]),
+  };
+});
 
 const {
   draftOf, setDraft, saveAttach, saveLength, saveUnit,
@@ -1035,16 +1091,16 @@ onUnmounted(() => {
 .dtabs :deep(.el-tabs__header) { margin-bottom: 8px; }
 .tabs-row { position: relative; }
 /* 高度与页签头（40px）一致，按钮与页签文字垂直居中；左侧留白避免与页签重叠 */
-.dtabs :deep(.el-tabs__nav-wrap) { padding-right: 760px; }
+.dtabs :deep(.el-tabs__nav-wrap) { padding-right: 420px; }
 .fold-ops { position: absolute; top: 0; right: 0; height: 40px; display: inline-flex; align-items: center; gap: 4px; }
 .all-bills { margin-right: 8px; height: auto; }
 .fold-ops :deep(.el-button + .el-button) { margin-left: 0; }
-/* 失效条件：在全选、全部展开 / 收起之后 */
-.void-ops { display: inline-flex; align-items: center; gap: 8px; margin-left: 12px; }
-.void-sel { width: 196px; }
-.void-lab { color: var(--el-text-color-secondary); font-size: 12px; white-space: nowrap; }
-.void-on { margin-right: 0; height: auto; }
-.void-n { margin-left: 4px; padding: 0 6px; border-radius: 9px; font-size: 11px; color: var(--el-color-warning); background: var(--el-color-warning-light-9); }
+/* 过滤配置按钮：在全选、全部展开 / 收起之后 */
+.fold-ops .void-btn { margin-left: 12px; }
+.void-btn .el-icon { margin-right: 4px; }
+.void-n { margin-left: 6px; padding: 0 6px; border-radius: 9px; font-size: 11px; color: var(--el-color-warning); background: var(--el-color-warning-light-9); }
+.void-form :deep(.el-select) { width: 100%; }
+.void-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 /* 失效的物料行整行置灰（状态列为「失效」，不能勾选） */
 .lines :deep(tr.void td.el-table__cell) { background: var(--el-fill-color-light); color: var(--el-text-color-placeholder); }
 .toolbar { margin-bottom: 8px; }
@@ -1064,8 +1120,9 @@ onUnmounted(() => {
 .lines :deep(tr.picked > td) { background: var(--el-color-primary-light-9); }
 .lines :deep(tr.flash > td) { background: var(--el-color-warning-light-8) !important; transition: background 0.3s; }
 .lines :deep(.el-table__row) { cursor: pointer; }
-/* 客户 P/N：表头与数据单行显示、不折行（列宽已按内容量出，放不下时表格左右滑动） */
-.lines :deep(.nowrap-cell .cell) { white-space: nowrap; text-overflow: clip; }
+/* 物料行表格：表头与各列单行完整显示、不折行不截断（列宽已按内容量出，放不下时表格左右滑动） */
+.lines :deep(.cell) { white-space: nowrap; text-overflow: clip; }
+.lines .ops { flex-wrap: nowrap; }
 .no-lines { padding: 8px 12px; margin: 0; }
 .chip { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 11px; font-size: 12px; border: 1px solid; white-space: nowrap; cursor: pointer; }
 .chip:hover { text-decoration: underline; }

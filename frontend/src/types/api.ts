@@ -176,6 +176,9 @@ export interface OrderLine {
   issues?: string[];
   /** 生成页才有：物料行失效（业务状态、领料状态在失效条件内）：不参与排号与计数，额度为 0，不能勾选 */
   void?: boolean;
+  /** 生成页才有：金蝶业务状态（1 计划 … 7 结算）、领料状态（1 未领料 … 4 超额领料）状态码，空 = 未取到 */
+  biz_status?: string;
+  pick_status?: string;
   /** 生成页才有：物料行现有号中最小、最大的完整 SN（开始 / 结束 SN 号），还没有号为 null */
   start_sn?: string | null;
   end_sn?: string | null;

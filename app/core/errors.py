@@ -91,9 +91,10 @@ class ErrorCode(Enum):
     )
     LINE_VOID = (
         409,
-        "物料行 {bill_no} / {seq} 已失效（业务状态、领料状态在失效条件内），不能操作；取消生成页的「失效」勾选后再操作",
+        "物料行 {bill_no} / {seq} 已失效（业务状态、领料状态命中生成页的过滤配置），不能操作；"
+        "在生成页「过滤配置」中调整后再操作",
     )
-    LINE_VOID_RULE_INVALID = (400, "失效条件须选定开关，业务状态、领料状态各至少选一项")
+    LINE_VOID_RULE_INVALID = (400, "过滤配置的业务状态、领料状态只能选金蝶的状态值")
     ALERT_NOT_FOUND = (404, "订单变更提醒不存在或已处理")
     ALERT_ACTION_INVALID = (400, "该提醒不能这样处理")
     ALERT_MAP_TARGET_INVALID = (400, "确认对应的目标物料行须是该单据快照中的另一行：{seq}")

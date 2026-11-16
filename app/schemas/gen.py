@@ -43,7 +43,8 @@ class DeleteIn(In):
 
 
 class VoidRuleIn(In):
-    """物料行失效条件（全系统一套）：开关 + 业务状态 + 领料状态（各至少一项，取金蝶枚举值）。"""
+    """生成页过滤配置（物料行失效条件，全系统一套）：业务状态 + 领料状态（取金蝶枚举值，都可为空：空的一项不限、
+    两项都空 = 不过滤）；enabled 不传按有没有条件，false 等于两项清空。"""
 
     enabled: bool | None = None
     biz_status: list[str] | None = None

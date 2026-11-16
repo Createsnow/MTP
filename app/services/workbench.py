@@ -305,6 +305,9 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
         v["issues"] = x.issues
         # 物料行失效（line_void）：整行置灰、不能勾选，不计订单数、可生成
         v["void"] = x.void
+        # 金蝶业务状态、领料状态（状态码，空 = 未取到）：生成页「业务状态」列显示
+        v["biz_status"] = r.get("biz_status") or ""
+        v["pick_status"] = r.get("pick_status") or ""
         if x.void:
             v["quota"] = 0
         b["lines"].append(v)
@@ -409,6 +412,6 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
         "jobs": generate.jobs(pi, 20, facs),
         # 空号段（删号腾出的流水）：生成时可选用（预演的流水来源 RANGE）
         "gaps": gap,
-        # 物料行失效条件（全系统一套，页签行「业务状态」「领料状态」「失效」）
+        # 物料行失效条件（全系统一套，页签行「过滤配置」弹窗）
         "void_rule": line_void.view(),
     }

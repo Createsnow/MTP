@@ -1,14 +1,17 @@
 """物料行失效（SN 生成页详情的「失效」条件，全系统一套）。
 
-条件 = 开关 + 业务状态（金蝶明细 FStatus）+ 领料状态（FPickMtrlStatus），存在 sn_line_void_rule（只有 id = 1 一行；
-没有时按默认：开启，完工 / 结案 / 结算 + 未领料）。开启时，业务状态、领料状态都在所选范围内的物料行整行失效：
+条件 = 业务状态（金蝶明细 FStatus）+ 领料状态（FPickMtrlStatus）两个多选，在生成页详情「过滤配置」弹窗里设置，
+存在 sn_line_void_rule（只有 id = 1 一行；没有时按默认：完工 / 结案 / 结算 + 未领料）。
+两项都空 = 不过滤（全部物料行参与）；只有一项有值时只按这一项判断（另一项不限）；两项都有值时须同时满足。
+命中条件的物料行不隐藏，整行置灰失效：
 
 - 不参与排号：生成时额度按 0 算（generate.Line.void），第一次生成排号段预留时不给它留号段（reserve.build）；
 - 不参与计数：生成页 PI 列表、详情、分配页的订单数与可生成都不算它（已生成、已分配按现有的号照算）；
 - 不能选规则、改回默认规则、撤销配置、填写附件项次 / 米数 / 产品单位，不能作转移目标、SN 导入的目标（LINE_VOID）；
 - 已有的号照常分配、推送、拉取、删号、转移（同一行内转组织不算换行），已有的号段预留不动。
 
-业务状态、领料状态还没取到（空）的物料行不会失效。关闭开关即全部生效。系统管理员、普通操作员都能改，改动留痕。
+业务状态、领料状态还没取到（空）的物料行不会失效。两项清空即全部生效；页面接口的 enabled 字段保留（关闭也等于不过滤，
+关闭时存成两项都空）。系统管理员、普通操作员都能改，改动留痕。
 状态码只能是下面两张表里的值（写进 SQL 前已校验，不拼接外来文本）。
 """
 
@@ -38,30 +41,46 @@ class Rule:
     updated_by: str = ""
     updated_at: object = None
 
+    @property
+    def active(self) -> bool:
+        """有过滤条件：开启且至少一项有值（两项都空 = 不过滤）。"""
+        return self.enabled and bool(self.biz or self.pick)
+
     def matches(self, biz_status: str | None, pick_status: str | None) -> bool:
+        """空的一项不限；状态还没取到（空）的物料行不失效。"""
         b, p = (biz_status or "").strip(), (pick_status or "").strip()
-        return self.enabled and bool(b) and bool(p) and b in self.biz and p in self.pick
+        return (
+            self.active
+            and bool(b)
+            and bool(p)
+            and (not self.biz or b in self.biz)
+            and (not self.pick or p in self.pick)
+        )
 
     def is_void(self, row: dict) -> bool:
         """快照的一行（sn_prd_mo）是否失效。"""
         return self.matches(row.get("biz_status"), row.get("pick_status"))
 
     def sql(self, alias: str = "m") -> str:
-        """失效条件的 SQL 表达式（alias = sn_prd_mo 的别名）；关闭时为 0。状态码已校验，只含数字。"""
-        if not self.enabled:
+        """失效条件的 SQL 表达式（alias = sn_prd_mo 的别名），与 matches 同一口径；不过滤时为 0。
+        状态码已校验，只含数字。"""
+        if not self.active:
             return "0"
-        b = ",".join(f"'{x}'" for x in self.biz)
-        p = ",".join(f"'{x}'" for x in self.pick)
-        return f"({alias}.biz_status IN ({b}) AND {alias}.pick_status IN ({p}))"
+        conds = [f"{alias}.biz_status <> ''", f"{alias}.pick_status <> ''"]
+        if self.biz:
+            conds.append(f"{alias}.biz_status IN ({','.join(repr(x) for x in self.biz)})")
+        if self.pick:
+            conds.append(f"{alias}.pick_status IN ({','.join(repr(x) for x in self.pick)})")
+        return "(" + " AND ".join(conds) + ")"
 
 
 DEFAULT = Rule(True, DEFAULT_BIZ, DEFAULT_PICK)
 
 
 def _codes(values, allowed: dict[str, str]) -> tuple[str, ...] | None:
-    """去重、按状态码排序；有不认识的码或为空时返回 None。"""
-    out = {util.trim(str(v)) for v in values or [] if not util.blank(str(v))}
-    if not out or any(v not in allowed for v in out):
+    """去重、按状态码排序（可以为空 = 不限）；有不认识的码时返回 None。"""
+    out = {util.trim(str(v)) for v in values or [] if v is not None and not util.blank(str(v))}
+    if any(v not in allowed for v in out):
         return None
     return tuple(sorted(out, key=int))
 
@@ -70,9 +89,12 @@ def current() -> Rule:
     r = db.one("SELECT * FROM sn_line_void_rule WHERE id = 1")
     if r is None:
         return DEFAULT
-    biz_ = _codes(r["biz_status"].split(","), BIZ) or DEFAULT_BIZ
-    pick = _codes(r["pick_status"].split(","), PICK) or DEFAULT_PICK
-    return Rule(bool(r["enabled"]), biz_, pick, r["updated_by"], r["updated_at"])
+    biz_ = _codes(r["biz_status"].split(","), BIZ)
+    pick = _codes(r["pick_status"].split(","), PICK)
+    if not r["enabled"] or biz_ is None or pick is None:
+        # 关闭（旧数据）按不过滤显示；存了不认识的码（不会出现，写入前已校验）也按不过滤，不误伤
+        biz_, pick = (), ()
+    return Rule(bool(biz_ or pick), biz_, pick, r["updated_by"], r["updated_at"])
 
 
 def view(rule: Rule | None = None) -> dict:
@@ -87,13 +109,16 @@ def view(rule: Rule | None = None) -> dict:
 
 
 def save(cu: CurrentUser, enabled: bool | None, biz_in: list[str] | None, pick_in: list[str] | None) -> dict:
-    """改失效条件（全系统生效）：业务状态、领料状态各至少选一项。"""
+    """改失效条件（全系统生效）：两项都可以为空（空的一项不限，两项都空 = 不过滤）；
+    enabled 不传时按两项是否有值，传 false 等于两项清空。"""
     biz_ = _codes(biz_in, BIZ)
     pick = _codes(pick_in, PICK)
-    if biz_ is None or pick is None or enabled is None:
+    if biz_ is None or pick is None:
         raise biz(ErrorCode.LINE_VOID_RULE_INVALID)
+    if enabled is False:
+        biz_, pick = (), ()
     old = current()
-    new = Rule(bool(enabled), biz_, pick)
+    new = Rule(bool(biz_ or pick), biz_, pick)
     if (old.enabled, old.biz, old.pick) == (new.enabled, new.biz, new.pick):
         return view(old)
     now = util.now()

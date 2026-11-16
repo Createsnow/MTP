@@ -86,12 +86,12 @@ def test_void_rule_default_save_validation_and_audit(w, api, sql):
     v = ok(api.get("/api/generate/void-rule", w.admin))
     assert (v["enabled"], v["biz_status"], v["pick_status"]) == (True, ["5", "6", "7"], ["1"]), "默认"
     for body in (
-        m(enabled=True, biz_status=[], pick_status=["1"]),
-        m(enabled=True, biz_status=["5"], pick_status=[]),
         m(enabled=True, biz_status=["8"], pick_status=["1"]),
-        m(enabled=None, biz_status=["5"], pick_status=["1"]),
+        m(enabled=True, biz_status=["5"], pick_status=["0"]),
+        m(enabled=True, biz_status=["x"], pick_status=[]),
     ):
         assert api.put("/api/generate/void-rule", body, w.admin).code == "LINE_VOID_RULE_INVALID"
+    assert ok(api.get("/api/generate/void-rule", w.admin))["biz_status"] == ["5", "6", "7"], "校验不过不改"
     org = w.org(uid("O")[:10])
     op = w.user(emp("OP"), "operator", org)
     v = ok(set_rule(w, True, ("7", "5"), ("1", "2"), token=op))
@@ -104,6 +104,17 @@ def test_void_rule_default_save_validation_and_audit(w, api, sql):
     )
     ctx_rule = ok(api.get("/api/generate/void-rule", w.admin))
     assert ctx_rule["updated_by"] is not None
+    # 过滤配置：两项都可以为空；enabled 按有没有条件；enabled = false 等于两项清空
+    v = ok(api.put("/api/generate/void-rule", m(enabled=True, biz_status=[], pick_status=[]), w.admin))
+    assert (v["enabled"], v["biz_status"], v["pick_status"]) == (False, [], []), "两项都空 = 不过滤"
+    assert ok(api.get("/api/generate/void-rule", w.admin))["enabled"] is False
+    v = ok(api.put("/api/generate/void-rule", m(enabled=None, biz_status=["6"], pick_status=[]), w.admin))
+    assert (v["enabled"], v["biz_status"], v["pick_status"]) == (True, ["6"], []), "只选一项；enabled 不传按有没有条件"
+    v = ok(api.put("/api/generate/void-rule", m(enabled=False, biz_status=["6"], pick_status=["1"]), w.admin))
+    assert (v["enabled"], v["biz_status"], v["pick_status"]) == (False, [], []), "关闭存成两项都空"
+    a = sql.one("SELECT * FROM sn_audit WHERE action = 'LINE_VOID_RULE' AND result = 'OK' ORDER BY id DESC LIMIT 1")
+    assert "on biz=6 pick= -> off biz= pick=" in a["detail"]
+    ok(set_rule(w))
 
 
 # ---------------------------------------------------------------- 排号与计数
@@ -148,6 +159,44 @@ def test_void_lines_excluded_from_numbering_and_counts(w, api, sql):
     assert pi_row(w, pi)["quota"] == 3
     w.generate(pi, lines=[(bill, 2)])
     assert sql.count("SELECT COUNT(*) FROM sn_item WHERE pi_no = %s AND bill_seq = 2", pi) == 3
+
+
+def test_filter_one_side_empty_and_both_empty(w, api):
+    """过滤配置：空的一项不限；两项都有值须同时满足；两项都空不过滤；状态未取到的行不失效。
+    页面判断（详情 void）与 SQL 计数（PI 列表、详情汇总）同一口径。生成页物料行带业务状态、领料状态。"""
+    org, pi, bill = mk(
+        w,
+        ("M1", 1),
+        ("M2", 2),
+        ("M3", 4),
+        ("M4", 8),
+        ("M5", 16),
+        statuses=[(1, "3", "1"), (2, "5", "1"), (3, "5", "3"), (4, "2", "2")],
+    )
+    _c, ls = ctx_lines(w, pi)
+    assert [(ls[(bill, s)]["biz_status"], ls[(bill, s)]["pick_status"]) for s in (1, 2, 3, 4, 5)] == [
+        ("3", "1"),
+        ("5", "1"),
+        ("5", "3"),
+        ("2", "2"),
+        ("", ""),
+    ]
+
+    def check_rule(biz, pick, voided):
+        v = ok(set_rule(w, True, biz, pick))
+        assert v["enabled"] is bool(biz or pick)
+        c, ls = ctx_lines(w, pi)
+        assert {s for s in (1, 2, 3, 4, 5) if ls[(bill, s)]["void"]} == voided, (biz, pick)
+        live = sum(q for s, q in ((1, 1), (2, 2), (3, 4), (4, 8), (5, 16)) if s not in voided)
+        assert (c["summary"]["total_qty"], c["summary"]["quota"]) == (live, live), (biz, pick)
+        assert (pi_row(w, pi)["total_qty"], pi_row(w, pi)["quota"]) == (live, live), (biz, pick)
+
+    check_rule(("5", "6", "7"), ("1",), {2})
+    check_rule(("5",), (), {2, 3})
+    check_rule((), ("1",), {1, 2})
+    check_rule((), (), set())
+    check_rule(("1", "2", "3", "4", "5", "6", "7"), ("1", "2", "3", "4"), {1, 2, 3, 4})
+    ok(set_rule(w))
 
 
 def test_preview_then_line_turns_void_is_rejected_at_run(w, api):
