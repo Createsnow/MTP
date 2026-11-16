@@ -165,7 +165,9 @@ CREATE TABLE sn_prd_mo (
   KEY ix_prd_mo_pi (pi),
   KEY ix_prd_mo_customer (customer_code),
   KEY ix_prd_mo_org (org_code, pi),
-  KEY ix_prd_mo_modify (modify_time)
+  KEY ix_prd_mo_modify (modify_time),
+  KEY ix_prd_mo_bill_modify (bill_no, modify_time, org_code),
+  KEY ix_prd_mo_pi_modify (pi, modify_time, bill_no, org_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='生产订单快照';
 
 -- 订单同步状态（一行）

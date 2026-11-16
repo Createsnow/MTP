@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.deps import OperatorDep
+from app.api.deps import OperatorDep, page_of
 from app.schemas.common import OptInt
 from app.schemas.gen import DeleteIn, PreviewIn, RevokeConfigIn, RunIn, VoidRuleIn
 from app.services import deletion, generate, line_void, orders, workbench
@@ -13,10 +13,20 @@ router = APIRouter(prefix="/generate", tags=["generate"])
 @router.get(
     "/pis",
     summary="生成页 PI 列表：状态、行上按钮依据、上方汇总；tab = TO_GENERATE（含生成中）/ GENERATED；"
-    "与订单页同一排序（单据修改日期新的在前）",
+    "与订单页同一排序（单据修改日期新的在前）。传 page 时服务端分页（另给 total、page、page_size），"
+    "factory_code = 只列含该生产组织单据的 PI；不传 page 时一次返回最多 500 张（与原来相同）",
 )
-def gen_pis(cu: OperatorDep, q: str | None = None, tab: str | None = None) -> dict:
-    return workbench.pis(cu, q, tab, by_modify=True)
+def gen_pis(
+    cu: OperatorDep,
+    q: str | None = None,
+    tab: str | None = None,
+    factory_code: str | None = None,
+    page: OptInt = None,
+    page_size: OptInt = None,
+) -> dict:
+    return workbench.pis(
+        cu, q, tab, by_modify=True, factory=factory_code, page=None if page is None else page_of(page, page_size)
+    )
 
 
 @router.get("/context", summary="生成详情（只给单据时取其 PI）：单据与物料行、规则、生成任务、空号段")

@@ -1068,6 +1068,47 @@ def test_workbench_batched_line_checks_match_single_pi(w, api, sql):
         sql.exec("DELETE FROM sn_bill_ledger WHERE bill_no = %s", frozen_bill)
 
 
+def test_workbench_server_paging(w, api):
+    """生成页 PI 列表服务端分页：逐页拼起来与不分页的顺序、各列相同；total 为页签、组织筛选后的张数；
+    factory_code 只列含该组织单据的 PI；汇总与不分页相同（不随页签、组织筛选变）。"""
+    cust = uid("CP")
+    org1, org2 = w.org(uid("O")[:10]), w.org(uid("O")[:10])
+    _, a, _ = mk(w, ("M1", 3), customer=cust, org=org1)
+    _, b, _ = mk(w, ("M1", 2), customer=cust, org=org2)
+    _, c, _ = mk(w, ("M1", 4), customer=cust, org=org1)
+    mk(w, ("M1", 1), customer=cust, org=org2, pi=c)
+    _, done, _ = mk(w, ("M1", 2), customer=cust, org=org2)
+    ok(w.bind_pi(done, w.rule(P())))
+    w.generate(done)
+
+    def paged(**kv) -> list[dict]:
+        return [
+            ok(api.get(f"/api/generate/pis{q(q=cust, page=p, page_size=2, **kv)}", w.admin)).body for p in (1, 2, 3)
+        ]
+
+    full = ok(api.get(f"/api/generate/pis{q(q=cust)}", w.admin))
+    assert {x["pi_no"] for x in full["items"]} == {a, b, c, done}
+    pages = paged()
+    assert [x["total"] for x in pages] == [4, 4, 4] and [x["page"] for x in pages] == [1, 2, 3]
+    assert [len(x["items"]) for x in pages] == [2, 2, 0]
+    assert [x for pg in pages for x in pg["items"]] == full["items"]
+    assert all(pg["summary"] == full["summary"] for pg in pages)
+
+    todo = ok(api.get(f"/api/generate/pis{q(q=cust, tab='TO_GENERATE')}", w.admin))["items"]
+    pages = paged(tab="TO_GENERATE")
+    assert pages[0]["total"] == 3 and [x for pg in pages for x in pg["items"]] == todo
+    assert [x["pi_no"] for pg in paged(tab="GENERATED") for x in pg["items"]] == [done]
+
+    only1 = [x["pi_no"] for x in full["items"] if org1 in x["orgs"]]
+    assert set(only1) == {a, c}
+    pages = paged(factory_code=org1)
+    assert pages[0]["total"] == 2 and [x["pi_no"] for pg in pages for x in pg["items"]] == only1
+    # 含两个组织的 PI 按组织筛选后，各列仍按全部单据算
+    row_c = next(x for pg in paged(factory_code=org2) for x in pg["items"] if x["pi_no"] == c)
+    assert row_c == next(x for x in full["items"] if x["pi_no"] == c) and row_c["total_qty"] == 5
+    assert all(pg["summary"] == full["summary"] for pg in pages)
+
+
 def test_generating_pi_listed_first_under_to_generate(w, api, sql):
     _, running_pi, _ = mk(w, ("M1", 10))
     ok(w.bind_pi(running_pi, w.rule(P())))

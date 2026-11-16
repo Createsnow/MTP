@@ -13,8 +13,8 @@
           <el-radio-button v-for="v in TABS" :key="v" :value="v">{{ t(`generate.tab.${v}`) }}</el-radio-button>
         </el-radio-group>
         <el-input v-model="q" class="kw" :placeholder="t('generate.search')" clearable prefix-icon="Search" @keyup.enter="loadList()" @clear="loadList()" />
-        <!-- 生产组织筛选：系统管理员、授权多个组织的账户才有；只在页面上按 PI 的生产组织筛（不改接口），详情仍列出本 PI 授权范围内的全部单据 -->
-        <FactorySelect v-if="store.multiScope" v-model="factory" scoped clearable :placeholder="t('app.allFactories')" @update:model-value="page = 1" />
+        <!-- 生产组织筛选：系统管理员、授权多个组织的账户才有；按 PI 的生产组织在服务端筛（factory_code），详情仍列出本 PI 授权范围内的全部单据 -->
+        <FactorySelect v-if="store.multiScope" v-model="factory" scoped clearable :placeholder="t('app.allFactories')" @update:model-value="loadList()" />
         <span class="muted summary">
           {{ t("generate.summary", { quota: num(list.summary.quota) }) }}
           <router-link v-if="list.summary.pending_alloc" to="/allocate">{{ t("generate.summaryPending", { n: num(list.summary.pending_alloc) }) }}</router-link>
@@ -23,7 +23,7 @@
 
       <div class="fill-body">
         <!-- 列宽按内容自适应（listW），单元格不截断、不折行；超出容器时横向滚动；点行打开 PI 详情 -->
-        <el-table v-loading="listLoading" :data="paged" size="small" row-key="pi_no" height="100%" class="pi-list" :empty-text="t('common.empty')"
+        <el-table v-loading="listLoading" :data="list.items" size="small" row-key="pi_no" height="100%" class="pi-list" :empty-text="t('common.empty')"
           @row-click="(row: any) => openRow(row)">
           <el-table-column label="PI" :min-width="listW.pi" fixed>
             <template #default="{ row }">
@@ -76,8 +76,8 @@
           </el-table-column>
         </el-table>
       </div>
-      <el-pagination class="pager" layout="total, prev, pager, next" :total="shown.length" :page-size="PAGE"
-        :current-page="page" @current-change="(p: number) => (page = p)" />
+      <el-pagination class="pager" layout="total, prev, pager, next" :total="pagerTotal" :page-size="PAGE"
+        :current-page="page" @current-change="toPage" />
       <p v-if="limited" class="muted">{{ t("generate.recentOnly", { n: RECENT_PAGES }) }}</p>
       <p v-if="list.capped" class="muted">{{ t("generate.capped", { n: LIST_LIMIT }) }}</p>
     </div>
@@ -406,28 +406,46 @@ const tab = ref<Tab>("TO_GENERATE");
 const q = ref("");
 const page = ref(1);
 const listLoading = ref(false);
-const list = ref<any>({ items: [], capped: false, summary: { quota: 0, pending_alloc: 0, unbatched: 0 }, synced_at: null });
-/** 生产组织筛选（空 = 全部）：按 PI 的生产组织（orgs，一张 PI 可有多个组织）在页面上筛，接口不变。 */
+/** 服务端分页：items 只含本页，total 为页签、生产组织筛选后的 PI 数 */
+const list = ref<any>({ items: [], total: 0, capped: false, summary: { quota: 0, pending_alloc: 0, unbatched: 0 }, synced_at: null });
+/** 生产组织筛选（空 = 全部）：按 PI 的生产组织（orgs，一张 PI 可有多个组织）在服务端筛（factory_code）。 */
 const factory = ref("");
-const filtered = computed<any[]>(() =>
-  factory.value ? list.value.items.filter((x: any) => (x.orgs || []).includes(factory.value)) : list.value.items,
-);
-const limited = computed(() => !q.value.trim() && filtered.value.length > PAGE * RECENT_PAGES);
-const shown = computed<any[]>(() => (limited.value ? filtered.value.slice(0, PAGE * RECENT_PAGES) : filtered.value));
-const paged = computed(() => shown.value.slice((page.value - 1) * PAGE, page.value * PAGE));
+const limited = computed(() => !q.value.trim() && list.value.total > PAGE * RECENT_PAGES);
+/** 分页器的总数：不搜索时只列最近 RECENT_PAGES 页 */
+const pagerTotal = computed(() => (limited.value ? PAGE * RECENT_PAGES : list.value.total));
 let listTimer: ReturnType<typeof setTimeout> | undefined;
+/** 只认最后一次请求的结果（快速翻页、切换页签时先发的请求可能后回来） */
+let listSeq = 0;
 
-async function loadList(silent = false) {
+/**
+ * 取 PI 列表（当前页）。silent：不显示加载中、停在当前页（生成进度轮询、详情操作后刷新）；
+ * 否则回到第 1 页（切换页签、搜索、组织筛选）。keepPage：翻页时显示加载中但停在指定页。
+ */
+async function loadList(silent = false, keepPage = silent) {
   clearTimeout(listTimer);
+  if (!keepPage) page.value = 1;
+  const seqNo = ++listSeq;
   if (!silent) listLoading.value = true;
   try {
-    list.value = await api.genPis({ tab: tab.value, q: q.value.trim() });
-    if (!silent) page.value = 1;
+    const r = await api.genPis({ tab: tab.value, q: q.value.trim(), factory_code: factory.value || undefined, page: page.value, page_size: PAGE });
+    if (seqNo !== listSeq) return;
+    // 本页已没有行（如生成完后 PI 移到别的页签、行数变少）：回到最后一页
+    const last = Math.max(1, Math.ceil(Math.min(r.total, !q.value.trim() ? PAGE * RECENT_PAGES : r.total) / PAGE));
+    if (!r.items.length && page.value > last) {
+      page.value = last;
+      return loadList(silent, true);
+    }
+    list.value = r;
   } finally {
-    listLoading.value = false;
+    if (seqNo === listSeq) listLoading.value = false;
   }
-  // 有生成中的 PI 时定时刷新进度
+  // 有生成中的 PI 时定时刷新进度（生成中的排在「待生成」最前，在第 1 页）
   if (list.value.items.some((x: any) => x.running)) listTimer = setTimeout(() => loadList(true), 3000);
+}
+
+function toPage(p: number) {
+  page.value = p;
+  loadList(false, true);
 }
 
 /** 行上按钮（F-10 第 3 条中与生成有关的部分，按顺序判断）。 */
@@ -456,9 +474,9 @@ const ORGS_MAX_W = 240;
 /** 按钮加载图标（生成中）占的宽度：图标 14px + 间距 6px。 */
 const LOADING_ICON_W = 20;
 
-/** PI 列表各列宽度：按本页签全部行（shown）的内容量出，翻页时列宽不跳动。 */
+/** PI 列表各列宽度：按本页的行（服务端分页，只有本页数据）的内容量出。 */
 const listW = computed(() => {
-  const rows = shown.value;
+  const rows: any[] = list.value.items;
   const nums = (f: (r: any) => unknown) => rows.map((r) => textWidth(num(f(r) as number)));
   const orgW = rows.map((r) => {
     const names = orgNames(r);

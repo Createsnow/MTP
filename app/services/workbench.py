@@ -38,7 +38,8 @@ _BY_MODIFY = "MAX(m.modify_time) IS NULL, MAX(m.modify_time) DESC, last_bill DES
 
 
 def _pi_sum() -> str:
-    """快照按 PI 汇总（订单数、已生成、额度、最大单据编号、最新修改日期）；
+    """快照按 PI 汇总（订单数、已生成、额度、最大单据编号、最新修改日期）的 SELECT 部分，
+    FROM 由调用处给出（m = sn_prd_mo、c = sn_line_count）；
     失效的物料行（line_void）不计订单数、额度。"""
     v = line_void.current().sql("m")
     return (
@@ -48,7 +49,6 @@ def _pi_sum() -> str:
         "SUM(COALESCE(c.gen_count, 0)) gen_sum, "
         f"SUM(CASE WHEN {v} THEN 0 ELSE GREATEST(FLOOR(m.qty) - COALESCE(c.own_generated, 0), 0) END) quota, "
         "MAX(m.bill_no) last_bill, MAX(m.modify_time) modify_time "
-        "FROM sn_prd_mo m LEFT JOIN sn_line_count c ON c.bill_no = m.bill_no AND c.seq = m.seq"
     )
 
 
@@ -69,25 +69,24 @@ def _pi_rows(q: str | None, by_modify: bool = False, facs: tuple[str, ...] | Non
             "OR x.customer_code LIKE %s OR x.material_code LIKE %s)"
         )
         args += [like] * 5
-    # 两步取：先只按排序字段选出要列的 PI（不连计数表、不做汇总，快得多），再只对这些 PI 汇总；
-    # 顺序、条数、各列的值与一次汇总全表相同（搜索条件按整张 PI 筛，第二步按 PI 取即可，只保留授权范围）
+    # 一条 SQL：子查询 p 只按排序字段选出要列的 PI（不连计数表、不做汇总，可只读索引），外层只对这些 PI 汇总；
+    # 同一条语句读同一份数据。顺序、条数、各列的值与一次汇总全表相同（搜索条件按整张 PI 筛，外层只保留授权范围）
     order = _BY_MODIFY if by_modify else "last_bill DESC"
-    picked = db.column(
-        "SELECT m.pi FROM sn_prd_mo m"
+    return db.all(
+        _pi_sum()
+        + "FROM (SELECT m.pi FROM sn_prd_mo m"
         + where
         + " GROUP BY m.pi ORDER BY "
         + order.replace("last_bill", "MAX(m.bill_no)")
-        + " LIMIT %s",
+        + " LIMIT %s) p JOIN sn_prd_mo m ON m.pi = p.pi "
+        "LEFT JOIN sn_line_count c ON c.bill_no = m.bill_no AND c.seq = m.seq"
+        + scope
+        + " GROUP BY m.pi ORDER BY "
+        + order,
         *args,
         LIST_LIMIT,
+        *sargs,
     )
-    if not picked:
-        return []
-    rows = {
-        r["pi"]: r
-        for r in db.all(_pi_sum() + scope + f" AND m.pi IN ({marks(len(picked))}) GROUP BY m.pi", *sargs, *picked)
-    }
-    return [rows[p] for p in picked if p in rows]
 
 
 def item_stats(pis: list[str], facs: tuple[str, ...] | None = None, gen_only: bool = False) -> dict[str, dict]:
@@ -186,32 +185,50 @@ def _line_issue_summaries(pis: list[str], facs: tuple[str, ...] | None = None) -
     return out
 
 
-def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False) -> dict:
-    """生成页 PI 列表与上方汇总（还可生成、待分配、待推送）。tab：TO_GENERATE（含生成中）/ GENERATED（已生成完）；
-    不传为全部。by_modify：按单据修改日期排（与订单页同一排序）。
-    普通操作员只看授权组织的单据和号，汇总也只按这些算。"""
-    facs = cu.read_factories(None)
-    rows = _pi_rows(q, by_modify, facs)
-    capped = len(rows) >= LIST_LIMIT
-    names = [r["pi"] for r in rows]
-    stats = item_stats(names, facs, gen_only=True)
-    own = gen_own(names, facs)
-    running = _running(names)
+def _frozen(pis: list[str], facs: tuple[str, ...] | None) -> dict[str, int]:
+    """各 PI 冻结（PI 变更未确认）或暂停交付的单据数；只数授权范围 facs 内的单据。"""
+    if not pis:
+        return {}
     lsql, largs = factories.scope_sql(facs, "l.org_code")
-    frozen = {
+    return {
         r["pi"]: r["n"]
         for r in db.all(
-            "SELECT l.pi, COUNT(*) n FROM sn_bill_ledger l WHERE (l.pi_frozen = 1 OR l.suspend IS NOT NULL)"
-            + lsql
-            + " GROUP BY l.pi",
+            "SELECT l.pi, COUNT(*) n FROM sn_bill_ledger l WHERE (l.pi_frozen = 1 OR l.suspend IS NOT NULL) "
+            f"AND l.pi IN ({marks(len(pis))})" + lsql + " GROUP BY l.pi",
+            *pis,
             *largs,
         )
     }
-    # 逐行判断「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行中还有额度、不在生成中的 PI 做，这些 PI 一次取
-    detail = [r["pi"] for r in rows[:DETAIL_ROWS] if r["pi"] not in running and int(r["quota"] or 0) > 0]
+
+
+def _summary_counts(pis: list[str], facs: tuple[str, ...] | None) -> tuple[int, int]:
+    """（待分配、待推送未建批）枚数，按这些 PI 合计；与 item_stats(gen_only=True) 的 pending、unbatched 之和同一口径，
+    只读这两种状态的号（分页时汇总不必对全部 PI 逐张统计）。
+    指定按 PI 取号的索引 ix_item_claim（pi_no 开头）：PI 多（超过 200 张）又带授权范围条件（OR 子查询）时，
+    MySQL 估错行数会改为全表扫描号池（实测 145 万个号 0.8 秒，指定后 0.08 秒），号池越大越慢。"""
+    if not pis:
+        return 0, 0
+    isql, iargs = factories.item_scope_sql(facs)
+    r = db.one(
+        "SELECT SUM(status = 'PENDING_ALLOC') pending, "
+        "SUM(status = 'TO_PUSH' AND delivery_batch_no IS NULL AND suspend IS NULL) unbatched "
+        f"FROM sn_item FORCE INDEX (ix_item_claim) WHERE pi_no IN ({marks(len(pis))}) AND origin = 'GEN' "
+        "AND status IN ('PENDING_ALLOC', 'TO_PUSH')" + isql,
+        *pis,
+        *iargs,
+    )
+    return int(r["pending"] or 0), int(r["unbatched"] or 0)
+
+
+def _views(rows: list[dict], detail: list[str], running: dict, facs: tuple[str, ...] | None) -> list[dict]:
+    """PI 列表行：号数统计、状态、行上按钮依据；「需先选规则 / 不能生成」只对 detail 中的 PI 判断。"""
+    names = [r["pi"] for r in rows]
+    stats = item_stats(names, facs, gen_only=True)
+    own = gen_own(names, facs)
+    frozen = _frozen(names, facs)
     issues = _line_issue_summaries(detail, facs)
     out = []
-    for i, r in enumerate(rows):
+    for r in rows:
         s = stats.get(r["pi"], {})
         quota = int(r["quota"] or 0)
         pending = s.get("pending", 0)
@@ -219,7 +236,7 @@ def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False
         status, reasons = None, {}
         if r["pi"] in running:
             status = GENERATING
-        elif quota > 0 and i < DETAIL_ROWS:
+        elif r["pi"] in issues:
             need_rule, cannot, reasons = issues[r["pi"]]
             status = CANNOT if cannot and not need_rule else (NEED_RULE if need_rule else None)
         if status is None:
@@ -237,7 +254,7 @@ def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False
                 "customer_code": r["customer_code"],
                 "bills": int(r["bills"]),
                 "modify_time": orders.k3_time(r["modify_time"]),
-                "orgs": [o for o in (r["orgs"] or "").split(",") if o],
+                "orgs": _orgs(r),
                 "total_qty": int(r["total_qty"] or 0),
                 "generated_qty": own.get(r["pi"], 0),
                 "transferred_in": s.get("transferred_in", 0),
@@ -253,24 +270,78 @@ def pis(cu: CurrentUser, q: str | None, tab: str | None, by_modify: bool = False
                 "reasons": reasons,
             }
         )
+    return out
+
+
+def _orgs(r: dict) -> list[str]:
+    return [o for o in (r["orgs"] or "").split(",") if o]
+
+
+def _needs_detail(r: dict, running: dict) -> bool:
+    """还有额度、不在生成中的 PI 才判断「需先选规则 / 不能生成」。"""
+    return r["pi"] not in running and int(r["quota"] or 0) > 0
+
+
+def pis(
+    cu: CurrentUser,
+    q: str | None,
+    tab: str | None,
+    by_modify: bool = False,
+    factory: str | None = None,
+    page: util.Page | None = None,
+) -> dict:
+    """生成页 PI 列表与上方汇总（还可生成、待分配、待推送）。tab：TO_GENERATE（含生成中）/ GENERATED（已生成完）；
+    不传为全部。by_modify：按单据修改日期排（与订单页同一排序）。
+    普通操作员只看授权组织的单据和号，汇总也只按这些算。
+
+    page 不传：不分页，返回最多 LIST_LIMIT 张 PI（与原来相同）；「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行判断。
+    page 传了：服务端分页，items 只含本页，另给 total（页签、生产组织筛选后的张数）、page、page_size；
+    factory = 只列含该生产组织单据的 PI（各列仍按授权范围内的全部单据算，与原来页面上筛选相同）；
+    号数统计与「需先选规则 / 不能生成」只对本页的 PI 做；汇总仍按最多 LIST_LIMIT 张 PI 合计（不随页签、组织筛选变）。"""
+    facs = cu.read_factories(None)
+    rows = _pi_rows(q, by_modify, facs)
+    capped = len(rows) >= LIST_LIMIT
+    names = [r["pi"] for r in rows]
+    running = _running(names)
     tabs = {
-        "TO_GENERATE": lambda x: x["quota"] > 0 or x["status"] == GENERATING,
-        "GENERATED": lambda x: x["quota"] == 0 and x["status"] != GENERATING,
+        "TO_GENERATE": lambda r: int(r["quota"] or 0) > 0 or r["pi"] in running,
+        "GENERATED": lambda r: int(r["quota"] or 0) == 0 and r["pi"] not in running,
     }
     t = util.trim(tab)
-    shown = [x for x in out if tabs[t](x)] if t in tabs else out
+    synced_at = util.fmt(db.scalar("SELECT MAX(synced_at) FROM sn_prd_mo"))
+    if page is None:
+        out = _views(rows, [r["pi"] for r in rows[:DETAIL_ROWS] if _needs_detail(r, running)], running, facs)
+        shown = [x for x, r in zip(out, rows, strict=True) if tabs[t](r)] if t in tabs else out
+        if t == "TO_GENERATE":
+            # 生成中的排最前，不被「只列最近 3 页」截掉
+            shown.sort(key=lambda x: x["status"] != GENERATING)
+        return {
+            "items": shown,
+            "capped": capped,
+            "summary": {
+                "quota": sum(x["quota"] for x in out),
+                "pending_alloc": sum(x["pending_alloc"] for x in out),
+                "unbatched": sum(x["unbatched"] for x in out),
+            },
+            "synced_at": synced_at,
+        }
+    picked = [r for r in rows if tabs[t](r)] if t in tabs else list(rows)
+    fac = util.trim(factory)
+    if fac:
+        picked = [r for r in picked if fac in _orgs(r)]
     if t == "TO_GENERATE":
-        # 生成中的排最前，不被「只列最近 3 页」截掉
-        shown.sort(key=lambda x: x["status"] != GENERATING)
+        # 生成中的排最前
+        picked.sort(key=lambda r: r["pi"] not in running)
+    one = picked[page.offset : page.offset + page.size]
+    pending, unbatched = _summary_counts(names, facs)
     return {
-        "items": shown,
+        "items": _views(one, [r["pi"] for r in one if _needs_detail(r, running)], running, facs),
+        "total": len(picked),
+        "page": page.page,
+        "page_size": page.size,
         "capped": capped,
-        "summary": {
-            "quota": sum(x["quota"] for x in out),
-            "pending_alloc": sum(x["pending_alloc"] for x in out),
-            "unbatched": sum(x["unbatched"] for x in out),
-        },
-        "synced_at": util.fmt(db.scalar("SELECT MAX(synced_at) FROM sn_prd_mo")),
+        "summary": {"quota": sum(int(r["quota"] or 0) for r in rows), "pending_alloc": pending, "unbatched": unbatched},
+        "synced_at": synced_at,
     }
 
 
