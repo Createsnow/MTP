@@ -89,6 +89,10 @@
           <div class="dh-title">
             <b>{{ ctx.pi_no }}</b>
             <span class="muted">{{ t("common.customer") }} {{ ctx.customer_code || "—" }}</span>
+            <!-- 一个 PI 只有一个规则：本 PI 的规则（编码或自定义）与前缀；还没选时不显示 -->
+            <el-tag v-if="piRule" size="small" effect="plain" class="pi-rule">
+              {{ t("generate.piRule", { rule: piRule.rule_code || t("generate.piRuleCustom"), prefix: piRule.prefix }) }}
+            </el-tag>
             <span class="push" />
             <el-button size="small" type="success" plain :disabled="!ctx.summary.pending_alloc" @click="goAllocate">
               {{ t("generate.goAllocate") }}<el-icon class="el-icon--right"><Right /></el-icon>
@@ -242,13 +246,10 @@
             <el-table-column :label="t('generate.endSn')" :min-width="lineW.sn">
               <template #default="{ row }"><span class="sn-mono">{{ row.end_sn || "—" }}</span></template>
             </el-table-column>
-            <!-- 操作列按页签：待处理只有选规则；可生成有选规则和（有号时）删号；已生成只有删号（状态不限，已分配的也可删） -->
+            <!-- 操作列：有号时删号（状态不限，已分配的也可删）；选规则按整张 PI，在底部操作栏 -->
             <el-table-column :label="t('common.actions')" :min-width="lineW.actions" align="right">
               <template #default="{ row }">
                 <span class="ops" @click.stop>
-                  <el-button v-if="lineFilter !== 'GENERATED' && !row.void" link :type="row.rule ? 'primary' : 'danger'" size="small" @click="openRuleDialog([row])">
-                    {{ row.rule ? t("generate.changeRule") : t("generate.pickRule") }}
-                  </el-button>
                   <el-button v-if="lineFilter !== 'TODO' && row.generated_qty > 0" link type="danger" size="small"
                     :disabled="!!running" @click="openDelete([row])">{{ t("generate.delete") }}</el-button>
                 </span>
@@ -272,7 +273,8 @@
             </template>
             <template v-else>{{ t("generate.selNone") }}</template>
           </span>
-          <el-button :disabled="!pickedRows.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows)">{{ t("generate.libraryRuleBtn") }}</el-button>
+          <!-- 选规则作用于整张 PI：有勾选时按所选行（起始号记在这些行上），没有勾选时按本 PI 全部有效物料行 -->
+          <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
           <el-dropdown trigger="click" placement="top-start" @command="onMore">
             <el-button :loading="busy === 'config'">{{ t("generate.more") }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
             <template #dropdown>
@@ -509,6 +511,10 @@ const ctx = ref<any>(null);
 const ctxLoading = ref(false);
 
 const allLines = computed<OrderLine[]>(() => (ctx.value ? ctx.value.bills.flatMap((b: any) => b.lines) : []));
+/** 可选规则的物料行（失效的除外）：没有勾选时「选规则」按这些行。 */
+const ruleLines = computed(() => allLines.value.filter((l) => !l.void));
+/** 本 PI 的规则（一个 PI 只有一个规则）：取有效物料行上的规则，没选时为 null。 */
+const piRule = computed<any>(() => ruleLines.value.find((l: any) => l.rule?.prefix)?.rule ?? null);
 /** 本 PI 全部物料行还可生成的数量之和：各物料行共用 PI 的一套流水，规则对话框按它给流水位数的默认值 */
 const piQuota = computed(() => allLines.value.reduce((n, l) => n + (Number(l.quota) || 0), 0));
 const limits = computed(() => ctx.value?.limits || { default: 10000, max: 500000, sync_threshold: 5000 });
@@ -599,11 +605,11 @@ function closeDetail() {
 
 const ruleDlg = reactive({ open: false, lines: [] as OrderLine[] });
 
-/** 底部「选规则」与行内「选规则 / 改规则」打开同一个规则对话框（默认自定义页签，前缀默认点选的第一个单据编码后 7 位，本 PI 已生成的号还在时沿用已用的前缀）。
+/** 底部「选规则」打开规则对话框（一个 PI 只有一个规则，保存时作用于整张 PI；默认自定义页签，前缀默认点选的第一个单据编码后 7 位，本 PI 已生成的号还在时沿用已用的前缀）。
  *  打开前先查附件项次（只查还有额度、要生成的行；生成时所选物料行不分单据按附件项次从小到大排号）：
  *  1. 有没填的：跳到第一条没填的行（按排号顺序），提示补全，不打开；
  *  2. 有相同的（不分单据）：跳到这些行，提示同一项次内按单据勾选先后、单据内按行号生成，可继续选规则或回去修改。 */
-async function openRuleDialog(lines: OrderLine[]) {
+async function openRuleDialog(lines: OrderLine[], check = true) {
   const keys = lines.map(lineKey);
   busy.value = "rule";
   try {
@@ -614,7 +620,8 @@ async function openRuleDialog(lines: OrderLine[]) {
   }
   const rows = keys.map((k) => allLines.value.find((l) => lineKey(l) === k)).filter(Boolean) as OrderLine[];
   if (!rows.length) return;
-  const todo = genOrder(rows.filter((l) => l.quota > 0), attachOf);
+  // 没有勾选、按整张 PI 选规则时不查附件项次（生成时按所选行再查）
+  const todo = check ? genOrder(rows.filter((l) => l.quota > 0), attachOf) : [];
   const missing = todo.filter((l) => !attachOf(l));
   if (missing.length) {
     jumpTo(missing.slice(0, 1), true);
@@ -850,8 +857,6 @@ function foldAll(on: boolean) {
 const INPUT_PAD = 24;
 /** 勾选框宽度、生成顺序角标与勾选框的间距、角标左右内边距与最小宽度（.sel / .order） */
 const CHECKBOX_W = 14;
-/** 操作列两个按钮之间的间距（.ops 的 gap） */
-const BTN_GAP = 6;
 /** 小号链接按钮除文字外的宽度：左右内边距 2px×2 + 透明边框 1px×2 */
 const linkWidth = (text: string) => textWidth(text) + 6;
 /** 输入框里显示的内容：有值显示值，没有值显示占位文字 */
@@ -887,10 +892,8 @@ const lineW = computed(() => {
       colWidth(t("generate.startSn"), ls.map((l) => textWidth(l.start_sn || "—", { mono: true }))),
       colWidth(t("generate.endSn"), ls.map((l) => textWidth(l.end_sn || "—", { mono: true }))),
     ),
-    // 选规则 / 改规则与删号都可能出现：按两个按钮都在量（各页签同宽）
-    actions: colWidth(t("common.actions"), [
-      Math.max(linkWidth(t("generate.pickRule")), linkWidth(t("generate.changeRule"))) + BTN_GAP + linkWidth(t("generate.delete")),
-    ]),
+    // 行内只有删号（选规则按整张 PI，在底部操作栏）
+    actions: colWidth(t("common.actions"), [linkWidth(t("generate.delete"))]),
   };
 });
 
@@ -1103,6 +1106,7 @@ onUnmounted(() => {
 .pi-list :deep(.el-table__row) { cursor: pointer; }
 .dh { display: flex; flex-direction: column; gap: 6px; }
 .dh-title { display: flex; gap: 12px; align-items: center; font-size: 16px; color: var(--app-text); }
+.pi-rule { font-family: var(--sn-mono, monospace); }
 .kv { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; color: var(--app-muted); }
 .kv b { color: var(--app-text); font-weight: 600; }
 .drawer { display: flex; flex-direction: column; gap: 10px; }

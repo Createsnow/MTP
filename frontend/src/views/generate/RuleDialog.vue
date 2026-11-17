@@ -582,8 +582,9 @@ async function save() {
       // 另带 seq_grow（上限自动突破，后台不传按关闭）
       body.custom = { ...built.value.spec, seq_start: seqStart() };
     }
-    await api.selectLineRule(body);
-    ElMessage.success(t("common.saved"));
+    // 一个 PI 只有一个规则：后台按整张 PI 保存，返回作用的物料行数
+    const r: any = await api.selectLineRule(body);
+    ElMessage.success(t("generate.rule.savedPi", { n: r?.lines ?? props.lines.length }));
     emit("saved");
     emit("update:modelValue", false);
   } finally {

@@ -40,7 +40,19 @@ def rule_list(
     return rules.list_rules(q, category, category_value, cu.read_factories(None))
 
 
-@router.post("", summary="新建规则：须填 PI（规则只绑定 PI）")
+@router.get(
+    "/prefixes", summary="规则库按前缀归档：一个前缀一组，组内为规则及使用它的 PI；可按前缀、编码、名称、PI 搜索"
+)
+def rule_prefixes(cu: OperatorDep, q: str | None = None, pi: str | None = None) -> list:
+    return rules.prefix_archive(q, pi, cu.read_factories(None))
+
+
+@router.get("/prefixes/usage", summary="前缀详情：用这个前缀的各 PI 占的流水与最大号")
+def rule_prefix_usage(cu: OperatorDep, prefix: str | None = None) -> dict:
+    return rules.prefix_usage(prefix, cu.read_factories(None))
+
+
+@router.post("", summary="新建规则：PI 选填（一条规则可给多张 PI 用，用在哪些 PI 由生成页选规则决定）")
 def rule_create(body: RuleIn, cu: OperatorDep) -> dict:
     return rules.create(
         cu, body.rule_code, body.rule_name, _spec(body), body.category_scope, body.category_value, body.factory_code

@@ -126,6 +126,11 @@ class ErrorCode(Enum):
     )
     RULE_PREFIX_OVERLAP = (409, "前缀 {prefix} 与 PI {pi} 的前缀 {other} 一个是另一个的开头，可能编出相同的号，请更换")
     RULE_PREFIX_CHANGE_REQUIRED = (409, "规则 {rule_code} 版本 {version} 已用于 PI {other_pi}，须为本 PI 填新前缀")
+    RULE_PI_PREFIX_LOCKED = (
+        409,
+        "PI {pi} 已用前缀 {prefix} 生成过号，一个 PI 只能用一个规则前缀，不能改用 {new}；"
+        "要改米数、单位、后缀请在规则库修改规则",
+    )
     RULE_LINE_REQUIRED = (400, "请选择物料行")
     RULE_GLOBAL_READONLY = (403, "全局规则只有系统管理员能修改、删除：{rule_code}")
     RULE_FACTORY_REQUIRED = (400, "请选择规则所属的生产组织")

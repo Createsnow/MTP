@@ -89,6 +89,7 @@
   "RULE_PREFIX_FORMAT_LOCKED": "Tiền tố {prefix} đã dùng với hệ {base}, tuần tự {seq_len} chữ số; cùng tiền tố không thể đổi hệ cơ số, số chữ số tuần tự và bộ ký tự, hãy đổi tiền tố mới",
   "RULE_PREFIX_OVERLAP": "Tiền tố {prefix} và tiền tố {other} của PI {pi} cái này là phần đầu của cái kia, có thể tạo SN trùng; vui lòng đổi",
   "RULE_PREFIX_CHANGE_REQUIRED": "Quy tắc {rule_code} phiên bản {version} đã dùng cho PI {other_pi}, phải nhập tiền tố mới cho PI này",
+  "RULE_PI_PREFIX_LOCKED": "PI {pi} đã tạo số với tiền tố {prefix}; mỗi PI chỉ dùng một tiền tố quy tắc, không thể đổi sang {new}. Muốn đổi chiều dài, đơn vị, hậu tố hãy sửa quy tắc trong thư viện quy tắc",
   "RULE_LINE_REQUIRED": "Vui lòng chọn dòng vật tư",
   "RULE_GLOBAL_READONLY": "Chỉ quản trị hệ thống mới được sửa, xóa quy tắc dùng chung: {rule_code}",
   "RULE_FACTORY_REQUIRED": "Vui lòng chọn tổ chức sản xuất sở hữu quy tắc",

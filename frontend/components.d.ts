@@ -60,6 +60,7 @@ declare module 'vue' {
     ElUpload: typeof import('element-plus/es')['ElUpload']
     FactorySelect: typeof import('./src/components/FactorySelect.vue')['default']
     PageHead: typeof import('./src/components/PageHead.vue')['default']
+    PiTags: typeof import('./src/components/PiTags.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StatusTag: typeof import('./src/components/StatusTag.vue')['default']

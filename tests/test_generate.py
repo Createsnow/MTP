@@ -185,20 +185,21 @@ def test_prefix_conflicts_identical_or_one_starts_another(w, api):
     assert new("BX" + stem[2:]).status == 200
 
 
-def test_rule_binds_pi_only(w, api):
-    """新建规则须填 PI，规则只绑定 PI；修改时不传分类与 PI 则不变，传了也只能是 PI。"""
+def test_rule_pi_optional(w, api):
+    """新建规则 PI 选填（一条规则可给多张 PI 用）：不填为未分类，填了记为 PI 分类（只用于推荐）、不能按客户分类；
+    修改时不传分类与 PI 则不变，传了也只能是 PI。"""
     prefix = P()
     body = m(rule_code=uid("R"), rule_name="x", prefix=prefix, base=10, seq_len=5)
-    assert api.post("/api/rules", body, w.admin).code == "RULE_CATEGORY_REQUIRED", "PI 必填"
-    assert api.post("/api/rules", body | m(category_value="  "), w.admin).code == "RULE_CATEGORY_REQUIRED"
     assert api.post("/api/rules", body | m(category_scope="CUSTOMER", category_value="C1"), w.admin).code == (
         "RULE_CATEGORY_INVALID"
     ), "不能按客户分类"
     assert api.post("/api/rules", body | m(category_scope="NONE"), w.admin).code == "RULE_CATEGORY_INVALID"
-    pi = uid("PI")
-    r = ok(api.post("/api/rules", body | m(category_value=pi), w.admin))["rule"]
+    r0 = ok(api.post("/api/rules", body | m(category_value="  "), w.admin))["rule"]
+    assert (r0["category_scope"], r0["category_value"]) == ("NONE", ""), "PI 不填"
+    pi, prefix2 = uid("PI"), P()
+    r = ok(api.post("/api/rules", body | m(rule_code=uid("R"), prefix=prefix2, category_value=pi), w.admin))["rule"]
     assert (r["category_scope"], r["category_value"]) == ("PI", pi), "分类不填按 PI"
-    spec = m(rule_name="x", prefix=prefix, base=10, seq_len=5)
+    spec = m(rule_name="x", prefix=prefix2, base=10, seq_len=5)
     ok(api.put(f"/api/rules/{r['id']}", spec, w.admin))
     rows = [x["rule"] for x in ok(api.get(f"/api/rules?q={pi}", w.admin)).body]
     assert [(x["id"], x["category_value"]) for x in rows] == [(r["id"], pi)], "不传分类与 PI 则不变"
@@ -316,11 +317,14 @@ def test_custom_rule_saved_only_after_success(w, sql):
 
 
 def test_custom_rule_names_follow_code_number(w, sql):
-    """同一 PI 的第 n 条自定义规则：编码 PI-PI号-n，名称 PI号_vn。"""
+    """同一 PI 的第 n 条自定义规则：编码 PI-PI号-n，名称 PI号_vn。一个 PI 只有一个规则前缀：
+    第二条是同前缀、改了后缀的自定义规则（作用于整张 PI，之后生成的号用它）。"""
     org, pi, bill = mk(w, ("M1", 3), ("M2", 3))
-    ok(w.select(pi, [(bill, 1)], custom=m(prefix=P(), base=10, seq_len=6, with_length=True)))
-    ok(w.select(pi, [(bill, 2)], custom=m(prefix=P(), base=10, seq_len=6, with_length=True)))
-    w.generate(pi)
+    pre = P()
+    ok(w.select(pi, [(bill, 1)], custom=m(prefix=pre, base=10, seq_len=6, with_length=True)))
+    w.generate(pi, lines=[(bill, 1)])
+    ok(w.select(pi, [(bill, 2)], custom=m(prefix=pre, base=10, seq_len=6, with_length=True, suffix="B")))
+    w.generate(pi, lines=[(bill, 2)])
     rows = sql.all("SELECT rule_code, rule_name FROM sn_rule ORDER BY rule_code")
     assert [(r["rule_code"], r["rule_name"]) for r in rows] == [(f"PI-{pi}-1", f"{pi}_v1"), (f"PI-{pi}-2", f"{pi}_v2")]
 

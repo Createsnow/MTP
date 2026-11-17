@@ -792,6 +792,7 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
             continue
         default = rules.pi_default(pi)
         memo: dict[int, rules.Resolved | None] = {}
+        # 前缀能否用的判断结果；另记本 PI 锁定的前缀（一个 PI 只用一个规则前缀，见 _locked_prefix），用到时才查
         taken: dict = {}
         for k in keys:
             r = snap.get(k)
@@ -847,6 +848,9 @@ def _check(line: Line, taken: dict | None = None) -> None:
         # 与别的前缀一个是另一个的开头，或已按别的进制 / 位数用了这个前缀：须改前缀，免得生成时才失败；
         # 被流水部分相同、已归属 PI 的版本占用（本 PI 别的单据先生成，或别的 PI 已用）不算，生成时共用这个前缀
         line.issues.append("RULE_PREFIX")
+    elif (lk := _locked_prefix(line.pi, taken)) is not None and line.res.spec().prefix != lk:
+        # 一个 PI 只用一个规则前缀：本 PI 已生成的号还在时，物料行的规则须用同一前缀（规则在规则库换了前缀等）
+        line.issues.append("RULE_PI_PREFIX")
     spec = line.res.spec() if line.res is not None and line.res.ready else None
     # 米数、产品单位用金蝶原值（含中文也照用）；金蝶为空且页面未填写时须先填写（规则不带米数 / 单位时不影响）
     if line.length_source == orders.LENGTH_EMPTY and (spec is None or spec.with_length):
@@ -856,6 +860,16 @@ def _check(line: Line, taken: dict | None = None) -> None:
     # 附件项次必填
     if not line.attach:
         line.issues.append("ATTACH_EMPTY")
+
+
+def _locked_prefix(pi: str, memo: dict | None) -> str | None:
+    """本 PI 锁定的前缀（rules.pi_used_prefix，同一次判断里只查一次）；本 PI 没有号时 None（不锁定）。"""
+    if memo is None:
+        return rules.pi_used_prefix(pi)
+    k = ("locked", pi)
+    if k not in memo:
+        memo[k] = rules.pi_used_prefix(pi)
+    return memo[k]
 
 
 def _prefix_ok(line: Line, memo: dict | None) -> bool:

@@ -11,42 +11,62 @@
         <el-input v-model="q" clearable :placeholder="t('rules.search')" prefix-icon="Search" @keyup.enter="search" @clear="search" />
         <el-button @click="search">{{ t("common.search") }}</el-button>
       </div>
-      <!-- 点规则行在右侧抽屉看示例号；操作列的按钮不触发 -->
-      <el-table v-loading="loading" :data="paged" size="small" row-key="rule.id" row-class-name="clickable" highlight-current-row
-        :empty-text="t('common.empty')" @row-click="openDetail">
-        <el-table-column :label="t('rules.name')" min-width="160" show-overflow-tooltip><template #default="{ row }">{{ row.rule.rule_name }}</template></el-table-column>
-        <el-table-column :label="t('rules.version')" width="64"><template #default="{ row }">v{{ row.rule.current_version }}</template></el-table-column>
-        <el-table-column label="PI" min-width="120" show-overflow-tooltip>
-          <template #default="{ row }"><span v-if="piOf(row)">{{ piOf(row) }}</span><span v-else class="muted">—</span></template>
+      <!-- 按前缀归档：一个前缀一行（进制、流水位数锁定），展开为该前缀下的规则及使用它们的 PI；点「详情」看各 PI 占的流水与示例号 -->
+      <el-table v-loading="loading" :data="paged" size="small" row-key="prefix" :empty-text="t('common.empty')">
+        <el-table-column type="expand" width="36">
+          <template #default="{ row: g }">
+            <el-table :data="g.rules" size="small" class="inner" :row-key="(x: any) => x.rule.id">
+              <el-table-column :label="t('rules.code')" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }"><span class="sn-mono">{{ row.rule.rule_code }}</span></template>
+              </el-table-column>
+              <el-table-column :label="t('rules.name')" min-width="140" show-overflow-tooltip><template #default="{ row }">{{ row.rule.rule_name }}</template></el-table-column>
+              <el-table-column :label="t('rules.format')" min-width="240">
+                <template #default="{ row }">
+                  <span class="muted small">{{ row.version?.format }}</span>
+                  <el-tag v-if="!row.is_current_prefix && row.current" size="small" type="warning" effect="plain" class="ml">
+                    {{ t("rules.otherPrefix", { prefix: row.current.prefix }) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('rules.version')" width="64"><template #default="{ row }">v{{ row.rule.current_version }}</template></el-table-column>
+              <el-table-column :label="t('rules.pis')" min-width="200"><template #default="{ row }"><PiTags :used="row.pis" :picked="row.selected_pis" /></template></el-table-column>
+              <el-table-column :label="t('rules.factory')" min-width="120" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <el-tag v-if="!row.rule.factory_code" size="small" type="info" effect="plain">{{ t("rules.ownerGlobal") }}</el-tag>
+                  <span v-else>{{ factoryName(row.rule.factory_code) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('common.actions')" width="110" fixed="right">
+                <template #default="{ row }">
+                  <el-tooltip :disabled="editable(row)" :content="t('rules.globalReadonly')">
+                    <span><el-button link type="primary" :disabled="!editable(row)" @click="openEdit(row)">{{ t("common.edit") }}</el-button></span>
+                  </el-tooltip>
+                  <el-tooltip :disabled="editable(row) && deletable(row)" :content="editable(row) ? t('rules.deleteBlocked') : t('rules.globalReadonly')">
+                    <span class="ml"><el-button link type="danger" :disabled="!editable(row) || !deletable(row)" @click="remove(row)">{{ t("common.delete") }}</el-button></span>
+                  </el-tooltip>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
         </el-table-column>
-        <el-table-column :label="t('rules.base')" width="72"><template #default="{ row }">{{ row.current?.base }}</template></el-table-column>
-        <el-table-column :label="t('rules.seqCol')" width="88"><template #default="{ row }">{{ row.current?.seq_len }}</template></el-table-column>
-        <el-table-column :label="t('rules.withLength')" width="80">
-          <template #default="{ row }">{{ row.current?.with_length ? t("common.yes") : t("common.no") }}</template>
+        <el-table-column :label="t('rules.colPrefix')" min-width="120">
+          <template #default="{ row }"><b class="sn-mono">{{ row.prefix }}</b></template>
         </el-table-column>
-        <el-table-column :label="t('rules.withUnit')" width="80">
-          <template #default="{ row }">{{ row.current?.with_unit ? t("common.yes") : t("common.no") }}</template>
+        <el-table-column :label="t('rules.seqFormat')" min-width="120">
+          <template #default="{ row }">{{ t("rules.seqFormatVal", { base: row.base, n: row.seq_len }) }}</template>
         </el-table-column>
-        <el-table-column :label="t('rules.used')" width="80">
-          <template #default="{ row }"><el-tag size="small" :type="row.used ? 'success' : 'info'">{{ row.used ? t("common.yes") : t("common.no") }}</el-tag></template>
+        <el-table-column :label="t('rules.ruleCount')" width="72"><template #default="{ row }">{{ t("rules.ruleCountVal", { n: row.rules.length }) }}</template></el-table-column>
+        <el-table-column :label="t('rules.pis')" min-width="220"><template #default="{ row }"><PiTags :used="row.pis" :picked="row.selected_pis" /></template></el-table-column>
+        <el-table-column :label="t('rules.topSeq')" width="110" align="right">
+          <template #default="{ row }"><span v-if="row.top_seq" class="sn-mono">{{ row.top_text }}</span><span v-else class="muted">—</span></template>
         </el-table-column>
         <el-table-column :label="t('rules.factory')" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">
-            <el-tag v-if="!row.rule.factory_code" size="small" type="info" effect="plain">{{ t("rules.ownerGlobal") }}</el-tag>
-            <span v-else>{{ factoryName(row.rule.factory_code) }}</span>
-          </template>
+          <template #default="{ row }">{{ row.factories.map((f: string | null) => (f ? factoryName(f) : t("rules.ownerGlobal"))).join("、") }}</template>
         </el-table-column>
-        <el-table-column :label="t('common.actions')" width="130" fixed="right">
-          <template #default="{ row }">
-            <span @click.stop>
-            <el-tooltip :disabled="editable(row)" :content="t('rules.globalReadonly')">
-              <span><el-button link type="primary" :disabled="!editable(row)" @click="openEdit(row)">{{ t("common.edit") }}</el-button></span>
-            </el-tooltip>
-            <el-tooltip :disabled="editable(row) && deletable(row)" :content="editable(row) ? t('rules.deleteBlocked') : t('rules.globalReadonly')">
-              <span class="ml"><el-button link type="danger" :disabled="!editable(row) || !deletable(row)" @click="remove(row)">{{ t("common.delete") }}</el-button></span>
-            </el-tooltip>
-            </span>
-          </template>
+        <el-table-column :label="t('rules.status')" width="90">
+          <template #default="{ row }"><el-tag size="small" :type="row.used ? 'success' : 'info'">{{ row.used ? t("rules.used") : t("rules.unused") }}</el-tag></template>
+        </el-table-column>
+        <el-table-column :label="t('common.actions')" width="70" fixed="right">
+          <template #default="{ row }"><el-button link type="primary" @click="openDetail(row)">{{ t("rules.detail") }}</el-button></template>
         </el-table-column>
       </el-table>
       <el-pagination class="pager" layout="total, sizes, prev, pager, next" :total="shown.length" :page-sizes="[20, 50, 100]"
@@ -67,11 +87,7 @@
             :placeholder="store.isAdmin ? t('rules.ownerGlobal') : t('rules.owner')" />
           <div class="muted hint">{{ store.isAdmin ? t("rules.ownerHint") : t("rules.ownerOperatorHint") }}</div>
         </el-form-item>
-        <!-- 规则只绑定 PI：新建必填；早先按未分类 / 客户分类的规则修改时须补填 -->
-        <el-form-item label="PI" required>
-          <el-input v-model.trim="form.pi" maxlength="64" />
-          <div class="muted hint">{{ t("rules.piHint") }}</div>
-        </el-form-item>
+        <!-- 不填 PI：一条规则可给多张 PI 用，用在哪些 PI 由生成页选规则决定，规则库只显示 -->
         <el-form-item :label="t('rules.prefix')" required>
           <el-input v-model.trim="form.prefix" class="sn-mono" />
           <div class="muted hint">{{ t("rules.prefixHint") }}</div>
@@ -135,17 +151,37 @@
       </template>
     </el-dialog>
 
-    <!-- 规则示例号：当前版本的前 5 个和最大号，米数、产品单位用示例值 -->
-    <el-drawer :model-value="!!detail.row" size="900px" @close="detail.row = null">
+    <!-- 前缀详情：使用这个前缀的各 PI 占的流水；下方为所选规则的示例号（前 5 个和最大号，米数、产品单位用示例值） -->
+    <el-drawer :model-value="!!detail.group" size="900px" @close="detail.group = null">
       <template #header>
-        <div v-if="detail.row" class="dh">
-          <b>{{ detail.row.rule.rule_name }}</b>
-          <el-tag size="small" effect="plain">v{{ detail.row.rule.current_version }}</el-tag>
-          <span v-if="piOf(detail.row)" class="muted">PI {{ piOf(detail.row) }}</span>
+        <div v-if="detail.group" class="dh">
+          <b class="sn-mono">{{ detail.group.prefix }}</b>
+          <el-tag size="small" effect="plain">{{ t("rules.seqFormatVal", { base: detail.group.base, n: detail.group.seq_len }) }}</el-tag>
+          <span v-if="detail.group.top_seq" class="muted">{{ t("rules.topSeq") }} <span class="sn-mono">{{ detail.group.top_text }}</span></span>
         </div>
       </template>
-      <template v-if="detail.row">
-        <div v-if="detail.row.current" class="muted small mb">{{ detail.row.current.format }}</div>
+      <template v-if="detail.group">
+        <div class="sec">{{ t("rules.usageTitle") }}</div>
+        <el-table v-loading="detail.usageLoading" :data="detail.usage" size="small" :empty-text="detail.usageError || t('common.empty')" class="mb">
+          <el-table-column label="PI" min-width="120"><template #default="{ row }"><span class="sn-mono">{{ row.pi_no }}</span></template></el-table-column>
+          <el-table-column :label="t('rules.usageRules')" min-width="140" show-overflow-tooltip><template #default="{ row }">{{ row.rules.join("、") }}</template></el-table-column>
+          <el-table-column :label="t('rules.usageRange')" min-width="200">
+            <template #default="{ row }">
+              <template v-if="row.qty"><span class="sn-mono">{{ row.min_text }} ～ {{ row.max_text }}</span>
+                <span v-if="row.has_gap" class="muted small ml">{{ t("rules.usageGap") }}</span></template>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('rules.usageQty')" width="90" align="right"><template #default="{ row }">{{ Number(row.qty).toLocaleString() }}</template></el-table-column>
+          <el-table-column :label="t('rules.usageTop')" width="150" align="right"><template #default="{ row }">{{ row.top_seq ? Number(row.top_seq).toLocaleString() : "—" }}</template></el-table-column>
+        </el-table>
+        <div class="sec">
+          {{ t("rules.sampleOf") }}
+          <el-radio-group v-if="detail.group.rules.length > 1" v-model="detail.ruleId" size="small" class="ml" @change="loadSample">
+            <el-radio-button v-for="x in detail.group.rules" :key="x.rule.id" :value="x.rule.id">{{ x.rule.rule_code }}</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div v-if="detailRule?.version" class="muted small mb">{{ detailRule.version.format }}</div>
         <el-table v-loading="detail.loading" :data="detail.items" size="small" :empty-text="detail.error || t('common.empty')">
           <el-table-column :label="t('rules.sampleSn')" min-width="200">
             <template #default="{ row }"><span class="sn-mono" :class="{ max: row.max }">{{ row.sn }}</span></template>
@@ -175,6 +211,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "@/api";
 import PageHead from "@/components/PageHead.vue";
 import FactorySelect from "@/components/FactorySelect.vue";
+import PiTags from "@/components/PiTags.vue";
 import { BASES, CHARSETS } from "@/constants";
 import { useFactories } from "@/composables/useFactories";
 import { useAuthStore } from "@/stores/auth";
@@ -186,6 +223,7 @@ const factoryName = (code: string) => {
   const f = factories.value.find((x) => x.factory_code === code);
   return f ? `${f.factory_name}（${code}）` : code;
 };
+/** 按前缀归档的分组（GET /rules/prefixes）：每组 prefix、base、seq_len、rules[]、pis、selected_pis、top_seq… */
 const rows = ref<any[]>([]);
 const loading = ref(false);
 const q = ref("");
@@ -201,20 +239,20 @@ const sampleLength = ref("");
 const sampleUnit = ref("");
 /** 规则库流水位数默认 5（自定义规则默认 4，在生成页）。 */
 const EMPTY = {
-  rule_code: "", rule_name: "", factory_code: "", pi: "", prefix: "", suffix: "", base: 10, seq_len: 5, charset: "",
+  rule_code: "", rule_name: "", factory_code: "", prefix: "", suffix: "", base: 10, seq_len: 5, charset: "",
   with_length: true, length_pad: 0, sep_before: "", sep_after: "", with_unit: false,
 };
 const form = reactive({ ...EMPTY });
 const defaultCharset = computed(() => CHARSETS[form.base]);
-/** 规则绑定的 PI；早先按未分类 / 客户分类的规则没有 PI。 */
-const piOf = (row: any): string => (row.rule.category_scope === "PI" ? row.rule.category_value : "");
-const piValues = computed(() => [...new Set(rows.value.map(piOf))].filter(Boolean).sort());
-const shown = computed(() => (piFilter.value ? rows.value.filter((r) => piOf(r) === piFilter.value) : rows.value));
-/** 默认分页列出全部规则（前端分页）；改 PI 筛选回第一页，条数变少时页码不越界。 */
+/** 各组用到的 PI（生成过号的与已选未生成的），供 PI 筛选。 */
+const groupPis = (g: any): string[] => [...g.pis, ...g.selected_pis];
+const piValues = computed(() => [...new Set(rows.value.flatMap(groupPis))].sort());
+const shown = computed(() => (piFilter.value ? rows.value.filter((g) => groupPis(g).includes(piFilter.value)) : rows.value));
+/** 默认分页列出全部前缀（前端分页）；改 PI 筛选回第一页，条数变少时页码不越界。 */
 const paged = computed(() => shown.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 watch(piFilter, () => (page.value = 1));
 watch(() => shown.value.length, (n) => (page.value = Math.min(page.value, Math.max(1, Math.ceil(n / pageSize.value)))));
-/** 编辑时提示：格式不变 / 就地修改（当前版本没生成过号）/ 另出一版（生成过号，须换新前缀）。 */
+/** 编辑时提示：格式不变 / 就地修改（当前版本没生成过号）/ 另出一版（生成过号）。 */
 const editHint = computed(() => {
   const c = editing.value?.current;
   if (!c) return "";
@@ -232,7 +270,7 @@ const editHint = computed(() => {
 async function load() {
   loading.value = true;
   try {
-    rows.value = await api.rules({ q: q.value });
+    rows.value = await api.rulePrefixes({ q: q.value });
   } finally {
     loading.value = false;
   }
@@ -249,11 +287,12 @@ function openCreate() {
   dialog.value = true;
 }
 
+/** 编辑一条规则（按它的当前版本；规则换过前缀时当前版本可能在别的前缀下）。 */
 function openEdit(row: any) {
   editing.value = row;
   const c = row.current;
   Object.assign(form, {
-    rule_name: row.rule.rule_name, pi: piOf(row),
+    rule_name: row.rule.rule_name,
     prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len, with_length: !!c.with_length,
     length_pad: c.length_pad || 0, sep_before: c.length_sep_before || "", sep_after: c.length_sep_after || "", with_unit: !!c.with_unit,
     charset: c.charset === CHARSETS[c.base] ? "" : c.charset,
@@ -267,25 +306,45 @@ const specOf = (c: any) => ({
   length_pad: c.length_pad || 0, sep_before: c.length_sep_before || "", sep_after: c.length_sep_after || "", with_unit: !!c.with_unit,
 });
 
-/** 点规则行：右侧抽屉列出当前版本的示例号（前 5 个和最大号），各行拆出前缀、流水号、米数、产品单位、后缀。 */
-const detail = reactive({ row: null as any, loading: false, items: [] as any[], error: "" });
-async function openDetail(row: any) {
-  Object.assign(detail, { row, items: [], error: "" });
-  const c = row.current;
+/** 前缀详情：各 PI 占的流水（GET /rules/prefixes/usage）与所选规则的示例号（前 5 个和最大号）。 */
+const detail = reactive({
+  group: null as any, ruleId: 0, loading: false, items: [] as any[], error: "",
+  usage: [] as any[], usageLoading: false, usageError: "",
+});
+const detailRule = computed(() => detail.group?.rules.find((x: any) => x.rule.id === detail.ruleId) ?? null);
+async function openDetail(g: any) {
+  Object.assign(detail, { group: g, ruleId: g.rules[0]?.rule.id ?? 0, usage: [], usageError: "" });
+  loadSample();
+  detail.usageLoading = true;
+  try {
+    const r: any = await api.rulePrefixUsage(g.prefix);
+    if (detail.group === g) detail.usage = r.pis;
+  } catch (e: any) {
+    if (detail.group === g) detail.usageError = e?.message || "";
+  } finally {
+    if (detail.group === g) detail.usageLoading = false;
+  }
+}
+
+/** 示例号：所选规则在这个前缀上的版本，各行拆出前缀、流水号、米数、产品单位、后缀。 */
+async function loadSample() {
+  const x = detailRule.value;
+  Object.assign(detail, { items: [], error: "" });
+  const c = x?.version;
   if (!c) return;
   detail.loading = true;
   try {
     const r: any = await api.previewRule(specOf(c));
-    if (detail.row !== row) return; // 等结果时已改看别的规则
+    if (detailRule.value !== x) return; // 等结果时已改看别的规则
     const last = r.samples.length - 1;
     detail.items = r.samples.map((s: any, i: number) => ({
       ...s, prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len, max: i === last && r.max_seq > 5,
       length: c.with_length ? r.sample_length : "", unit: c.with_unit ? r.sample_unit : "",
     }));
   } catch (e: any) {
-    if (detail.row === row) detail.error = e?.message || "";
+    if (detailRule.value === x) detail.error = e?.message || "";
   } finally {
-    if (detail.row === row) detail.loading = false;
+    if (detailRule.value === x) detail.loading = false;
   }
 }
 
@@ -310,18 +369,15 @@ watch(() => [form.prefix, form.suffix, form.base, form.seq_len, form.charset, fo
   }, 250);
 });
 
-const category = () => ({ category_scope: "PI", category_value: form.pi });
-
 async function save() {
   saving.value = true;
   try {
     if (editing.value) {
-      const r: any = await api.updateRule(editing.value.rule.id, { rule_name: form.rule_name, ...spec(), ...category() });
+      // 不传 PI：规则原有的分类与 PI 不变
+      const r: any = await api.updateRule(editing.value.rule.id, { rule_name: form.rule_name, ...spec() });
       ElMessage.success(t(`rules.result${r.action}`, { v: r.rule?.rule?.current_version }));
     } else {
-      await api.createRule({
-        rule_code: form.rule_code, rule_name: form.rule_name, factory_code: form.factory_code || null, ...spec(), ...category(),
-      });
+      await api.createRule({ rule_code: form.rule_code, rule_name: form.rule_name, factory_code: form.factory_code || null, ...spec() });
       ElMessage.success(t("common.saved"));
     }
     dialog.value = false;
@@ -333,8 +389,8 @@ async function save() {
 
 /** 修改、删除：系统管理员不限；普通操作员只能改授权组织的规则，全局规则只能选用（后端同样校验）。 */
 const editable = (row: any) => store.isAdmin || (!!row.rule.factory_code && store.canWrite(row.rule.factory_code));
-/** 只能删从没生成过号、也没指定给任何 PI 的规则（后端同样校验）。 */
-const deletable = (row: any) => !row.used && !row.pis.length && !row.bindings.pi.length;
+/** 只能删从没生成过号、也没有 PI 使用（选定或已归属）的规则（后端同样校验）。 */
+const deletable = (row: any) => !row.rule_used && !row.pis.length && !row.bindings.pi.length;
 
 async function remove(row: any) {
   const r = row.rule;
@@ -355,8 +411,9 @@ onMounted(load);
 .mt { margin-top: 10px; }
 .small { font-size: 12px; }
 .dh { display: flex; align-items: center; gap: 8px; }
+.sec { font-weight: 600; margin: 4px 0 8px; display: flex; align-items: center; }
+.inner { margin: 4px 0 8px 24px; width: calc(100% - 24px); }
 .max { color: var(--el-color-warning); }
-:deep(.clickable) { cursor: pointer; }
 .hint { width: 100%; line-height: 1.5; margin-top: 2px; }
 .w160 { width: 160px; }
 .samples { display: flex; flex-direction: column; gap: 4px; }

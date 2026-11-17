@@ -72,6 +72,8 @@ export const api = {
 
   // ---------------- 规则
   rules: (params?: Q) => get("/rules", params),
+  rulePrefixes: (params?: Q) => get("/rules/prefixes", params),
+  rulePrefixUsage: (prefix: string) => get("/rules/prefixes/usage", { prefix }),
   createRule: (data: Q) => post("/rules", data),
   updateRule: (id: number, data: Q) => put(`/rules/${id}`, data),
   deleteRule: (id: number) => del(`/rules/${id}`),
