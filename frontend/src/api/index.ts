@@ -99,7 +99,7 @@ export const api = {
     get("/generate/segments/sns", params),
   /** 删号范围：单据 bills / 物料行 lines，或 SN 起止号 start_sn、end_sn（只填起号 = 单枚）。 */
   genDeletePreview: (data: Q) => post("/generate/delete/preview", data),
-  /** 删号：状态不限；额度还给号现在挂的物料行，最大流水号不退回（留下空号段）；原因选填。 */
+  /** 删号：状态不限；额度还给号现在挂的物料行，删前缀最后一段时前缀最大号退回，删中间或前面的号留下空号段；原因选填。 */
   genDelete: (data: Q) => post("/generate/delete", data),
   genDeleted: (pi: string) => get("/generate/deleted", { pi }),
   /** 撤销物料行配置（待处理、可生成页签）：还没有号的行，物料行规则、手填的附件项次、米数、产品单位恢复为未配置；有号的行跳过。 */

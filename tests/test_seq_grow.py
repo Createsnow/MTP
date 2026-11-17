@@ -198,7 +198,7 @@ def test_locked_prefix_format_after_all_sns_deleted(w, api, sql):
     assert w.select(pi, [(bill, 1)], custom=c).code == "RULE_PREFIX_FORMAT_LOCKED"
     ok(w.select(pi, [(bill, 1)], custom={**ctx["prefix_locked"][p], "seq_grow": True}))
     w.generate(pi)
-    assert sns(sql, pi) == [f"{p}{i:05d}" for i in (4, 5, 6)], "删掉的流水成为空号段，再生成接在最大号之后"
+    assert sns(sql, pi) == [f"{p}{i:05d}" for i in (1, 2, 3)], "号全删光：前缀最大号退回 0，再生成从 1 起"
     # 上限自动突破另出的版本不列为锁定格式（锁定的仍是原版本的位数）
     _, pi2, bill2 = mk(w, ("M1", 101), org=org)
     p2 = P()

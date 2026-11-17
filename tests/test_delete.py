@@ -1,4 +1,5 @@
-"""删号重建：按单据、物料行、单枚或一段 SN 删号（状态不限），最大流水号不退回、留下空号段；
+"""删号重建：按单据、物料行、单枚或一段 SN 删号（状态不限）；删的是前缀最后一段时前缀最大号退回（不留空号段），
+删中间或前面的号留下空号段；
 重新生成时可从最大号之后编，或手动起止号用空号段（不够时从最大号之后接着编）；额度还给号现在挂的物料行。"""
 
 from __future__ import annotations
@@ -244,7 +245,8 @@ def test_delete_single_sn_and_range(w, api, sql):
 
 
 def test_delete_returns_quota_to_current_line(w, api, sql):
-    """转过单的号：额度还给号现在挂的物料行（现住址），生成行的额度不变；流水空出在原 PI。"""
+    """转过单的号：额度还给号现在挂的物料行（现住址），生成行的额度不变；流水空出在原前缀（这里是原前缀上仅有的号，
+    全删光后原前缀最大号退回 0，原 PI 自己的最大号也退回 0）。"""
     org = w.org(uid("O")[:10])
     _, pi, src = mk(w, ("M1", 5), org=org)
     _, pi2, dst = mk(w, ("M1", 2), org=org)
@@ -258,7 +260,8 @@ def test_delete_returns_quota_to_current_line(w, api, sql):
     ok(w.delete(pi2, lines=[(dst, 1)]))
     assert counts(sql, src, 1) == (5, 0, 0), "生成行不变"
     assert counts(sql, dst, 1) == (0, 0, 0)
-    assert (gaps(w, pi), reserved(w, pi)) == ([(1, 5)], []), "流水空出在原前缀"
+    assert (gaps(w, pi), reserved(w, pi)) == ([], []), "原前缀全删光：最大号退回、不留空号段"
+    assert sql.scalar("SELECT last_seq_dec FROM sn_pi_counter WHERE pi_no = %s", pi) == 0, "流水归属 PI 的最大号退回"
     assert gaps(w, pi2) == []
     ok(w.bind_pi(pi2, w.rule(P(), with_length=False)))
     j = w.generate(pi2)
@@ -409,3 +412,107 @@ def test_imported_sn_rev_continues_after_deleted_rev(w, api, sql):
     # 这里只看送出的 rev
     sent = [y["rev"] for x in MES.received if x["org"] == org for y in x["batch"]["items"] if y["sn"] == sn]
     assert sent == [1, 2, 3]
+
+
+# ================================================================== 删前缀最后一段：前缀最大号退回
+
+
+def prefix_last(sql, pi: str) -> int:
+    return int(
+        sql.scalar(
+            "SELECT c.last_seq_dec FROM sn_prefix_counter c JOIN sn_pi_rule r ON r.prefix = c.prefix "
+            "WHERE r.pi_no = %s",
+            pi,
+        )
+    )
+
+
+def test_delete_tail_rolls_back_max_middle_and_front_leave_gaps(w, api, sql):
+    """前缀上 1～9（三行 3/4/2）：删最后一段 8～9 → 不留空号段、最大号退回 7（确认框提示退回到 7、下次从 8 起），
+    再生成同名 SN 接回 8～9；删中间 4～7 → 空号段 4～7、最大号不变；删前面 1～3 → 空号段 1～7；
+    再删最后一段 8～9：相连的空号段一起成了尾部，最大号退回 0、不再列出，下次从 1 起。"""
+    org, pi, bill = mk(w, ("M1", 3), ("M2", 4), ("M3", 2))
+    ok(w.bind_pi(pi, w.rule(P(), with_length=False)))
+    w.generate(pi)
+    pre = sql.scalar("SELECT prefix FROM sn_pi_rule WHERE pi_no = %s", pi)
+    old = [s for _, _, s in sns(sql, pi)]
+    # 删最后一段
+    pv = ok(w.delete(pi, lines=[(bill, 3)], preview=True))
+    assert pv["prefix_rollback"] == [{"prefix": pre, "last_seq": 9, "new_last": 7, "next_seq": 8}]
+    r = ok(w.delete(pi, lines=[(bill, 3)]))
+    assert r["prefix_rollback"] == pv["prefix_rollback"]
+    assert (r["gaps"]["last_seq"], r["gaps"]["next_seq"], r["gaps"]["segments"]) == (7, 8, [])
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([], 7)
+    assert sql.scalar("SELECT last_seq_dec FROM sn_pi_counter WHERE pi_no = %s", pi) == 7
+    info = sql.scalar("SELECT detail FROM sn_audit WHERE pi_no = %s AND batch_no = %s LIMIT 1", pi, r["del_no"])
+    assert f"prefix_last={pre}:9->7" in info
+    j = w.generate(pi, lines=[(bill, 3)])
+    assert (j["start_seq_dec"], j["end_seq_dec"]) == (8, 9)
+    assert [s for _, _, s in sns(sql, pi)] == old, "退回后再生成与删掉的号同名"
+    # 删中间：最大号不变，留下空号段
+    pv = ok(w.delete(pi, lines=[(bill, 2)], preview=True))
+    assert pv["prefix_rollback"] == []
+    ok(w.delete(pi, lines=[(bill, 2)]))
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([(4, 7)], 9)
+    # 删前面：留下空号段（与中间的相连）
+    ok(w.delete(pi, lines=[(bill, 1)]))
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([(1, 7)], 9)
+    # 再删最后一段：前面的空号段都成了尾部，全部退回
+    pv = ok(w.delete(pi, lines=[(bill, 3)], preview=True))
+    assert pv["prefix_rollback"] == [{"prefix": pre, "last_seq": 9, "new_last": 0, "next_seq": 1}]
+    ok(w.delete(pi, lines=[(bill, 3)]))
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([], 0)
+    assert sql.scalar("SELECT last_seq_dec FROM sn_pi_counter WHERE pi_no = %s", pi) == 0
+    j = w.generate(pi)
+    assert (j["start_seq_dec"], j["end_seq_dec"]) == (1, 9), "全删光后下次从 1 起"
+
+
+def test_delete_tail_by_sn_range_and_cascade(w, api, sql):
+    """按 SN 删：先删中间 4～5（空号段），再删 6～9（尾部）→ 相连的 4～5 一起成为尾部，最大号退回 3，不列空号段。"""
+    org, pi, bill = mk(w, ("M1", 9))
+    p = P()
+    ok(w.bind_pi(pi, w.rule(p, seq_len=4, with_length=False)))
+    w.generate(pi)
+    ok(w.delete(pi, start_sn=f"{p}0004", end_sn=f"{p}0005"))
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([(4, 5)], 9)
+    pv = ok(w.delete(pi, start_sn=f"{p}0006", end_sn=f"{p}0009", preview=True))
+    assert [(x["new_last"], x["next_seq"]) for x in pv["prefix_rollback"]] == [(3, 4)]
+    ok(w.delete(pi, start_sn=f"{p}0006", end_sn=f"{p}0009"))
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([], 3)
+    j = w.generate(pi)
+    assert (j["start_seq_dec"], j["end_seq_dec"]) == (4, 9)
+
+
+def test_delete_tail_judged_by_prefix_not_pi(w, api, sql):
+    """同一前缀两张 PI：PI-1 1～3、PI-2 4～5。PI-1 删光自己的号对前缀是前面 → 留空号段 1～3、最大号仍 5；
+    PI-2 删光后前缀上没号 → 最大号退回 0、不列空号段；两张 PI 各自的最大号（统计）也退回。"""
+    org = w.org(uid("O")[:10])
+    _, p1, b1 = mk(w, ("M1", 3), org=org)
+    _, p2, b2 = mk(w, ("M1", 2), org=org)
+    rid = w.rule(P(), with_length=False)
+    ok(w.bind_pi(p1, rid))
+    w.generate(p1)
+    ok(w.bind_pi(p2, rid))
+    w.generate(p2)
+    assert prefix_last(sql, p1) == 5
+    pv = ok(w.delete(p1, bills=[b1], preview=True))
+    assert pv["prefix_rollback"] == []
+    ok(w.delete(p1, bills=[b1]))
+    assert (gaps(w, p1), gaps(w, p2), prefix_last(sql, p1)) == ([(1, 3)], [(1, 3)], 5)
+    assert sql.scalar("SELECT last_seq_dec FROM sn_pi_counter WHERE pi_no = %s", p1) == 0
+    ok(w.delete(p2, bills=[b2]))
+    assert (gaps(w, p1), gaps(w, p2), prefix_last(sql, p2)) == ([], [], 0)
+    assert sql.scalar("SELECT last_seq_dec FROM sn_pi_counter WHERE pi_no = %s", p2) == 0
+
+
+def test_preview_before_tail_delete_shifts_down(w, api, sql):
+    """预演（接在最大号 9 之后：10～11）之后删了前缀最后一段 7～9：确认生成时自动顺延到退回后的最大号之后（7～8）。"""
+    org, pi, bill = mk(w, ("M1", 6), ("M2", 3), ("M3", 2))
+    ok(w.bind_pi(pi, w.rule(P(), with_length=False)))
+    w.generate(pi, lines=[(bill, 1), (bill, 2)])
+    pv = ok(w.preview(pi, lines=[(bill, 3)]))
+    assert pv["generatable"] and (pv["start_seq"], pv["end_seq"]) == (10, 11)
+    ok(w.delete(pi, lines=[(bill, 2)]))
+    j = ok(api.post("/api/generate/run", m(token=pv["token"]), w.admin))
+    assert (j["status"], j["shifted"], j["start_seq_dec"], j["end_seq_dec"]) == ("SUCCESS", True, 7, 8)
+    assert (gaps(w, pi), prefix_last(sql, pi)) == ([], 8)

@@ -12,8 +12,16 @@
       <el-button :loading="loading" :disabled="!startSn.trim()" @click="load">{{ t("common.search") }}</el-button>
     </div>
     <div v-if="info" v-loading="loading" class="info">
-      <!-- 不列状态、枚数（枚数在删除按钮上），不放提示文字 -->
+      <!-- 不列状态、枚数（枚数在删除按钮上）；删的是前缀最后一段时提示最大号退回到几、下次从几生成 -->
       <p v-if="info.orgs.length" class="muted">{{ t("common.factory") }}：{{ info.orgs.map((o: string) => nameOf(o)).join("、") }}</p>
+      <el-alert
+        v-for="x in info.prefix_rollback || []"
+        :key="x.prefix"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="t('generate.deletePrefixBack', { prefix: x.prefix, from: num(x.last_seq), to: num(x.new_last), next: num(x.next_seq) })"
+      />
       <el-input v-model="reason" maxlength="500" show-word-limit :placeholder="t('generate.deleteReason')" />
     </div>
     <template #footer>
@@ -27,7 +35,8 @@
 
 <script setup lang="ts">
 /** 删号：按物料行 / 单据（打开时给出），或按 SN 起止号（弹窗里填）。先取确认框数据（枚数、生产组织）再确认，
- *  弹窗只列生产组织与原因，枚数显示在删除按钮上；原因选填（不填后端记默认原因）。号的状态不限；最大流水号不退回，删掉的号留下空号段。
+ *  弹窗只列生产组织与原因，枚数显示在删除按钮上；原因选填（不填后端记默认原因）。号的状态不限；删的是前缀最后一段时
+ *  前缀最大号退回（不留空号段，确认框提示退回到几、下次从几生成），删中间或前面的号留下空号段。
  *  父组件用 ref 调 open({ lines }) 或 open({ sn: true })，完成后收到 done（带删后的空号段）。 */
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";

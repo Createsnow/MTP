@@ -731,6 +731,7 @@
     "deleteEndSn": "结束 SN（不填 = 只删这一枚）",
     "deleteReason": "原因（选填）",
     "deleteBtn": "删除 {n} 枚",
+    "deletePrefixBack": "删除后前缀 {prefix} 的最大号从 {from} 退回到 {to}，下次从 {next} 开始生成",
     "deletedN": "已删除 {n} 枚（删除单号 {no}）",
     "seqStart": "起始流水",
     "seqEnd": "结束流水",

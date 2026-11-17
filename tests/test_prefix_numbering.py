@@ -209,7 +209,7 @@ def test_confirm_shifts_when_other_pi_generated_first(w, sql):
 
 def test_pi_prefix_registered_inherited_and_locked(w, api, sql):
     """选规则登记在 PI 上：之后同步进来的单据直接用；没号时可改前缀；有号时锁定；号全删后又可改，
-    原前缀上留下的流水成为空号段。自定义规则生成成功后才存入规则库。"""
+    原前缀上的号全删光：前缀最大号退回 0，不留空号段。自定义规则生成成功后才存入规则库。"""
     pi = uid("PI")
     org = w.org(uid("O")[:10])
     a = bill(w, pi, ("M1", 1, "1"), org=org)
@@ -230,11 +230,8 @@ def test_pi_prefix_registered_inherited_and_locked(w, api, sql):
     o = bill(w, other, ("M1", 1, "1"))
     ok(w.select(other, [(o, 1)], custom=C(p2)))
     g = ok(api.get(f"/api/generate/gaps?pi={other}", w.admin))
-    # 空号段按来源单据拆段
-    assert (g["last_seq"], [(x["start_seq"], x["end_seq"], x["bill_no"]) for x in g["segments"]]) == (
-        2,
-        [(1, 1, a), (2, 2, late)],
-    )
+    # 删的是前缀最后一段（全删光）：最大号退回 0，不留空号段，别的 PI 选这个前缀从 1 起
+    assert (g["last_seq"], g["next_seq"], g["segments"]) == (0, 1, [])
 
 
 def test_seq_grow_is_per_prefix(w, api, sql):

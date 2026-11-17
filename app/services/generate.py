@@ -1,7 +1,8 @@
 """SN 生成（F-09）。删号见 deletion，分配见 allocation。
 
 以规则前缀为排号基准：一个 PI 一个规则前缀（rules.pi_rule 登记）；同一前缀下各 PI、各单据共用一套十进制流水，
-每次生成都接在前缀最大号（sn_prefix_counter，只增不减）之后。号上记 seq_prefix，(seq_prefix, seq_dec) 唯一。
+每次生成都接在前缀最大号（sn_prefix_counter；生成时只增，删前缀最后一段时按现存号退回，见 deletion）之后。
+号上记 seq_prefix，(seq_prefix, seq_dec) 唯一。
 
 生成：在一张 PI 下整单（勾选单据）或按物料行（点选）生成，须先勾选；最小单位是物料行——范围内每个还有额度的物料行
 一次生成它的全部额度，不拆成两次。排号顺序（_gen_order）：先按附件项次从小到大（按数字比）；同项次时，
@@ -971,7 +972,7 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
     out["qty"] = qty
     out["start_seq"] = min(x["start_seq"] for x in out["items"])
     out["end_seq"] = max(x["end_seq"] for x in out["items"])
-    # 生成后的前缀最大号（只增不减）
+    # 生成后的前缀最大号（生成只增不减）
     out["new_last"] = max(got["top"], out["end_seq"])
     # 用到的空闲流水（手动起止号内）、所选空号段与溢出（从最大号之后接着编）的枚数
     out["range_qty"] = got["range_qty"]
@@ -1399,7 +1400,7 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
             x["bill_no"],
             x["seq"],
         )
-    # 前缀最大号只增不减：用空号段生成时可能不变；PI 统计记本 PI 自己生成的最大号与枚数
+    # 生成时前缀最大号只增不减（退回只在删号时）：用空号段生成时可能不变；PI 统计记本 PI 自己生成的最大号与枚数
     db.exec(
         "UPDATE sn_prefix_counter SET last_seq_dec = GREATEST(last_seq_dec, %s), updated_at = %s WHERE prefix = %s",
         plan["new_last"],

@@ -3,13 +3,19 @@
 - 范围：单据（可多张）、物料行（可多行），或 SN 起止号（只填起号 = 单枚；起止号须在同一物料行上，按流水取其间的号）。
   只删现在挂在这张 PI 下的号；号的状态不限（待分配、已分配、待推送、已推送都可删），普通操作员只能删授权组织的号。
 - 号从号池移除（完整 SN 与流水腾出，之后可以重新生成同样的号，不考虑旧号），删除前的号与挂靠存入 sn_item_deleted 备查。
-- PI 最大流水号不退回：删掉的号在流水里留下空号段，重新生成时可选用（见 generate 的流水来源 RANGE）。
+- 前缀最大号按删后现存的号退回（以前缀为准，不按 PI）：删的是前缀最后一段时，最大号退回到前缀现存号的最大流水
+  （全删光退回 0），尾部不算空号段，下次默认接着生成（可能生成与删掉的号同名的 SN）；删中间或前面的号，最大号不变，
+  删掉的号在流水里留下空号段，重新生成时可选用（见 generate 的流水来源 RANGE）。先删中间、再删到它后面时，
+  相连的空号段一起变成尾部、不再列出。被删号涉及几个前缀（含转入号）逐个前缀算。
+  流水归属 PI 自己生成到的最大号（sn_pi_counter.last_seq_dec，统计用）同样按该 PI 现存号的最大流水退回。
 - 计数：额度还给号现在挂的物料行（现住址）——该行已生成数、已分配数减去删掉的枚数，本单生成数（own_generated）
   减去删掉的枚数（不小于 0），可生成数量随之增加（不超过订单数量）。号的生成行不变。
   流水归属 PI 的生成枚数（sn_pi_counter.generated_qty）一并减去。
 - 交付批次：号在未确认或失败的交付批次中时，删除后该批次作废，批次里其余的号按作废的规则回号池或当场重建批次
   （与人工作废同一逻辑）；已确认的批次不动。
 - 与生成、分配、转移共用 PI 操作锁（号现在的 PI 与流水归属 PI 都锁）；PI 正在生成时不能删。
+  另拿被删号所在前缀的前缀锁（与生成同序：先 PI 操作锁、再前缀锁），同前缀别的 PI 的生成与之串行，退回最大号时
+  不会漏算别的 PI 正在写的号。
 - 只删本系统生成的号：SN 导入的号只能分配，不在删号范围内（按单据、物料行删时略过，按 SN 删时视为不存在）。
 """
 
@@ -19,7 +25,7 @@ from app.core import utils as util
 from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, marks
-from app.services import audit, bill_stats, changes, delivery, generate, locks, orders
+from app.services import audit, bill_stats, changes, delivery, generate, locks, orders, rules
 
 #: 删号原因选填，不填记这个默认原因
 DEFAULT_REASON = "生成页删除 SN"
@@ -82,6 +88,26 @@ def _target(
     return "{t}pi_no = %s AND {t}origin = 'GEN' AND (" + " OR ".join(ors) + ")", args, desc
 
 
+def _prefix_after(tpl: str, args: list, prefixes: list[str]) -> list[dict]:
+    """删掉范围内的号之后各前缀的最大号：只列会退回的前缀（删的是前缀最后一段）。
+    new_last = 前缀里范围外现存号的最大流水（没有为 0），next_seq 为下次默认生成的起号。"""
+    where = tpl.format(t="")
+    out = []
+    for p in sorted(x for x in prefixes if x):
+        last = rules.prefix_last(p)
+        keep = int(
+            db.scalar(
+                f"SELECT COALESCE(MAX(seq_dec), 0) FROM sn_item WHERE seq_prefix = %s AND NOT IFNULL(({where}), FALSE)",
+                p,
+                *args,
+            )
+            or 0
+        )
+        if keep < last:
+            out.append({"prefix": p, "last_seq": last, "new_last": keep, "next_seq": keep + 1})
+    return out
+
+
 def _summary(tpl: str, args: list) -> dict:
     """范围内的号：枚数、各状态枚数、涉及的生产组织、物料行、要作废的批次、转入号（流水属别的 PI）枚数。"""
     where = tpl.format(t="")
@@ -119,6 +145,7 @@ def _summary(tpl: str, args: list) -> dict:
         )
     )
     seq_pis = db.column(f"SELECT DISTINCT seq_pi_no FROM sn_item WHERE {where}", *args)
+    prefixes = db.column(f"SELECT DISTINCT seq_prefix FROM sn_item WHERE {where} AND seq_prefix IS NOT NULL", *args)
     return {
         "qty": sum(by_status.values()),
         "by_status": by_status,
@@ -126,6 +153,9 @@ def _summary(tpl: str, args: list) -> dict:
         "lines": lines,
         "batches": batches,
         "seq_pis": sorted(seq_pis),
+        "prefixes": sorted(prefixes),
+        # 删后前缀最大号会退回的前缀（删的是前缀最后一段）：确认框提示「最大号从 X 退回到 Y，下次从 Y+1 生成」
+        "prefix_rollback": _prefix_after(tpl, args, prefixes),
         "transferred_in": db.count(f"SELECT COUNT(*) FROM sn_item WHERE {where} AND seq_pi_no <> pi_no", *args),
     }
 
@@ -138,7 +168,8 @@ def preview(
     start_sn: str | None = None,
     end_sn: str | None = None,
 ) -> dict:
-    """删号确认框：要删的枚数、各状态枚数、涉及的生产组织与物料行、要作废重建的交付批次；本 PI 当前的空号段。"""
+    """删号确认框：要删的枚数、各状态枚数、涉及的生产组织与物料行、要作废重建的交付批次、删后前缀最大号会退回的前缀
+    （prefix_rollback）；本 PI 当前的空号段。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -158,7 +189,8 @@ def delete(
     end_sn: str | None = None,
     reason_in: str | None = None,
 ) -> dict:
-    """删号：见模块说明。在一个事务里完成；返回删除单号、枚数、各物料行枚数、作废与重建的批次、删后的空号段。"""
+    """删号：见模块说明。在一个事务里完成；返回删除单号、枚数、各物料行枚数、作废与重建的批次、前缀最大号的退回
+    （prefix_rollback）、删后的空号段。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -168,6 +200,9 @@ def delete(
     tpl, args, desc = _target(pi, bills, lines, start_sn, end_sn)
     where = tpl.format(t="")
     seq_pis = set(db.column(f"SELECT DISTINCT seq_pi_no FROM sn_item WHERE {where}", *args))
+    prefixes = set(
+        db.column(f"SELECT DISTINCT seq_prefix FROM sn_item WHERE {where} AND seq_prefix IS NOT NULL", *args)
+    )
     voided: list[tuple[dict, set[str]]] = []
     rebuilt: list[str] = []
     with locks.with_pi_lock(pi, *seq_pis), db.tx():
@@ -176,10 +211,12 @@ def delete(
             f"SELECT EXISTS(SELECT 1 FROM sn_gen_job WHERE running_pi IN ({marks(len(held))}))", *sorted(held)
         ):
             raise biz(ErrorCode.GEN_BUSY, pi="、".join(sorted(held)))
+        # 前缀锁在锁号之前拿（与生成同序）：之后同前缀别的 PI 的生成等本次提交，退回最大号时读到的是全部已提交的号
+        locks.hold_prefixes(prefixes)
         s = _summary(tpl, args)
         if not s["qty"]:
             raise biz(ErrorCode.DELETE_NOTHING)
-        if not set(s["seq_pis"]) <= held:
+        if not set(s["seq_pis"]) <= held or not set(s["prefixes"]) <= prefixes:
             raise biz(ErrorCode.CONFLICT_RETRY)
         if s["orgs"]:
             cu.check_write(*s["orgs"])
@@ -235,6 +272,27 @@ def delete(
                 now,
                 r["seq_pi_no"],
             )
+        # 前缀最大号按删后现存的号退回（只降不升）：删的是前缀最后一段时尾部不留空号段，下次接着生成
+        for x in s["prefix_rollback"]:
+            db.exec(
+                "UPDATE sn_prefix_counter SET last_seq_dec = LEAST(last_seq_dec, "
+                "(SELECT COALESCE(MAX(seq_dec), 0) FROM sn_item WHERE seq_prefix = %s)), updated_at = %s "
+                "WHERE prefix = %s",
+                x["prefix"],
+                now,
+                x["prefix"],
+            )
+        # 流水归属 PI 自己生成到的最大号（统计用）同样按该 PI 现存号的最大流水退回
+        for r in per_pi:
+            db.exec(
+                "UPDATE sn_pi_counter SET last_seq_dec = LEAST(last_seq_dec, "
+                "(SELECT COALESCE(MAX(seq_dec), 0) FROM sn_item WHERE seq_pi_no = %s AND origin = 'GEN')), "
+                "updated_at = %s WHERE pi_no = %s",
+                r["seq_pi_no"],
+                now,
+                r["seq_pi_no"],
+            )
+        rollback = ";".join(f"{x['prefix']}:{x['last_seq']}->{x['new_last']}" for x in s["prefix_rollback"])
         bills_hit = {r["bill_no"] for r in per_line}
         changes.refresh_items(bills_hit)
         for b in batches:
@@ -254,7 +312,10 @@ def delete(
                 .status(st if "," not in st else None, None)
                 .batch(del_no)
                 .why(reason)
-                .info(f"seq={r['bill_seq']} statuses={st} scope={util.cut(desc, 200)}"),
+                .info(
+                    f"seq={r['bill_seq']} statuses={st} scope={util.cut(desc, 200)}"
+                    + (f" prefix_last={util.cut(rollback, 200)}" if rollback else "")
+                ),
             )
     for b, bill_set in voided:
         delivery.after_void(cu, b, bill_set)
@@ -268,6 +329,7 @@ def delete(
         ],
         "voided": [b["batch_no"] for b, _ in voided],
         "rebuilt": rebuilt,
+        "prefix_rollback": s["prefix_rollback"],
         "gaps": generate.gaps_of(pi),
     }
 

@@ -731,6 +731,7 @@
     "deleteEndSn": "End SN (blank = only this one)",
     "deleteReason": "Reason (optional)",
     "deleteBtn": "Delete {n}",
+    "deletePrefixBack": "After deletion, the max serial of prefix {prefix} goes back from {from} to {to}; the next generation starts from {next}",
     "deletedN": "{n} SNs deleted (deletion No. {no})",
     "seqStart": "Start serial",
     "seqEnd": "End serial",

@@ -110,7 +110,8 @@ def gen_delete_preview(body: DeleteIn, cu: OperatorDep) -> dict:
 
 @router.post(
     "/delete",
-    summary="删号：删除范围内挂在本 PI 下的号（状态不限），额度还给号现在挂的物料行，最大流水号不退回（留下空号段）；"
+    summary="删号：删除范围内挂在本 PI 下的号（状态不限），额度还给号现在挂的物料行，"
+    "删的是前缀最后一段时前缀最大号退回（不留空号段），删中间或前面的号留下空号段；"
     "号所在的未确认或失败批次作废重建；原因选填（不填记「生成页删除 SN」）",
 )
 def gen_delete(body: DeleteIn, cu: OperatorDep) -> dict:

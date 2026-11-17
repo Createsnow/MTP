@@ -690,14 +690,14 @@ def test_attach_and_length_locked_once_line_has_sns(w, api, sql):
         f"{p}000005000",
         f"{p}000006000",
     ], "同一物料行接着生成仍用锁定的米数；新增的 2 枚接在前缀最大号之后"
-    # 删掉该行的号后可修改，再生成用新值；删掉的流水成为空号段，再生成接在最大号之后
+    # 删掉该行的号后可修改，再生成用新值；该行是前缀上仅有的号，删光后前缀最大号退回 0，再生成从 1 起
     assert j["status"] == "SUCCESS"
     ok(w.delete(pi, lines=[(bill, 1)], reason="改米数"))
     r = ok(api.put("/api/orders/length", m(bill_no=bill, seq=1, value="5"), w.admin))
     assert (r["length"], r["edit_lock"]) == ("5", None)
     w.generate(pi, lines=[(bill, 1)])
     assert sql.scalar("SELECT sn FROM sn_item WHERE bill_seq = 1 AND pi_no = %s ORDER BY seq_dec LIMIT 1", pi) == (
-        f"{p}0000075"
+        f"{p}0000015"
     )
     w.allocate(pi)
     line = {x["seq"]: x for x in ok(api.get(f"/api/orders/{bill}/lines", w.admin))["lines"]}

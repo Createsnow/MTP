@@ -610,7 +610,8 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
       最新的版本，不算上限自动突破另出的版本）。一条规则换过前缀时出现在每个用过的前缀下。
     - pis：版本已归属的 PI（生成过号，含共用前缀另出的版本）；selected_pis：已登记这条规则、还没生成的 PI
       （按 resolve 本 PI 将用这个前缀的）。
-    - top_seq：前缀最大号（sn_prefix_counter，只增不减）；用这个前缀的 PI 接在它之后。seq_grow：前缀的自动突破开关。
+    - top_seq：前缀最大号（sn_prefix_counter；生成时只增，删前缀最后一段时按现存号退回）；用这个前缀的 PI 接在它之后。
+      seq_grow：前缀的自动突破开关。
     facs = 授权范围（None = 全部）：只列全局规则和范围内组织的规则。q 匹配前缀、规则编码、名称、PI；pi 精确筛选。"""
     vsql, args = _visible_sql(facs)
     rs = db.all("SELECT * FROM sn_rule WHERE 1=1" + vsql + " ORDER BY rule_code", *args)
@@ -787,7 +788,7 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         "seq_len": spec.seq_len,
         "charset": spec.charset,
         "pis": out,
-        # 前缀最大号（只增不减）与自动突破开关
+        # 前缀最大号（删前缀最后一段时按现存号退回）与自动突破开关
         "top_seq": prefix_last(prefix),
         "top_text": _seq_text_of(prefix_last(prefix), spec),
         "seq_grow": prefix_grow(prefix),
@@ -1212,7 +1213,7 @@ def prefix_grow(prefix: str) -> bool:
 
 
 def prefix_last(prefix: str | None) -> int:
-    """前缀最大流水（只增不减）；没有为 0。"""
+    """前缀最大流水（生成时只增；删号删到前缀最后一段时退回到现存号的最大流水，见 deletion）；没有为 0。"""
     if not prefix:
         return 0
     return int(db.scalar("SELECT last_seq_dec FROM sn_prefix_counter WHERE prefix = %s", prefix) or 0)

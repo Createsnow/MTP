@@ -731,6 +731,7 @@
     "deleteEndSn": "SN kết thúc (để trống = chỉ SN này)",
     "deleteReason": "Lý do (không bắt buộc)",
     "deleteBtn": "Xóa {n} SN",
+    "deletePrefixBack": "Sau khi xóa, số lớn nhất của tiền tố {prefix} lùi từ {from} về {to}; lần tạo tiếp theo bắt đầu từ {next}",
     "deletedN": "Đã xóa {n} SN (số phiếu xóa {no})",
     "seqStart": "Tuần tự đầu",
     "seqEnd": "Tuần tự cuối",

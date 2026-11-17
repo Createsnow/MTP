@@ -194,6 +194,7 @@ M = {
 "generate.deleteEndSn": ("结束 SN（不填 = 只删这一枚）", "End SN (blank = only this one)", "SN kết thúc (để trống = chỉ SN này)"),
 "generate.deleteReason": ("原因（选填）", "Reason (optional)", "Lý do (không bắt buộc)"),
 "generate.deleteBtn": ("删除 {n} 枚", "Delete {n}", "Xóa {n} SN"),
+"generate.deletePrefixBack": ("删除后前缀 {prefix} 的最大号从 {from} 退回到 {to}，下次从 {next} 开始生成", "After deletion, the max serial of prefix {prefix} goes back from {from} to {to}; the next generation starts from {next}", "Sau khi xóa, số lớn nhất của tiền tố {prefix} lùi từ {from} về {to}; lần tạo tiếp theo bắt đầu từ {next}"),
 "generate.deletedN": ("已删除 {n} 枚（删除单号 {no}）", "{n} SNs deleted (deletion No. {no})", "Đã xóa {n} SN (số phiếu xóa {no})"),
 "generate.seqStart": ("起始流水", "Start serial", "Tuần tự đầu"),
 "generate.seqEnd": ("结束流水", "End serial", "Tuần tự cuối"),
