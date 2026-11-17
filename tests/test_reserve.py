@@ -294,3 +294,52 @@ def test_all_deleted_context_first_sn_from_reserve_start(w, api):
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     firsts = {x["rule"]["first_sn"][-4:] for bb in ctx["bills"] for x in bb["lines"]}
     assert firsts == {"0001"} and ctx["counter"]["reserve_start"] == 1
+
+
+def mk_same_attach(w):
+    """三张单据同一组织：X 行1 项次 2；A、B 行1 都是项次 1（各 10 枚，单据编号 A < B）。先只生成 X 建预留：
+    A、B 没勾选，按单据编号预留 A 1～10、B 11～20，X 21～30。"""
+    pi = uid("PI")
+    org = w.org(uid("O")[:10])
+    base = uid("SAM")
+    a, b, x = base + "-1", base + "-2", base + "-3"
+    w.order(a, org, "C1", pi, ("M1", 10, "100", "1"))
+    w.order(b, org, "C1", pi, ("M2", 10, "100", "1"))
+    w.order(x, org, "C1", pi, ("M3", 10, "100", "2"))
+    c = m(prefix=P(), base=10, seq_len=4, with_length=False)
+    ok(w.select(pi, [(a, 1), (b, 1), (x, 1)], custom=c))
+    w.generate(pi, bills=[x])
+    assert state(w, pi) == ([], [(a, 1, 1, 10), (b, 1, 11, 20)], 30)
+    return pi, a, b
+
+
+def test_reserved_same_attach_follows_pick_order(w, sql):
+    """预留表已有、同一项次的几张单据一起生成：按本次点选先后用它们的预留（先点 B 再点 A：B 1～10、A 11～20）。"""
+    pi, a, b = mk_same_attach(w)
+    p = ok(w.preview(pi, bills=[b, a]))
+    assert [(x["bill_no"], x["seq_src"], x["segs"], x["tail_qty"]) for x in p["items"]] == [
+        (b, "RESERVE", [[1, 10]], 0),
+        (a, "RESERVE", [[11, 20]], 0),
+    ]
+    w.generate(pi, bills=[b, a])
+    assert ranges(sql, pi)[:2] == [(b, 1, 1, 10), (a, 1, 11, 20)]
+    assert state(w, pi) == ([], [], 30)
+    got = sql.all("SELECT bill_no, start_seq, end_seq FROM sn_pi_reserve WHERE pi_no = %s AND seq = 1", pi)
+    assert {(r["bill_no"], r["start_seq"], r["end_seq"]) for r in got} >= {(b, 1, 10), (a, 11, 20)}
+
+
+def test_reserved_same_attach_pick_order_lines(w, sql):
+    """点选物料行同样按点选先后；与预留顺序相同（先 A 后 B）时不变。"""
+    pi, a, b = mk_same_attach(w)
+    p = ok(w.preview(pi, lines=[(b, 1), (a, 1)]))
+    assert [(x["bill_no"], x["segs"]) for x in p["items"]] == [(b, [[1, 10]]), (a, [[11, 20]])]
+    p = ok(w.preview(pi, bills=[a, b]))
+    assert [(x["bill_no"], x["segs"]) for x in p["items"]] == [(a, [[1, 10]]), (b, [[11, 20]])]
+
+
+def test_reserved_single_bill_keeps_its_reservation(w, sql):
+    """只生成同一项次的一张单据：用它自己的预留（不同次生成谁先谁后结果一样）。"""
+    pi, a, b = mk_same_attach(w)
+    w.generate(pi, bills=[b])
+    w.generate(pi, bills=[a])
+    assert ranges(sql, pi)[:2] == [(a, 1, 1, 10), (b, 1, 11, 20)]

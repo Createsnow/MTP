@@ -606,6 +606,52 @@ class _Taker:
         return out
 
 
+def _reserve_touched(pi: str, bill_no: str, seq: int, segs: list[tuple[int, int]]) -> bool:
+    """物料行在自己的预留号段里生成过号、后来删掉了（删号存档里有它生成的、落在这些号段里的流水）。"""
+    return any(
+        db.exists(
+            "SELECT EXISTS(SELECT 1 FROM sn_item_deleted WHERE seq_pi_no = %s AND seq_dec BETWEEN %s AND %s "
+            "AND gen_bill_no = %s AND gen_bill_seq = %s)",
+            pi,
+            a,
+            b,
+            bill_no,
+            seq,
+        )
+        for a, b in segs
+    )
+
+
+def _by_pick_order(
+    pi: str, todo: list[Line], rs: dict[tuple[str, int], list[tuple[int, int]]], unused: list[tuple[int, int]]
+) -> dict[tuple[str, int], list[tuple[int, int]]]:
+    """预留表已有时，本次一起生成、附件项次相同、分属几张单据的物料行，按本次排号顺序（todo，见 _gen_order：
+    单据按勾选 / 点选先后，同一单据内按行号）重新分它们的预留号段：把这些行的预留合在一起（升序），按排号顺序依次
+    取各行原预留的枚数。只动预留号段整段都还空着、也没在里面生成过又删掉的行（删号后再生成仍回到原号段）；
+    没勾选的行、别的项次的行的预留不动；与预留顺序相同时结果不变。返回调整后的各行预留（不落库，生成时随 set 落库）。"""
+    groups: dict[tuple, list[Line]] = {}
+    for x in todo:
+        k = (x.bill_no, x.seq)
+        mine = rs.get(k)
+        if not mine or not x.attach or reserve.total(reserve.intersect(mine, unused)) != reserve.total(mine):
+            continue
+        groups.setdefault(attach_order(x.attach), []).append(x)
+    out = dict(rs)
+    for ls in groups.values():
+        if len({x.bill_no for x in ls}) < 2:
+            continue
+        ls = [x for x in ls if not _reserve_touched(pi, x.bill_no, x.seq, rs[(x.bill_no, x.seq)])]
+        if len({x.bill_no for x in ls}) < 2:
+            continue
+        pool = reserve.merge([s for x in ls for s in rs[(x.bill_no, x.seq)]])
+        for x in ls:
+            k = (x.bill_no, x.seq)
+            got = reserve.take(pool, reserve.total(rs[k]))
+            out[k] = got
+            pool = reserve.subtract(pool, got)
+    return out
+
+
 def _assign(pi: str, keys: list[tuple[str, int]], todo: list[Line], base: int, seq: dict) -> dict:
     """按排号顺序给每个物料行切号（见 reserve）：
     - MAX：用该行预留号段里空着的流水；起始号与预留起号不同时平移；没有预留或不够的接在最大号之后；
@@ -650,6 +696,9 @@ def _assign(pi: str, keys: list[tuple[str, int]], todo: list[Line], base: int, s
     unused = reserve.merge(gap_segments(pi, after) + [(after + 1, reserve.INF)])
     if taken:
         unused = reserve.subtract(unused, taken)
+    if seq["mode"] == SEQ_MAX and not new:
+        # 预留表已有：同一附件项次里几张单据一起生成时，按本次勾选 / 点选先后用它们的预留（见 _by_pick_order）
+        rs = _by_pick_order(pi, todo, rs, unused)
     lines: dict[tuple[str, int], dict] = {}
     keep: dict[tuple[str, int], list] = {}
     range_qty = gap_qty = over = 0
