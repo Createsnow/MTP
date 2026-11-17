@@ -111,28 +111,32 @@ CREATE TABLE sn_rule_version (
   KEY ix_rule_version_pi (claimed_pi)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='SN 规则版本';
 
--- PI 绑定规则（各物料行的默认）。本 PI 用该规则的哪一版按规则版本的归属 PI 解析（见 rules.resolve）
+-- PI 规则登记：一个 PI 一个规则前缀，选规则时登记（本 PI 全部物料行、之后同步进来的单据都用它）。
+-- 规则库规则记 rule_id（本 PI 用哪一版按规则版本的归属 PI 解析，见 rules.resolve）；自定义规则记 custom_json，
+-- 生成成功后存入规则库、改记 rule_id
 CREATE TABLE sn_pi_rule (
-  pi_no       VARCHAR(64) NOT NULL,
-  rule_id     BIGINT      NOT NULL,
-  bound_by    VARCHAR(32) NOT NULL,
-  bound_at    DATETIME    NOT NULL,
-  PRIMARY KEY (pi_no),
-  KEY ix_pi_rule_rule (rule_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 绑定规则';
-
--- 物料行规则：物料行已选的规则库规则或自定义规则；自定义规则生成成功后存入规则库并改记规则
-CREATE TABLE sn_line_rule (
-  bill_no     VARCHAR(64)  NOT NULL,
-  seq         INT          NOT NULL,
   pi_no       VARCHAR(64)  NOT NULL,
-  rule_id     BIGINT       NULL COMMENT '规则库规则；本 PI 用哪一版按归属 PI 解析',
+  prefix      VARCHAR(64)  NOT NULL COMMENT '本 PI 的规则前缀（排号以前缀为准，见 sn_prefix_counter）',
+  rule_id     BIGINT       NULL COMMENT '规则库规则；自定义规则生成前为空',
   custom_json VARCHAR(500) NULL COMMENT '自定义规则参数（生成前）',
-  set_by      VARCHAR(32)  NOT NULL,
-  set_at      DATETIME     NOT NULL,
-  PRIMARY KEY (bill_no, seq),
-  KEY ix_line_rule_rule (rule_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='物料行规则';
+  seq_start   BIGINT       NULL COMMENT '起始号（十进制流水）：下次生成第一个号不小于它，生成后清掉',
+  bound_by    VARCHAR(32)  NOT NULL,
+  bound_at    DATETIME     NOT NULL,
+  PRIMARY KEY (pi_no),
+  KEY ix_pi_rule_prefix (prefix),
+  KEY ix_pi_rule_rule (rule_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 规则登记';
+
+-- 规则前缀：排号的基准。同一前缀下各 PI 共用一套十进制流水，最大号只增不减；流水上限自动突破按前缀统一设置
+CREATE TABLE sn_prefix_counter (
+  prefix       VARCHAR(64) NOT NULL,
+  last_seq_dec BIGINT      NOT NULL DEFAULT 0 COMMENT '前缀最大流水（只增不减，删号不退回）',
+  seq_grow     TINYINT(1)  NOT NULL DEFAULT 1 COMMENT '流水上限自动突破：第一张 PI 选这个前缀时定下，之后在规则库改；已突破后不能关闭',
+  created_by   VARCHAR(32) NOT NULL,
+  created_at   DATETIME    NOT NULL,
+  updated_at   DATETIME    NOT NULL,
+  PRIMARY KEY (prefix)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='规则前缀计数';
 
 -- 金蝶生产订单快照：已审核单据的每条物料行一行（不存单据状态，均为 C）；表头字段写在每一行上；不存单据内码、分录内码
 CREATE TABLE sn_prd_mo (
@@ -292,37 +296,14 @@ CREATE TABLE sn_line_count (
   PRIMARY KEY (bill_no, seq)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='物料行计数';
 
--- PI 流水：一张 PI 一行，生成时 FOR UPDATE
+-- PI 生成统计：一张 PI 一行，生成时 FOR UPDATE
 CREATE TABLE sn_pi_counter (
   pi_no          VARCHAR(64) NOT NULL,
-  last_seq_dec   BIGINT      NOT NULL DEFAULT 0 COMMENT '本 PI 最大十进制流水（自己生成的号与号段预留中最大的；含已转出的，不含转入号）',
+  last_seq_dec   BIGINT      NOT NULL DEFAULT 0 COMMENT '本 PI 自己生成的号中最大的十进制流水（含已转出的，不含转入号；排号按前缀，见 sn_prefix_counter）',
   generated_qty  BIGINT      NOT NULL DEFAULT 0 COMMENT '本 PI 自己生成的枚数',
   updated_at     DATETIME    NOT NULL,
   PRIMARY KEY (pi_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 流水';
-
--- PI 号段预留表头：本 PI 第一次生成时建立（同 PI 多单据、不同组织分开生成也按附件项次接号，见 services/reserve）
-CREATE TABLE sn_pi_reserve_head (
-  pi_no          VARCHAR(64) NOT NULL,
-  start_seq      BIGINT      NOT NULL COMMENT '预留起号（十进制流水）：起始号平移的基准',
-  created_by     VARCHAR(32) NOT NULL,
-  created_at     DATETIME    NOT NULL,
-  PRIMARY KEY (pi_no)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 号段预留表头';
-
--- PI 号段预留：物料行的预留号段（一行可有几段）；只在生成事务（PI 操作锁内）变动；PI 最大流水含预留号段
-CREATE TABLE sn_pi_reserve (
-  id             BIGINT      NOT NULL AUTO_INCREMENT,
-  pi_no          VARCHAR(64) NOT NULL,
-  bill_no        VARCHAR(64) NOT NULL,
-  seq            INT         NOT NULL COMMENT '单据序号（行号）',
-  start_seq      BIGINT      NOT NULL COMMENT '预留起（十进制流水，含）',
-  end_seq        BIGINT      NOT NULL COMMENT '预留止（十进制流水，含）',
-  created_at     DATETIME    NOT NULL,
-  PRIMARY KEY (id),
-  KEY ix_reserve_pi (pi_no, start_seq),
-  KEY ix_reserve_line (bill_no, seq)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 号段预留';
 
 -- 已出号单据台账：单据第一次生成号时建立；记最近一次在快照中时的表头与各物料行数量（是否在快照直接看 sn_prd_mo）
 CREATE TABLE sn_bill_ledger (
@@ -435,6 +416,7 @@ CREATE TABLE sn_item (
   gen_bill_seq      INT         NOT NULL,
   seq_pi_no         VARCHAR(64) NOT NULL COMMENT '流水归属 PI',
   seq_dec           BIGINT      NOT NULL COMMENT '十进制流水',
+  seq_prefix        VARCHAR(64) NULL COMMENT '规则前缀（排号基准；SN 导入的号为空）',
   length_text       VARCHAR(64) NULL COMMENT '米数（未补 0 的原值；规则不带米数时为空）',
   attach_no         VARCHAR(64) NOT NULL DEFAULT '' COMMENT '附件项次（生成时写定，转单、转组织不变）',
   rule_version_id   BIGINT      NOT NULL,
@@ -456,6 +438,8 @@ CREATE TABLE sn_item (
   PRIMARY KEY (id),
   UNIQUE KEY ux_item_sn (sn) COMMENT '完整 SN 全局唯一（utf8mb4_bin，区分大小写）',
   UNIQUE KEY ux_item_seq (seq_pi_no, seq_dec) COMMENT '流水归属 PI 内十进制流水唯一',
+  UNIQUE KEY ux_item_prefix_seq (seq_prefix, seq_dec) COMMENT '同一规则前缀下十进制流水唯一（跨 PI）',
+  KEY ix_item_prefix_attach (seq_prefix, attach_no) COMMENT '前缀下已开始的项次',
   KEY ix_item_claim (pi_no, factory_code, status, suspend, delivery_batch_no, seq_pi_no, seq_dec) COMMENT '取号：过滤和排序都在索引内',
   KEY ix_item_status (status, factory_code, pi_no),
   KEY ix_item_bill (bill_no, bill_seq, status),
@@ -511,6 +495,7 @@ CREATE TABLE sn_item_deleted (
   gen_bill_seq      INT          NOT NULL,
   seq_pi_no         VARCHAR(64)  NOT NULL,
   seq_dec           BIGINT       NOT NULL,
+  seq_prefix        VARCHAR(64)  NULL COMMENT '规则前缀（删除时的号上的）',
   length_text       VARCHAR(64)  NULL,
   attach_no         VARCHAR(64)  NOT NULL DEFAULT '',
   rule_version_id   BIGINT       NOT NULL,
@@ -529,7 +514,9 @@ CREATE TABLE sn_item_deleted (
   KEY ix_item_deleted_no (del_no),
   KEY ix_item_deleted_sn (sn),
   KEY ix_item_deleted_pi (pi_no, deleted_at),
-  KEY ix_item_deleted_seq (seq_pi_no, seq_dec)
+  KEY ix_item_deleted_seq (seq_pi_no, seq_dec),
+  KEY ix_item_deleted_prefix (seq_prefix, seq_dec),
+  KEY ix_item_deleted_line (bill_no, bill_seq) COMMENT '删过号的物料行不挡后面项次（generate 项次拦截）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='删号存档';
 
 -- SN 导入记录：本系统之外已有的 SN 按导入模板（PI、单据编号、行号、完整 SN、物料编码、附件项次、米数、流水号、进制位数、

@@ -22,6 +22,8 @@ M = {
 "rules.pis": ("使用的 PI", "PIs using it", "PI sử dụng"),
 "rules.pisSelected": ("已选未生成", "Chosen, not generated", "Đã chọn, chưa tạo"),
 "rules.topSeq": ("最大号", "Max serial", "Số lớn nhất"),
+"rules.seqGrow": ("上限自动突破", "Auto-extend when full", "Tự tăng chữ số khi hết"),
+"rules.seqGrowTip": ("按前缀统一设置，作用于这个前缀下的全部 PI；流水已超出规则位数后不能关闭", "Set per prefix for all PIs using it; cannot be turned off once serials exceed the rule length", "Thiết lập theo tiền tố cho mọi PI dùng nó; không thể tắt khi dãy số đã vượt số chữ số"),
 "rules.status": ("状态", "Status", "Trạng thái"),
 "rules.unused": ("未使用", "Unused", "Chưa dùng"),
 "rules.detail": ("详情", "Details", "Chi tiết"),

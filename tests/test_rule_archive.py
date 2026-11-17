@@ -25,8 +25,9 @@ def group(api, w, prefix: str) -> dict:
     return next(g for g in ok(api.get(f"/api/rules/prefixes?q={prefix}", w.admin)).body if g["prefix"] == prefix)
 
 
-def line_rules(sql, pi: str) -> dict:
-    return {(r["bill_no"], r["seq"]): r for r in sql.all("SELECT * FROM sn_line_rule WHERE pi_no = %s", pi)}
+def reg(sql, pi: str) -> dict | None:
+    """PI 的规则登记（一个 PI 一个规则前缀）。"""
+    return sql.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s", pi)
 
 
 def test_create_rule_without_pi(w, api, sql):
@@ -46,41 +47,40 @@ def test_create_rule_without_pi(w, api, sql):
 
 
 def test_select_applies_to_whole_pi_and_prefix_locks(w, api, sql):
-    """选规则作用于整张 PI：点一个物料行，本 PI 别的单据的物料行也改记为同一规则；生成后前缀锁定，
+    """选规则作用于整张 PI：点一个物料行，规则登记在 PI 上（各单据都用它）；生成后前缀锁定，
     换别的前缀报 RULE_PI_PREFIX_LOCKED，同前缀可以（如改后缀）；号全部删掉后可以改选。"""
     org, pi, b1 = mk(w, ("M1", 3), ("M2", 2))
     _, _, b2 = mk(w, ("M1", 4), pi=pi, org=org)
     pre, other = P(), P()
     r = ok(w.select(pi, [(b1, 1)], custom={"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}))
     assert r["lines"] == 3
-    sels = line_rules(sql, pi)
-    assert set(sels) == {(b1, 1), (b1, 2), (b2, 1)}
-    assert all(x["rule_id"] is None and pre in x["custom_json"] for x in sels.values())
+    row = reg(sql, pi)
+    assert (row["prefix"], row["rule_id"]) == (pre, None) and pre in row["custom_json"]
     # 还没有号：可以改选，仍作用于整张 PI
     rid = w.rule(other, seq_len=5, with_length=False)
     ok(w.select(pi, [(b2, 1)], rule_id=rid))
-    assert {x["rule_id"] for x in line_rules(sql, pi).values()} == {rid}
+    assert (reg(sql, pi)["rule_id"], reg(sql, pi)["prefix"]) == (rid, other)
     ok(w.select(pi, [(b1, 1)], custom={"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}))
     w.generate(pi)
     # 已有号：前缀锁定
     res = w.select(pi, [(b1, 1)], rule_id=rid)
     assert res.code == "RULE_PI_PREFIX_LOCKED", str(res)
     assert w.bind_pi(pi, rid).code == "RULE_PI_PREFIX_LOCKED"
-    assert {x["rule_id"] for x in line_rules(sql, pi).values()} == {
-        sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
-    }, "没有改动"
+    assert reg(sql, pi)["rule_id"] == sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1"), (
+        "没有改动"
+    )
     # 同前缀（改后缀）可以：另成一条规则，同一前缀
     c = {"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}
     ok(w.select(pi, [(b1, 1)], custom={**c, "suffix": "Z"}))
     # 号全部删掉：回到可以改选
     ok(w.delete(pi, bills=[b1, b2], reason="t"))
     ok(w.select(pi, [(b1, 1)], rule_id=rid))
-    assert {x["rule_id"] for x in line_rules(sql, pi).values()} == {rid}
+    assert reg(sql, pi)["rule_id"] == rid
 
 
 def test_generation_blocked_when_rule_prefix_differs_from_pi(w, api, sql):
     """本 PI 已用前缀生成过号后，规则在规则库换了新前缀（另出未归属的版本）：选这条规则报前缀锁定；
-    换前缀之前就选好的物料行预演标「与本 PI 已用前缀不同」，不能生成。"""
+    之后同步进来的单据继承 PI 的规则，预演标「与本 PI 已用前缀不同」，不能生成。"""
     org, pi, b1 = mk(w, ("M1", 2))
     pre = P()
     rid = w.rule(pre, seq_len=5, with_length=False)
@@ -91,14 +91,6 @@ def test_generation_blocked_when_rule_prefix_differs_from_pi(w, api, sql):
     _, _, b2 = mk(w, ("M1", 3), pi=pi, org=org)
     # 新单据的物料行还没选规则：选这条规则（当前版本已换前缀）报前缀锁定
     assert w.select(pi, [(b2, 1)], rule_id=rid).code == "RULE_PI_PREFIX_LOCKED"
-    # 换前缀之前就选好了这条规则的物料行
-    sql.exec(
-        "INSERT INTO sn_line_rule(bill_no, seq, pi_no, rule_id, custom_json, set_by, set_at) "
-        "VALUES (%s, 1, %s, %s, NULL, 'admin', NOW())",
-        b2,
-        pi,
-        rid,
-    )
     p = ok(w.preview(pi, bills=[b2]))
     assert not p["generatable"]
     assert "RULE_PI_PREFIX" in p["issues"][0]["issues"], str(p)
@@ -106,7 +98,7 @@ def test_generation_blocked_when_rule_prefix_differs_from_pi(w, api, sql):
 
 def test_custom_rule_reuses_same_format_rule_and_continues_serials(w, api, sql):
     """自定义规则与规则库里前缀、格式完全相同的规则：归到那条规则下（不另建 PI-PI号-n），别的 PI 已用时共用前缀，
-    流水接在共同的最大号之后；上限自动突破开关照旧记在物料行上。"""
+    流水接在前缀最大号之后；上限自动突破按前缀（默认开启）。"""
     org = w.org(uid("O")[:10])
     _, p1, b1 = mk(w, ("M1", 5), org=org)
     _, p2, b2 = mk(w, ("M1", 3), org=org)
@@ -117,14 +109,12 @@ def test_custom_rule_reuses_same_format_rule_and_continues_serials(w, api, sql):
     rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{p1}-1")
     r = ok(w.select(p2, [(b2, 1)], custom={**c, "seq_grow": True}))["rule"]
     assert (r["rule_id"], r["plan"], r["seq_grow"]) == (rid, "SHARE", True)
-    sel = line_rules(sql, p2)[(b2, 1)]
-    assert sel["rule_id"] == rid and '"seq_grow": true' in sel["custom_json"]
+    assert (reg(sql, p2)["rule_id"], reg(sql, p2)["custom_json"]) == (rid, None)
     w.generate(p2)
     assert [x["sn"] for x in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", p2)] == [
         f"{pre}{i:04d}" for i in (6, 7, 8)
     ]
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{p2}-%") == 0, "不另建规则"
-    assert sql.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s", b2) == '{"seq_grow": true}'
     # 规则库：一个前缀一组，一条规则，两张 PI 都在
     g = group(api, w, pre)
     assert [x["rule"]["id"] for x in g["rules"]] == [rid]
@@ -150,7 +140,7 @@ def test_custom_rule_selected_before_other_pi_generates_is_merged_at_generation(
     w.generate(p2)
     rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{p1}-1")
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{p2}-%") == 0
-    assert line_rules(sql, p2)[(b2, 1)]["rule_id"] == rid
+    assert reg(sql, p2)["rule_id"] == rid
     got = [x["seq_dec"] for x in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", p2)]
     assert got == [3, 4]
     assert group(api, w, pre)["pis"] == sorted([p1, p2])
@@ -166,8 +156,8 @@ def test_changing_rule_of_multi_org_pi_needs_all_orgs(w, api, sql):
     r1, r2 = w.rule(P(), seq_len=5, with_length=False), w.rule(P(), seq_len=5, with_length=False)
     body = {"pi_no": pi, "lines": [{"bill_no": ba, "seq": 1}], "rule_id": r1}
     assert ok(api.post("/api/rules/line-select", body, tok))["lines"] == 2
-    assert {x["rule_id"] for x in line_rules(sql, pi).values()} == {r1}
+    assert reg(sql, pi)["rule_id"] == r1
     ok(api.post("/api/rules/line-select", body, tok))
     assert api.post("/api/rules/line-select", {**body, "rule_id": r2}, tok).code == "FACTORY_FORBIDDEN"
     ok(w.select(pi, [(ba, 1)], rule_id=r2))
-    assert {x["rule_id"] for x in line_rules(sql, pi).values()} == {r2}
+    assert reg(sql, pi)["rule_id"] == r2

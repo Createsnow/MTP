@@ -367,12 +367,10 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
     counts, fills, lens, units = orders.line_extras(keys)
     # 表头客户取本 PI 第一个非空的客户编码（客户编码为空的单据照常列出）
     customer = next((r["customer_code"] for r in snap if r["customer_code"]), None) or orders.customer_of_pi(pi) or ""
-    # 接号的最大号：共用前缀时为 max(本 PI 最大号, 共用前缀的别的 PI 的最大号)，不共用时即本 PI 最大号
-    sh = generate.shared_of(pi)
-    last = generate.after_seq(pi, sh)
+    # 接号的最大号：本 PI 规则前缀的最大号（同一前缀各 PI 共用一套流水）；没选规则为 0
+    prefix = generate.prefix_of(pi)
+    last = rules.prefix_last(prefix)
     ls = {(x.bill_no, x.seq): x for x in generate._load_lines(pi, keys)}
-    # 各物料行下次生成的第一个流水：有预留按预留（含起始号平移），否则最大号 + 1
-    firsts = generate.first_seqs(pi, list(ls.values()), last, sh)
     bills: dict[str, dict] = {}
     for r in snap:
         k = (r["bill_no"], r["seq"])
@@ -395,11 +393,13 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
             r,
             counts.get(k),
             fills.get(k),
-            rules.info(x.res, x.length, firsts.get(k, last + 1), x.unit),
+            rules.info(x.res, x.length, last + 1, x.unit),
             lens.get(k),
             units.get(k),
         )
         v["issues"] = x.issues
+        # 项次拦截（ATTACH_ORDER_BLOCKED）：挡住本行的物料行
+        v["blockers"] = x.blockers
         # 物料行失效（line_void）：整行置灰、不能勾选，不计订单数、可生成
         v["void"] = x.void
         # 金蝶业务状态、领料状态（状态码，空 = 未取到）：生成页「业务状态」列显示
@@ -452,10 +452,10 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
 
     states = changes.bill_states(list(bills))
     # 单据号段：现有号的号段数与枚数、本单据删号腾出的空闲号段数与枚数（单据头标签，点开看明细）
-    gap = generate.gaps_of(pi, sh)
+    gap = generate.gaps_of(pi)
     seg_counts = generate.bill_segment_counts(pi, list(bills), facs)
     free_counts: dict[str, list[int]] = {}
-    for g in generate.free_segments(pi, gap["last_seq"], sh) if gap["truncated"] else gap["segments"]:
+    for g in generate.free_segments(prefix, gap["last_seq"]) if gap["truncated"] else gap["segments"]:
         c = free_counts.setdefault(g["bill_no"], [0, 0])
         c[0] += 1
         c[1] += g["qty"]
@@ -488,8 +488,8 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
                 reverse=True,
             )
         ],
-        # reserve_start：号段预留的预留起号（规则弹窗起始号的默认值；本 PI 还没有预留为 null）
-        "counter": {"last_seq_dec": last, "next_seq": last + 1, "reserve_start": gap["reserve_start"]},
+        # 前缀最大号与下一个号（同一前缀各 PI 共用一套流水）；reserve_start 早先的号段预留已取消，恒为 null
+        "counter": {"last_seq_dec": last, "next_seq": last + 1, "reserve_start": None, "prefix": prefix},
         "summary": {
             "total_qty": sum(b["total_qty"] for b in bills.values()),
             "generated_qty": gen_own([pi], facs).get(pi, 0),

@@ -1,5 +1,5 @@
-"""共用前缀：一个前缀可以给多张 PI 用（流水部分须相同），号不重靠流水——后来的 PI 接在共同的最大号之后，
-不用别的 PI 已用、已预留的流水（别的 PI 删号退回、不在预留里的空号可以用）。不共用前缀时与原来完全相同。"""
+"""共用前缀：一个前缀可以给多张 PI 用（流水部分须相同），同一前缀下各 PI 共用一套流水——接在前缀最大号之后，
+不用别的 PI 已用的流水（删号腾出、跳过的空号同前缀各 PI 都能用）；同前缀的生成由前缀锁串行，确认时自动顺延。"""
 
 from __future__ import annotations
 
@@ -98,9 +98,9 @@ def test_shared_prefix_custom_rule_and_format_lock(w, api, sql):
     assert api.post("/api/rules", body, w.admin).code == "RULE_PREFIX_CONFLICT", "规则库保存：前缀不能与已有前缀相同"
 
 
-def test_shared_prefix_gaps_skip_other_pi_used_and_reserved(w, api, sql):
-    """共用前缀时空号段、手动起止号、所选空号段都不用别的 PI 已用、已预留的流水；别的 PI 跳过 / 退回的空号可以用，
-    用了之后别的 PI 的空号段里也不再列出。"""
+def test_shared_prefix_gaps_skip_other_pi_used(w, api, sql):
+    """同一前缀的空号段、手动起止号、所选空号段按前缀算：别的 PI 已用的流水不能用，跳过 / 删掉腾出的空号同前缀各 PI
+    都能用，用了之后别的 PI 的空号段里也不再列出；预演后别的 PI 先接号，确认时自动顺延。"""
     org, p1, _b1 = mk(w, ("M1", 10))
     _, _, b1b = mk(w, ("M1", 2), pi=p1, org=org)
     _, p2, b2 = mk(w, ("M1", 5), org=org)
@@ -109,42 +109,30 @@ def test_shared_prefix_gaps_skip_other_pi_used_and_reserved(w, api, sql):
     rid = w.rule(pre, seq_len=6, with_length=False)
     ok(w.bind_pi(p1, rid))
     w.generate(p1, bills=[_b1])
-    # 手动起止号 21～22：11～20 成为 PI-1 跳过的空号（不在预留里）
+    # 手动起止号 21～22：11～20 成为跳过的空号
     w.generate(p1, bills=[b1b], seq=(21, 22))
     g1 = ok(api.get(f"/api/generate/gaps?pi={p1}", w.admin))
     assert [(x["start_seq"], x["end_seq"]) for x in g1["segments"]] == [(11, 20)]
     ok(w.bind_pi(p2, rid))
     g2 = ok(api.get(f"/api/generate/gaps?pi={p2}", w.admin))
-    assert (g2["last_seq"], g2["next_seq"]) == (22, 23), "最大号取共同的最大号"
-    assert [(x["start_seq"], x["end_seq"]) for x in g2["segments"]] == [(11, 20)], "PI-1 已用、已预留的不列"
-    # PI-1 已用的流水：手动起止号范围内不用（溢出到最大号之后），选作空号段报无效
+    assert (g2["last_seq"], g2["next_seq"]) == (22, 23), "最大号为前缀最大号"
+    assert [(x["start_seq"], x["end_seq"]) for x in g2["segments"]] == [(11, 20)]
+    # 范围内都是 PI-1 的号：全部溢出，接在最大号之后；选作空号段报无效
     p = ok(w.preview(p2, bills=[b2], seq=(1, 5)))
-    # 范围内都是 PI-1 的号：全部溢出，接在最大号之后（含本次新建的预留 23～29，原有逻辑）
-    assert p["generatable"] and p["items"][0]["segs"] == [[30, 34]] and p["range_qty"] == 0
+    assert p["generatable"] and p["items"][0]["segs"] == [[23, 27]] and p["range_qty"] == 0
     assert w.preview(p2, bills=[b2], seq=(30, 30), gaps=[[3, 4]]).code == "GEN_GAP_INVALID"
-    # PI-1 跳过的空号可以用
+    # 跳过的空号可以用
     w.generate(p2, bills=[b2], seq=(11, 15))
     assert seqs(sql, p2) == list(range(11, 16))
-    # PI-2 用掉的 11～15 不再列给 PI-1；PI-2 这一行原预留 23～27 退回成 PI-2 的空号，PI-1 也可以用
     g1 = ok(api.get(f"/api/generate/gaps?pi={p1}", w.admin))
-    assert [(x["start_seq"], x["end_seq"]) for x in g1["segments"]] == [(16, 20), (23, 27)]
-    # PI-2 另一单据的预留 28～29 不被 PI-1 占：PI-1 按默认接在共同的最大号 29 之后，PI-2 的预演照常有效
+    assert [(x["start_seq"], x["end_seq"]) for x in g1["segments"]] == [(16, 20)]
+    # 预演后 PI-1 先接号：PI-2 确认时自动顺延到新的最大号之后
     token = ok(w.preview(p2, bills=[b2b]))["token"]
     _, _, b1c = mk(w, ("M1", 3), pi=p1, org=org)
     w.generate(p1, bills=[b1c])
-    assert seqs(sql, p1)[-3:] == [30, 31, 32]
+    assert seqs(sql, p1)[-3:] == [23, 24, 25]
     j = ok(api.post("/api/generate/run", m(token=token), w.admin))
-    assert j["status"] == "SUCCESS" and seqs(sql, p2)[-2:] == [28, 29]
-    # PI-2 新加的单据没有预留、接在最大号之后：预演后 PI-1 先接号，PI-2 的预演失效，重新预演接在后面
-    _, _, b2c = mk(w, ("M1", 2), pi=p2, org=org)
-    p = ok(w.preview(p2, bills=[b2c]))
-    assert p["items"][0]["segs"] == [[33, 34]]
-    _, _, b1d = mk(w, ("M1", 3), pi=p1, org=org)
-    w.generate(p1, bills=[b1d])
-    assert seqs(sql, p1)[-3:] == [33, 34, 35]
-    assert api.post("/api/generate/run", m(token=p["token"]), w.admin).code == "GEN_PREVIEW_CHANGED"
-    w.generate(p2, bills=[b2c])
-    assert seqs(sql, p2)[-2:] == [36, 37]
+    assert (j["status"], j["shifted"]) == ("SUCCESS", True) and seqs(sql, p2)[-2:] == [26, 27]
     no_duplicate_sn(sql, pre)
 
 
@@ -202,36 +190,22 @@ def test_prefix_lock_taken_once_per_transaction(app_client):
     h.release()
 
 
-def test_check_shared_rejects_plan_overlapping_other_pi(w, sql):
-    """生成事务内的核对（拿到前缀锁后按最新已提交数据）：计划要占的流水被共用前缀的别的 PI 先用了，报预演已失效。"""
-    import json
-
-    from app.core.exceptions import BizError
-    from app.services import generate
-
-    org, p1, _ = mk(w, ("M1", 4))
-    _, p2, b2 = mk(w, ("M1", 3), org=org)
+def test_confirm_rejected_when_attach_order_changed(w, sql):
+    """确认生成时在前缀锁内按最新数据重算：预演后同前缀别的 PI 选了这个前缀、带更小项次的行，项次拦截变了，
+    报预演已失效（不会顺延着生成）。"""
+    org, p1, b1 = mk(w, ("M1", 2, "100", "2"))
     rid = w.rule(P(), seq_len=6, with_length=False)
     ok(w.bind_pi(p1, rid))
-    w.generate(p1)
+    token = ok(w.preview(p1))["token"]
+    _, p2, _b2 = mk(w, ("M1", 2, "100", "1"), org=org)
     ok(w.bind_pi(p2, rid))
-    token = ok(w.preview(p2))["token"]
-    plan = json.loads(sql.scalar("SELECT plan_json FROM sn_gen_preview WHERE token = %s", token))
-    assert plan["shared_pis"] == [p1] and plan["items"][0]["segs"] == [[5, 7]]
-    generate._check_shared(p2, plan)  # 还没有重叠
-    _, _, b1b = mk(w, ("M1", 2), pi=p1, org=org)
-    w.generate(p1, bills=[b1b])
-    assert seqs(sql, p1)[-2:] == [5, 6]
-    try:
-        generate._check_shared(p2, plan)
-        raise AssertionError("应报预演已失效")
-    except BizError as e:
-        assert e.code == "GEN_PREVIEW_CHANGED"
+    assert w.api.post("/api/generate/run", m(token=token), w.admin).code == "GEN_PREVIEW_CHANGED"
+    assert sql.count("SELECT COUNT(*) FROM sn_item WHERE bill_no = %s", b1) == 0
 
 
 def test_concurrent_generation_on_shared_prefix_never_duplicates(w, sql):
-    """共用前缀的两张 PI 同时按同一个最大号预演、同时确认生成：只有一张成功，另一张报预演已失效（不会撞号），
-    重新预演后接在后面。"""
+    """同一前缀的两张 PI 同时按同一个最大号预演、同时确认生成：前缀锁让两笔串行，后到的按最新的最大号自动顺延，
+    两张都成功、不会撞号。"""
     import threading
 
     org, p1, _ = mk(w, ("M1", 10))
@@ -257,13 +231,7 @@ def test_concurrent_generation_on_shared_prefix_never_duplicates(w, sql):
         t.start()
     for t in ths:
         t.join(120)
-    ok_ = [r for r in out if r.status == 200 and r["status"] == "SUCCESS"]
-    bad = [r for r in out if r not in ok_]
-    assert len(ok_) == 1 and len(bad) == 1, [str(r) for r in out]
-    assert bad[0].code == "GEN_PREVIEW_CHANGED" or (
-        bad[0].status == 200 and bad[0]["error_code"] == "GEN_PREVIEW_CHANGED"
-    ), str(bad[0])
-    loser = p2 if ok_[0] is out[0] else p1
-    w.generate(loser, bills=[b1b] if loser == p1 else None)
+    assert all(r.status == 200 and r["status"] == "SUCCESS" for r in out), [str(r) for r in out]
+    assert sorted(bool(r["shifted"]) for r in out) == [False, True], "后到的一张自动顺延"
     no_duplicate_sn(sql, pre)
     assert sql.count("SELECT COUNT(*) FROM sn_item WHERE sn LIKE %s", pre + "%") == 4010

@@ -74,6 +74,7 @@ export const api = {
   rules: (params?: Q) => get("/rules", params),
   rulePrefixes: (params?: Q) => get("/rules/prefixes", params),
   rulePrefixUsage: (prefix: string) => get("/rules/prefixes/usage", { prefix }),
+  rulePrefixGrow: (data: Q) => put("/rules/prefixes/grow", data),
   createRule: (data: Q) => post("/rules", data),
   updateRule: (id: number, data: Q) => put(`/rules/${id}`, data),
   deleteRule: (id: number) => del(`/rules/${id}`),

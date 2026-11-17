@@ -5,9 +5,9 @@ from fastapi import APIRouter
 
 from app.api.deps import OperatorDep
 from app.schemas.rule import (
-    LineClearIn,
     LineSelectIn,
     PiBindIn,
+    PrefixGrowIn,
     RuleIn,
     RulePreviewIn,
     RuleSpecIn,
@@ -52,6 +52,11 @@ def rule_prefix_usage(cu: OperatorDep, prefix: str | None = None) -> dict:
     return rules.prefix_usage(prefix, cu.read_factories(None))
 
 
+@router.put("/prefixes/grow", summary="前缀的流水上限自动突破开关（作用于这个前缀下的全部 PI；已突破后不能关闭）")
+def rule_prefix_grow(body: PrefixGrowIn, cu: OperatorDep) -> dict:
+    return rules.set_prefix_grow(cu, body.prefix, body.seq_grow)
+
+
 @router.post("", summary="新建规则：PI 选填（一条规则可给多张 PI 用，用在哪些 PI 由生成页选规则决定）")
 def rule_create(body: RuleIn, cu: OperatorDep) -> dict:
     return rules.create(
@@ -88,23 +93,21 @@ def rule_options(cu: OperatorDep, pi: str | None = None, customer: str | None = 
     return rules.options(pi, customer, cu.read_factories(None))
 
 
-@router.post("/line-select", summary="物料行选定 / 改选规则：规则库（rule_id，必要时 new_prefix）或自定义（custom）")
+@router.post(
+    "/line-select",
+    summary="选定 / 改选本 PI 的规则（一个 PI 一个规则前缀）：规则库（rule_id，必要时 new_prefix）或自定义",
+)
 def rule_line_select(body: LineSelectIn, cu: OperatorDep) -> dict:
     lines = [x.model_dump() for x in body.lines or []]
     custom = None if body.custom is None else body.custom.model_dump()
     return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom, body.new_prefix)
 
 
-@router.post("/line-clear", summary="物料行改回按 PI 绑定的默认")
-def rule_line_clear(body: LineClearIn, cu: OperatorDep) -> dict:
-    return rules.clear_lines(cu, body.pi_no, [x.model_dump() for x in body.lines or []])
-
-
-@router.put("/pi-binding", summary="给 PI 绑定规则作各物料行的默认（已归属别的 PI 时默认共用前缀，可填 new_prefix）")
+@router.put("/pi-binding", summary="给 PI 登记规则库规则（已归属别的 PI 时默认共用前缀，可填 new_prefix）")
 def rule_pi_bind(body: PiBindIn, cu: OperatorDep) -> dict:
     return rules.bind_pi(cu, body.pi_no, body.rule_id, body.new_prefix)
 
 
-@router.delete("/pi-binding", summary="解除 PI 绑定：规则转为通用模板，已选过规则的物料行不受影响")
+@router.delete("/pi-binding", summary="解除 PI 的规则登记（本 PI 有号时不能解除）")
 def rule_pi_unbind(cu: OperatorDep, pi: str | None = None) -> dict:
     return rules.unbind_pi(cu, pi)

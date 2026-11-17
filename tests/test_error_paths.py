@@ -55,7 +55,10 @@ def test_preview_expired_changed_and_rule_exhausted(w, sql):
     assert w.generate(pi)["qty"] == 5, "重新预演后按新数量生成"
 
     _, pi2, _ = mk(w, ("M1", 10))
-    ok(w.bind_pi(pi2, w.rule(P(), seq_len=1, with_length=False)))
+    p2 = P()
+    ok(w.bind_pi(pi2, w.rule(p2, seq_len=1, with_length=False)))
+    # 流水上限自动突破按前缀，默认开启；关闭后用尽即报
+    ok(w.api.put("/api/rules/prefixes/grow", m(prefix=p2, seq_grow=False), w.admin))
     r = w.preview(pi2)
     assert r.code == "GEN_RULE_EXHAUSTED" and r.body["params"] == {"max": 9, "end": 10}
 

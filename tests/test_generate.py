@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from conftest import BILLS, m, mark_bill_stat, ok, q, uid, xlsx_rows
 
 
@@ -313,7 +311,7 @@ def test_custom_rule_saved_only_after_success(w, sql):
     r = sql.one("SELECT * FROM sn_rule")
     assert r["rule_name"] == f"{pi}_v1" and r["rule_code"] == f"PI-{pi}-1"
     assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec LIMIT 1", pi) == f"{p}00000110.50"
-    assert sql.scalar("SELECT rule_id FROM sn_line_rule WHERE bill_no = %s", bill) == r["id"]
+    assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) == r["id"], "PI 登记改记为存入的规则"
 
 
 def test_custom_rule_names_follow_code_number(w, sql):
@@ -330,14 +328,14 @@ def test_custom_rule_names_follow_code_number(w, sql):
 
 
 def test_custom_rule_shared_by_lines_generated_separately(w, sql):
-    """同一 PI 的两行选了同一自定义规则、分两次生成：第一次生成后两行都改记为存入的规则，第二次接着用这一版。"""
+    """同一 PI 选了自定义规则、分两次生成：第一次生成后 PI 登记改记为存入的规则，第二次接着用这一版。"""
     org, pi, bill = mk(w, ("M1", 3), ("M2", 2))
     p = P()
     ok(w.select(pi, [(bill, 1), (bill, 2)], custom=m(prefix=p, base=10, seq_len=6, with_length=False)))
     w.generate(pi, lines=[(bill, 1)])
     rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
-    rows = sql.all("SELECT seq, rule_id, custom_json FROM sn_line_rule WHERE bill_no = %s ORDER BY seq", bill)
-    assert [(r["rule_id"], r["custom_json"]) for r in rows] == [(rid, None), (rid, None)]
+    row = sql.one("SELECT rule_id, custom_json FROM sn_pi_rule WHERE pi_no = %s", pi)
+    assert (row["rule_id"], row["custom_json"]) == (rid, None)
     w.generate(pi, lines=[(bill, 2)])
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
@@ -368,7 +366,7 @@ def test_pi_bills_share_first_bill_prefix(w, api, sql):
     _, _, second = mk(w, ("M2", 3), pi=pi, org=org, bill="MOB" + stem)
     prefix = first[-7:]
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
-    assert ctx["rule_prefix"] == {"prefix": prefix, "custom": None}
+    assert (ctx["rule_prefix"]["prefix"], ctx["rule_prefix"]["custom"]) == (prefix, None)
     c = m(prefix=prefix, base=10, seq_len=4, with_length=False)
     ok(w.select(pi, [(first, 1)], custom=c))
     w.generate(pi, lines=[(first, 1)])
@@ -378,7 +376,7 @@ def test_pi_bills_share_first_bill_prefix(w, api, sql):
     assert w.select(pi, [(second, 1)], custom={**c, "seq_len": 5}).code == "RULE_PREFIX_FORMAT_LOCKED"
     ok(w.select(pi, [(second, 1)], custom=ctx["rule_prefix"]["custom"]))
     rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
-    assert sql.scalar("SELECT rule_id FROM sn_line_rule WHERE bill_no = %s AND seq = 1", second) == rid
+    assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) == rid
     w.generate(pi, lines=[(second, 1)])
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
@@ -420,18 +418,21 @@ def test_pi_prefix_follows_first_bill_before_any_sn(w, api):
     （单据编号最小）编码后 7 位，只在取不到点选的单据时兜底。"""
     stem = uid("").replace("-", "")
     org, pi, b = mk(w, ("M1", 2), bill="MO" + stem + "2")
-    assert ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"] == {"prefix": b[-7:], "custom": None}
+    rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
+    assert (rp["prefix"], rp["custom"], rp["registered"]) == (b[-7:], None, False)
     _, _, a = mk(w, ("M1", 1), pi=pi, org=org, bill="MO" + stem + "1")
-    assert ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"] == {"prefix": a[-7:], "custom": None}
+    rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
+    assert (rp["prefix"], rp["custom"]) == (a[-7:], None)
 
 
-def test_pi_prefix_saved_rule_not_generated_is_not_used(w, api):
-    """只给物料行保存了规则、还没有生成：不算已用，下一张单据仍按点选的第一个单据取默认前缀（custom 为 None）。"""
+def test_pi_prefix_registered_on_select(w, api):
+    """选了规则即登记在 PI 上（一个 PI 一个规则前缀）：还没生成也按登记的前缀与格式，下一张单据沿用。"""
     stem = uid("").replace("-", "")
     org, pi, a = mk(w, ("M1", 2), bill="MO" + stem + "1")
     mk(w, ("M1", 1), pi=pi, org=org, bill="MO" + stem + "2")
     ok(w.select(pi, [(a, 1)], custom=m(prefix=a[-7:], base=10, seq_len=4, with_length=False)))
-    assert ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]["custom"] is None
+    rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
+    assert (rp["prefix"], rp["custom"]["seq_len"], rp["registered"]) == (a[-7:], 4, True)
 
 
 def test_pi_prefix_hand_typed_prefix_is_reused(w, api, sql):
@@ -451,7 +452,7 @@ def test_pi_prefix_hand_typed_prefix_is_reused(w, api, sql):
 
 
 def test_pi_prefix_kept_until_all_sns_deleted(w, api):
-    """已生成的号没有全部删掉：继续沿用这个前缀；全部删掉后按默认规则（custom 为 None，页面取点选的第一个单据）。"""
+    """已生成的号没有全部删掉：前缀锁定、继续沿用；全部删掉后登记仍在（默认仍是它），但可以改选别的前缀。"""
     stem = uid("").replace("-", "")
     org, pi, a = mk(w, ("M1", 3), bill="MO" + stem + "1")
     hand = P()
@@ -460,13 +461,18 @@ def test_pi_prefix_kept_until_all_sns_deleted(w, api):
     ok(w.delete(pi, start_sn=f"{hand}0001", end_sn=f"{hand}0002", reason="t"))
     rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
     assert rp["prefix"] == hand and rp["custom"] is not None, "还剩 1 个号：沿用"
+    assert w.select(pi, [(a, 1)], custom=m(prefix=P(), base=10, seq_len=4, with_length=False)).code == (
+        "RULE_PI_PREFIX_LOCKED"
+    )
     ok(w.delete(pi, lines=[(a, 1)], reason="t"))
-    assert ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"] == {"prefix": a[-7:], "custom": None}
+    rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
+    assert (rp["prefix"], rp["registered"]) == (hand, True)
+    ok(w.select(pi, [(a, 1)], custom=m(prefix=P(), base=10, seq_len=4, with_length=False)))
 
 
 def test_custom_prefix_taken_before_run_reports_conflict(w, api):
     """确认生成时再查前缀能否用：预演后前缀被别的 PI 按别的位数先用，生成报格式锁定（页面弹窗），不只是「预演已改变」；
-    同格式时可共用，但流水要接在别的 PI 之后，原预演已失效。"""
+    同格式时共用前缀，确认时自动顺延到别的 PI 之后（shifted）。"""
     _, pa, ba = mk(w, ("M1", 2))
     _, pb, bb = mk(w, ("M1", 2))
     _, pc, bc = mk(w, ("M1", 2))
@@ -479,28 +485,27 @@ def test_custom_prefix_taken_before_run_reports_conflict(w, api):
     w.generate(pa)
     r = api.post("/api/generate/run", m(token=token), w.admin)
     assert r.code == "RULE_PREFIX_FORMAT_LOCKED"
-    assert api.post("/api/generate/run", m(token=token_c), w.admin).code == "GEN_PREVIEW_CHANGED"
+    j = ok(api.post("/api/generate/run", m(token=token_c), w.admin))
+    assert (j["status"], j["shifted"], j["start_seq_dec"], j["end_seq_dec"]) == ("SUCCESS", True, 3, 4)
 
 
 def test_custom_rule_seq_start(w, api, sql):
-    """自定义规则可手动指定起始号：首次生成从最大号之后编号时第一个号不小于它，跳过的流水成为空号段；
-    同格式没填起始号的物料行与它是同一条规则，排在其后接着编。"""
+    """自定义规则可手动指定起始号（登记在 PI 上）：下一次生成从前缀最大号之后编号时第一个号不小于它，
+    跳过的流水成为空号段；生成后起始号清掉。"""
     org, pi, bill = mk(w, ("M1", 3), ("M2", 2))
     p = P()
     c = m(prefix=p, base=10, seq_len=4, with_length=False)
     ok(w.select(pi, [(bill, 1)], custom={**c, "seq_start": 101}))
-    ok(w.select(pi, [(bill, 2)], custom=c))
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     rule1 = next(x for b in ctx["bills"] for x in b["lines"] if x["seq"] == 1)["rule"]
     assert rule1["seq_start"] == 101 and rule1["first_sn"] == f"{p}0101"
     w.generate(pi)
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert sns == [f"{p}{i:04d}" for i in range(101, 106)]
-    # 起始号不同仍是同一条规则
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
     rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
-    rows = sql.all("SELECT rule_id, custom_json FROM sn_line_rule WHERE bill_no = %s ORDER BY seq", bill)
-    assert [(r["rule_id"], r["custom_json"]) for r in rows] == [(rid, None), (rid, None)]
+    row = sql.one("SELECT rule_id, custom_json, seq_start FROM sn_pi_rule WHERE pi_no = %s", pi)
+    assert (row["rule_id"], row["custom_json"], row["seq_start"]) == (rid, None, None)
     g = ok(api.get(f"/api/generate/gaps?pi={pi}", w.admin))
     assert (g["next_seq"], g["total"], g["segments"][0]["start_seq"], g["segments"][0]["end_seq"]) == (106, 100, 1, 100)
 
@@ -519,9 +524,8 @@ def test_custom_rule_seq_start_validation_and_sample(w, api):
 
 
 def test_custom_rule_seq_start_with_range_and_used_prefix(w, api, sql):
-    """手动起止号时范围内的空闲流水先用，溢出部分才按起始号；第一次生成就建号段预留（预留起号 1）；
-    本 PI 已用过这个前缀时，填了起始号的物料行按「新号 = 预留号 − 预留起号 + 起始号」平移（物料行仍记那条规则，
-    起始号另记、生成一次后清掉），原预留与跳过的流水成为空号段；没填起始号的按预留号段生成。"""
+    """手动起止号时范围内的空闲流水先用，溢出部分才按起始号；本 PI 已用过这个前缀时，同格式填了起始号沿用那条规则，
+    起始号登记在 PI 上、生成一次后清掉；起始号不大于下一个号时不起作用。"""
     org, pi, bill = mk(w, ("M1", 4), ("M2", 2), ("M3", 2), ("M4", 2))
     p = P()
     c = m(prefix=p, base=10, seq_len=4, with_length=False)
@@ -529,48 +533,36 @@ def test_custom_rule_seq_start_with_range_and_used_prefix(w, api, sql):
     w.generate(pi, lines=[(bill, 1)], seq=(1, 2))
     seqs = [r["seq_dec"] for r in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert seqs == [1, 2, 50, 51]
-    # 预留：序号 1 放弃（1～4 → 实际 1、2、50、51），序号 2、3、4 依次 5～6、7～8、9～10
     g = ok(api.get(f"/api/generate/gaps?pi={pi}", w.admin))
-    assert g["reserve_start"] == 1 and [(x["seq"], x["start_seq"], x["end_seq"]) for x in g["reserved"]] == [
-        (2, 5, 6),
-        (3, 7, 8),
-        (4, 9, 10),
-    ]
+    assert (g["reserve_start"], g["reserved"], [(x["start_seq"], x["end_seq"]) for x in g["segments"]]) == (
+        None,
+        [],
+        [(3, 49)],
+    )
     rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
-    # 已用前缀、起始号大于接续的下一个号（52）：沿用那条规则，起始号另记在物料行
+    # 已用前缀、起始号大于接续的下一个号（52）：沿用那条规则，起始号登记在 PI 上
     ok(w.select(pi, [(bill, 2)], custom={**c, "seq_start": 500}))
-    row = sql.one("SELECT rule_id, custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 2", bill)
-    assert (row["rule_id"], json.loads(row["custom_json"])) == (rid, {"seq_start": 500})
+    row = sql.one("SELECT rule_id, seq_start FROM sn_pi_rule WHERE pi_no = %s", pi)
+    assert (row["rule_id"], row["seq_start"]) == (rid, 500)
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     rule2 = next(x for b in ctx["bills"] for x in b["lines"] if x["seq"] == 2)["rule"]
-    # 平移：预留 5～6 → 5 − 1 + 500 = 504～505
-    assert (rule2["plan"], rule2["rule_id"], rule2["seq_start"], rule2["first_sn"]) == ("USE", rid, 500, f"{p}0504")
+    assert (rule2["plan"], rule2["rule_id"], rule2["seq_start"], rule2["first_sn"]) == ("USE", rid, 500, f"{p}0500")
     w.generate(pi, lines=[(bill, 2)])
     seqs = [r["seq_dec"] for r in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
-    assert seqs == [1, 2, 50, 51, 504, 505]
+    assert seqs == [1, 2, 50, 51, 500, 501]
     assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1, "不另建规则"
-    row = sql.one("SELECT rule_id, custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 2", bill)
-    assert (row["rule_id"], row["custom_json"]) == (rid, None), "起始号只管这一次生成"
+    assert sql.scalar("SELECT seq_start FROM sn_pi_rule WHERE pi_no = %s", pi) is None, "起始号只管这一次生成"
     gaps = ok(api.get(f"/api/generate/gaps?pi={pi}", w.admin))
-    assert [(g["start_seq"], g["end_seq"]) for g in gaps["segments"]] == [(3, 6), (11, 49), (52, 503)], (
-        "序号 1 原预留 3～4、序号 2 原预留 5～6 退回，跳过的流水成为空号段"
-    )
-    # 序号 3 起始号 10：预留 7～8 平移到 16～17（落在空号段里）；序号 4 没填起始号：按预留 9～10，custom_json 为空
+    assert [(g["start_seq"], g["end_seq"]) for g in gaps["segments"]] == [(3, 49), (52, 499)]
+    # 起始号 10 不大于下一个号（502）：不起作用，接着最大号编
     ok(w.select(pi, [(bill, 3)], custom={**c, "seq_start": 10}))
-    ok(w.select(pi, [(bill, 4)], custom=c))
-    assert sql.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 4", bill) is None
     w.generate(pi, lines=[(bill, 3), (bill, 4)])
     seqs = [r["seq_dec"] for r in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
-    assert seqs == [1, 2, 9, 10, 16, 17, 50, 51, 504, 505]
-    assert sql.count("SELECT COUNT(*) FROM sn_line_rule WHERE bill_no = %s AND custom_json IS NOT NULL", bill) == 0
-    # 平移后与已有的号重叠：不能生成
-    ok(w.delete(pi, lines=[(bill, 4)]))
-    ok(w.select(pi, [(bill, 4)], custom={**c, "seq_start": 42}))
-    assert w.preview(pi, lines=[(bill, 4)]).code == "GEN_SHIFT_CONFLICT", "9～10 平移到 50～51，与序号 1 的号重叠"
+    assert seqs == [1, 2, 50, 51, 500, 501, 502, 503, 504, 505]
 
 
 def test_used_prefix_seq_start_cleared_by_reselect(w, api, sql):
-    """已用前缀另记的起始号：改选（同格式不填起始号、或改用规则库的规则）即清掉；起始号超过最大流水不能保存。"""
+    """已用前缀登记的起始号：改选（同格式不填起始号）即清掉；起始号超过最大流水不能保存。"""
     org, pi, bill = mk(w, ("M1", 2), ("M2", 2))
     p = P()
     c = m(prefix=p, base=10, seq_len=2, with_length=False)
@@ -578,9 +570,9 @@ def test_used_prefix_seq_start_cleared_by_reselect(w, api, sql):
     w.generate(pi, lines=[(bill, 1)])
     assert w.select(pi, [(bill, 2)], custom={**c, "seq_start": 100}).code == "RULE_SEQ_START_INVALID"
     ok(w.select(pi, [(bill, 2)], custom={**c, "seq_start": 40}))
-    assert sql.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 2", bill) is not None
+    assert sql.scalar("SELECT seq_start FROM sn_pi_rule WHERE pi_no = %s", pi) == 40
     ok(w.select(pi, [(bill, 2)], custom=c))
-    assert sql.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 2", bill) is None
+    assert sql.scalar("SELECT seq_start FROM sn_pi_rule WHERE pi_no = %s", pi) is None
     w.generate(pi, lines=[(bill, 2)])
     seqs = [r["seq_dec"] for r in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert seqs == [1, 2, 3, 4]
@@ -624,7 +616,9 @@ def test_generation_takes_whole_lines(w, api, sql):
         w.admin,
     )
     p = ok(r)
-    assert p["qty"] == 12 and [(x["seq"], x["qty"]) for x in p["items"]] == [(1, 7), (2, 5)], "不填数量，每行整行生成"
+    assert p["qty"] == 12 and [(x["seq"], x["qty"]) for x in p["items"]] == [(2, 5), (1, 7)], (
+        "不填数量，每行整行生成；同项次按点击先后"
+    )
     w.generate(pi, lines=[(bill, 2), (bill, 1)])
     c = {r["seq"]: r["own_generated"] for r in sql.all("SELECT * FROM sn_line_count WHERE bill_no = %s", bill)}
     assert c == {1: 7, 2: 5}
@@ -640,11 +634,18 @@ def test_preview_lists_reasons(w, api):
     assert p["generatable"] is False
     got = {x["seq"]: x["issues"] for x in p["issues"]}
     assert got == {1: ["LENGTH_EMPTY"], 3: ["ATTACH_EMPTY"]}, "金蝶米数为空须填写（有值的原样用），附件项次必填"
+    ok(api.put("/api/orders/attach", m(bill_no=bill, seq=3, value="9"), w.admin))
+    p = ok(w.preview(pi, lines=[(bill, 3), (bill, 2)]))
+    assert p["issues"][0]["issues"] == ["ATTACH_ORDER_BLOCKED"], "项次 9 被项次 1 没生成完的序号 1 挡住"
+    assert [x["seq"] for x in p["issues"][0]["blockers"]] == [1]
+    assert ok(w.preview(pi, lines=[(bill, 2)]))["generatable"] is True, "可缩小范围"
     ok(api.put("/api/orders/attach", m(bill_no=bill, seq=3, value="A9"), w.admin))
-    assert ok(w.preview(pi, lines=[(bill, 3)]))["generatable"] is True, "填写附件项次后可以生成；可缩小范围"
+    p = ok(w.preview(pi, lines=[(bill, 3)]))
+    assert p["issues"][0]["issues"] == ["ATTACH_NOT_NUMERIC"], "附件项次须为数字"
+    ok(api.put("/api/orders/attach", m(bill_no=bill, seq=3, value="9"), w.admin))
     assert ok(w.preview(pi))["generatable"] is False
-    r = ok(api.put("/api/orders/attach", m(bill_no=bill, seq=1, value="A9"), w.admin))
-    assert (r["attach_no"], r["attach_source"]) == ("A9", "MANUAL"), "金蝶有附件项次也可改，页面值优先"
+    r = ok(api.put("/api/orders/attach", m(bill_no=bill, seq=1, value="9"), w.admin))
+    assert (r["attach_no"], r["attach_source"]) == ("9", "MANUAL"), "金蝶有附件项次也可改，页面值优先"
     r = ok(api.put("/api/orders/attach", m(bill_no=bill, seq=1, value=""), w.admin))
     assert (r["attach_no"], r["attach_source"]) == ("1", "K3"), "留空改回金蝶值"
     assert api.put("/api/orders/attach", m(bill_no=bill, seq=3, value=""), w.admin).code == "ATTACH_INVALID", (
@@ -667,12 +668,12 @@ def test_attach_and_length_locked_once_line_has_sns(w, api, sql):
     p = P()
     ok(w.bind_pi(pi, w.rule(p)))
     for seq in (1, 2):
-        ok(api.put("/api/orders/attach", m(bill_no=bill, seq=seq, value="A1"), w.admin))
+        ok(api.put("/api/orders/attach", m(bill_no=bill, seq=seq, value="1"), w.admin))
         ok(api.put("/api/orders/length", m(bill_no=bill, seq=seq, value="000"), w.admin))
     j = w.generate(pi, lines=[(bill, 1)])
     line = {x["seq"]: x for x in ok(api.get(f"/api/orders/{bill}/lines", w.admin))["lines"]}
     assert (line[1]["edit_lock"], line[2]["edit_lock"]) == ("GENERATED", None)
-    assert api.put("/api/orders/attach", m(bill_no=bill, seq=1, value="A2"), w.admin).code == "LINE_EDIT_GENERATED"
+    assert api.put("/api/orders/attach", m(bill_no=bill, seq=1, value="2"), w.admin).code == "LINE_EDIT_GENERATED"
     assert api.put("/api/orders/length", m(bill_no=bill, seq=1, value="5"), w.admin).code == "LINE_EDIT_GENERATED"
     # 订单数量增加后，同一物料行接着生成新增的额度
     BILLS[bill]["TreeEntity"][0]["Qty"] = 6.0
@@ -686,17 +687,17 @@ def test_attach_and_length_locked_once_line_has_sns(w, api, sql):
         f"{p}000002000",
         f"{p}000003000",
         f"{p}000004000",
-        f"{p}000007000",
-        f"{p}000008000",
-    ], "同一物料行接着生成仍用锁定的米数；预留 1～4 用完，新增的 2 枚接在最大号之后（5～6 是序号 2 的预留）"
-    # 删掉该行的号后可修改，再生成用新值；删掉的流水仍是该行的预留，再生成回到原号段
+        f"{p}000005000",
+        f"{p}000006000",
+    ], "同一物料行接着生成仍用锁定的米数；新增的 2 枚接在前缀最大号之后"
+    # 删掉该行的号后可修改，再生成用新值；删掉的流水成为空号段，再生成接在最大号之后
     assert j["status"] == "SUCCESS"
     ok(w.delete(pi, lines=[(bill, 1)], reason="改米数"))
     r = ok(api.put("/api/orders/length", m(bill_no=bill, seq=1, value="5"), w.admin))
     assert (r["length"], r["edit_lock"]) == ("5", None)
     w.generate(pi, lines=[(bill, 1)])
     assert sql.scalar("SELECT sn FROM sn_item WHERE bill_seq = 1 AND pi_no = %s ORDER BY seq_dec LIMIT 1", pi) == (
-        f"{p}0000015"
+        f"{p}0000075"
     )
     w.allocate(pi)
     line = {x["seq"]: x for x in ok(api.get(f"/api/orders/{bill}/lines", w.admin))["lines"]}
@@ -708,12 +709,13 @@ def test_attach_and_length_locked_once_line_has_sns(w, api, sql):
 
 
 def test_revoke_config_resets_lines_without_sns(w, api, sql):
-    """待处理页签撤销配置：没有号的物料行，物料行规则、手填的附件项次、米数和产品单位恢复为未配置；有号的行跳过。"""
+    """待处理页签撤销配置：没有号的物料行，手填的附件项次、米数和产品单位恢复为未配置（规则登记在 PI 上，不撤）；
+    有号的行跳过。"""
     org, pi, bill = mk(w, ("M1", 2, "", ""), ("M2", 2, "", "", "条"), ("M3", 2, "", ""))
     ok(w.bind_pi(pi, w.rule(P())))
     ok(w.select(pi, [(bill, 2), (bill, 3)], w.rule(P())))
     for seq in (1, 2, 3):
-        ok(api.put("/api/orders/attach", m(bill_no=bill, seq=seq, value="A1"), w.admin))
+        ok(api.put("/api/orders/attach", m(bill_no=bill, seq=seq, value="1"), w.admin))
     ok(api.put("/api/orders/length", m(bill_no=bill, seq=2, value="7"), w.admin))
     ok(api.put("/api/orders/unit", m(bill_no=bill, seq=2, value="M"), w.admin))
     ok(api.put("/api/orders/length", m(bill_no=bill, seq=3, value="8"), w.admin))
@@ -728,13 +730,13 @@ def test_revoke_config_resets_lines_without_sns(w, api, sql):
     after = lines()
     assert [(after[s]["attach_source"], after[s]["length_source"]) for s in (1, 2)] == [("EMPTY", "EMPTY")] * 2
     assert (after[2]["unit"], after[2]["unit_source"], after[2]["unit_manual"]) == ("条", "K3", None)
-    assert sql.count("SELECT COUNT(*) FROM sn_line_rule WHERE bill_no = %s", bill) == 1, "有号的行规则不动"
+    assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) is not None, "PI 的规则登记不动"
     assert (after[3]["attach_no"], after[3]["edit_lock"]) == (before[3]["attach_no"], "GENERATED")
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     issues = {x["seq"]: x["issues"] for x in ctx["bills"][0]["lines"]}
-    assert issues[1] == issues[2] == ["LENGTH_EMPTY", "ATTACH_EMPTY"], "规则改回按 PI 绑定，米数、附件项次待填写"
+    assert issues[1] == issues[2] == ["LENGTH_EMPTY", "ATTACH_EMPTY"], "米数、附件项次待填写"
     a = sql.one("SELECT * FROM sn_audit WHERE action = 'LINE_CONFIG_REVOKE' AND result = 'OK' AND pi_no = %s", pi)
-    assert a["qty"] == 2 and a["bill_no"] == bill and f"{bill}/2:rule+attach+length+unit" in a["detail"]
+    assert a["qty"] == 2 and a["bill_no"] == bill and f"{bill}/2:attach+length+unit" in a["detail"]
     r = ok(api.post(url, m(pi_no=pi, lines=[m(bill_no=bill, seq=1)]), w.admin))
     assert r["revoked"] == 0, "没有可撤的配置"
 
@@ -792,21 +794,21 @@ def test_whole_bill_order(w, sql):
 
 
 def test_gen_order_bills_by_pick_then_attach_as_number_ties_by_line(w, api, sql):
-    """排号顺序：不分单据按附件项次（按数字比，2 在 10 前），项次相同按单据勾选 / 点选先后，同一单据内按行号；
-    页面改过的项次照样参与排序。"""
-    org, pi, a = mk(w, ("M1", 2, "100", "10"), ("M2", 2, "100", "2"), ("M3", 2, "100", "02"), ("M4", 2, "100", "A"))
+    """排号顺序：不分单据按附件项次（按数字比，2 在 10 前），项次相同时勾整单按单据勾选先后、同一单据内按行号，
+    点选物料行按点击先后；页面改过的项次照样参与排序。"""
+    org, pi, a = mk(w, ("M1", 2, "100", "10"), ("M2", 2, "100", "2"), ("M3", 2, "100", "02"), ("M4", 2, "100", "20"))
     _, _, b = mk(w, ("M5", 1, "100", "5"), ("M6", 1, "100", "1"), pi=pi, org=org)
     ok(w.bind_pi(pi, w.rule(P())))
     p = ok(w.preview(pi, bills=[b, a]))
     assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 2), (a, 2), (a, 3), (b, 1), (a, 1), (a, 4)], (
-        "不分单据按项次 1、2、02、5、10、A；2 与 02 相同（同一单据）按行号；不是数字的排最后"
+        "不分单据按项次 1、2、02、5、10、20；2 与 02 相同（同一单据）按行号"
     )
-    p = ok(w.preview(pi, lines=[(a, 1), (b, 1), (a, 4), (b, 2)]))
-    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 2), (b, 1), (a, 1), (a, 4)], (
-        "点选：与点选先后无关，仍按附件项次 1、5、10、A"
+    p = ok(w.preview(pi, lines=[(a, 1), (b, 1), (a, 4), (b, 2), (a, 3), (a, 2)]))
+    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 2), (a, 3), (a, 2), (b, 1), (a, 1), (a, 4)], (
+        "点选：不同项次仍按附件项次 1、2、5、10、20，同项次（2 与 02）按点击先后"
     )
     ok(api.put("/api/orders/attach", m(bill_no=a, seq=1, value="1"), w.admin))
-    j = w.generate(pi, bills=[a])
+    j = w.generate(pi, bills=[a, b])
     assert j["start_seq_dec"] == 1
     rows = {
         r["bill_seq"]: (r["a"], r["b"], r["attach_no"])
@@ -816,12 +818,11 @@ def test_gen_order_bills_by_pick_then_attach_as_number_ties_by_line(w, api, sql)
             a,
         )
     }
-    assert rows == {1: (1, 2, "1"), 2: (4, 5, "2"), 3: (6, 7, "02"), 4: (9, 10, "A")}, (
-        "金蝶值改成 1 后排第一，号上写页面值；单据 b 没勾选也预留了位置：b-2（项次 1、行号 2）3、b-1（项次 5）8"
+    assert rows == {1: (1, 2, "1"), 2: (4, 5, "2"), 3: (6, 7, "02"), 4: (9, 10, "20")}, (
+        "金蝶值改成 1 后排第一（同项次 a 先勾选排在 b-2 之前），号上写页面值"
     )
-    w.generate(pi, bills=[b])
     seqs = {r["bill_seq"]: r["seq_dec"] for r in sql.all("SELECT bill_seq, seq_dec FROM sn_item WHERE bill_no = %s", b)}
-    assert seqs == {2: 3, 1: 8}, "之后单独生成 b：用预留号段，整张 PI 1～10 按附件项次接号"
+    assert seqs == {2: 3, 1: 8}
 
 
 def test_gen_order_attach_first_across_bills_and_orgs(w, sql):
@@ -853,15 +854,18 @@ def test_gen_order_attach_first_across_bills_and_orgs(w, sql):
 
 
 def test_gen_order_same_attach_bill_by_pick_then_line(w, sql):
-    """同一项次有多张单据、每张多行：先点选的单据把该项次的行（按行号）排完，再接下一张单据，该项次排完再排下一个项次。
-    单据 A：行1 项次2、行2 项次1、行3 项次1；单据 B：行1 项次1、行2 项次2。先点 A 再点 B：A-2、A-3、B-1、A-1、B-2。"""
+    """同一项次有多张单据、每张多行：勾整单时先勾的单据把该项次的行（按行号）排完，再接下一张单据，该项次排完再排
+    下一个项次。单据 A：行1 项次2、行2 项次1、行3 项次1；单据 B：行1 项次1、行2 项次2。先勾 A 再勾 B：
+    A-2、A-3、B-1、A-1、B-2。"""
     _, pi, a = mk(w, ("M1", 2, "100", "2"), ("M2", 2, "100", "1"), ("M3", 2, "100", "1"))
     _, _, b = mk(w, ("M4", 2, "100", "1"), ("M5", 2, "100", "2"), pi=pi)
     ok(w.bind_pi(pi, w.rule(P())))
     want = [(a, 2), (a, 3), (b, 1), (a, 1), (b, 2)]
     assert [(x["bill_no"], x["seq"]) for x in ok(w.preview(pi, bills=[a, b]))["items"]] == want
     p = ok(w.preview(pi, lines=[(a, 1), (b, 2), (b, 1), (a, 2), (a, 3)]))
-    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == want, "点选物料行：单据按第一次点选的先后"
+    assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 1), (a, 2), (a, 3), (a, 1), (b, 2)], (
+        "点选物料行：同项次严格按点击先后，不按单据分组"
+    )
     p = ok(w.preview(pi, bills=[b, a]))
     assert [(x["bill_no"], x["seq"]) for x in p["items"]] == [(b, 1), (a, 2), (a, 3), (b, 2), (a, 1)], "先点 B 再点 A"
     w.generate(pi, bills=[a, b])
@@ -876,14 +880,18 @@ def test_gen_order_same_attach_bill_by_pick_then_line(w, sql):
     assert rows == {(a, 2): (1, 2), (a, 3): (3, 4), (b, 1): (5, 6), (a, 1): (7, 8), (b, 2): (9, 10)}
 
 
-def test_reserve_same_attach_picked_bill_first_then_others(w, sql):
-    """第一次只生成 A：整张 PI 预留时同一项次内 A（本次勾选）的行先排完，再排没勾选的 B（按单据编号）；
-    之后单独生成 B 回到预留号段。"""
+def test_attach_order_within_pi_across_bills(w, sql):
+    """同一 PI 分几次生成也按项次先后：只勾 A 时 A 的项次 2 被 B 没生成的项次 1 挡住；
+    先生成 A、B 的项次 1，再生成项次 2，整张 PI 按项次接号。"""
     _, pi, a = mk(w, ("M1", 2, "100", "2"), ("M2", 2, "100", "1"), ("M3", 2, "100", "1"))
     _, _, b = mk(w, ("M4", 2, "100", "1"), ("M5", 2, "100", "2"), pi=pi)
     ok(w.bind_pi(pi, w.rule(P())))
-    w.generate(pi, bills=[a])
-    w.generate(pi, bills=[b])
+    p = ok(w.preview(pi, bills=[a]))
+    assert {(x["bill_no"], x["seq"]): x["issues"] for x in p["issues"]} == {(a, 1): ["ATTACH_ORDER_BLOCKED"]}
+    assert [(x["bill_no"], x["seq"]) for x in p["issues"][0]["blockers"]] == [(b, 1)]
+    w.generate(pi, lines=[(a, 2), (a, 3)])
+    w.generate(pi, lines=[(b, 1)])
+    w.generate(pi, bills=[a, b])
     rows = {
         (r["bill_no"], r["bill_seq"]): (r["a"], r["b"])
         for r in sql.all(
@@ -910,7 +918,7 @@ def test_preview_invalidated_by_other_generation(w, api):
     p = ok(w.preview(pi))
     w.generate(pi, lines=[(bill, 2)])
     r = api.post("/api/generate/run", m(token=p["token"]), w.admin)
-    assert r.code == "GEN_PREVIEW_STALE"
+    assert r.code == "GEN_PREVIEW_CHANGED", "预演里的物料行已生成过，计划变了"
 
 
 def test_preview_single_use_and_max(w, api, monkeypatch):

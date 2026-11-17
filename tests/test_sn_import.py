@@ -201,11 +201,11 @@ def test_template_marks_required_columns(w, api, sql):
 
 
 def test_check_lists_every_bad_row_and_import_is_all_or_nothing(w, api, sql):
-    org, pi, bill = mk(w, ("M1", 2), ("M2", 2, "200", "A2"))
+    org, pi, bill = mk(w, ("M1", 2), ("M2", 2, "200", "22"))
     org2, pi2, bill2 = mk(w, ("M1", 1))
     _, pi3, bill3 = mk(w, ("M3", 1, "", ""), org=org)
     # 另一张已生成的单据：号在号池里，单据本身也不能再导入
-    _, pig, billg = mk(w, ("M1", 1), ("M2", 1, "200", "A2"), org=org)
+    _, pig, billg = mk(w, ("M1", 1), ("M2", 1, "200", "22"), org=org)
     p = "I" + uid("").replace("-", "")
     ok(w.bind_pi(pig, w.rule(p, with_length=False, pi=pig)))
     w.generate(pig, lines=[(billg, 1)])
@@ -227,7 +227,7 @@ def test_check_lists_every_bad_row_and_import_is_all_or_nothing(w, api, sql):
         rec(pi, bill, uid("S"), org, seq="9"),  # 14 行号不在单据里
         rec(pi, bill, uid("S"), org, seq="x"),  # 15 行号不是正整数
         rec(pi, bill, uid("S"), org, material="M2"),  # 16 第 1 行不是 M2
-        rec(pi, bill, uid("S"), org, seq="2", material="M2", attach="A9", length="200"),  # 17 附件项次不符
+        rec(pi, bill, uid("S"), org, seq="2", material="M2", attach="29", length="200"),  # 17 附件项次不符
         rec(pi, bill, uid("S"), org, length="150"),  # 18 米数不符
         rec(pi3, bill3, uid("S"), org, material="M3", attach="Z1", length=""),  # 19 该行没有附件项次：不能导入
         rec(pi, bill, uid("S"), org, base="8"),  # 20 进制不对
@@ -236,7 +236,7 @@ def test_check_lists_every_bad_row_and_import_is_all_or_nothing(w, api, sql):
         rec(pi, bill, uid("S"), org, base="32", serial="00000I"),  # 23 32 进制不用 I
         rec(pi, bill, uid("S"), org, base="16", serial="00000a"),  # 24 字母要大写
         rec(pi, bill, uid("S"), org, material="", serial="", dec=""),  # 25 必填为空（流水号选填）
-        rec(pig, billg, uid("S"), org, seq="2", material="M2", attach="A2", length="200"),  # 26 单据已有生成的号
+        rec(pig, billg, uid("S"), org, seq="2", material="M2", attach="22", length="200"),  # 26 单据已有生成的号
         rec(pi, bill, uid("S"), org, serial="000002", dec="1"),  # 27 流水号与十进制流水号不符
         rec(pi, bill, uid("S"), org, serial="", dec="1000000"),  # 28 十进制流水号超出 10 进制 6 位
         rec(pi, bill, uid("S"), org, serial="", dec="-1"),  # 29 十进制流水号不是非负整数
@@ -281,7 +281,7 @@ def test_check_lists_every_bad_row_and_import_is_all_or_nothing(w, api, sql):
     assert issue(r, 12)["params"] == {"factory": org2, "name": f"组织{org2}"}
     assert issue(r, 14)["params"] == {"bill_no": bill, "seq": 9}
     assert issue(r, 16)["params"] == {"bill_no": bill, "seq": 1, "material": "M1"}
-    assert issue(r, 17)["params"] == {"bill_no": bill, "seq": 2, "attach": "A2"}
+    assert issue(r, 17)["params"] == {"bill_no": bill, "seq": 2, "attach": "22"}
     assert issue(r, 18)["params"] == {"bill_no": bill, "seq": 1, "length": "100"}
     assert issue(r, 19)["params"] == {"bill_no": bill3, "seq": 1}
     assert issue(r, 22)["params"] == {"len": 6}
@@ -308,8 +308,8 @@ def test_check_lists_every_bad_row_and_import_is_all_or_nothing(w, api, sql):
 def test_bill_with_generated_or_allocated_sns_cannot_import(w, api, sql):
     """单据在本系统已有生成的号（不论哪个物料行、是否已分配）或已分配的导入号时不能导入；
     只有待分配的导入号时可以继续导入；号删掉后又可以导入。"""
-    org, pi, bill = mk(w, ("M1", 2), ("M2", 2, "200", "A2"))
-    line2 = dict(seq="2", material="M2", attach="A2", length="200")
+    org, pi, bill = mk(w, ("M1", 2), ("M2", 2, "200", "22"))
+    line2 = dict(seq="2", material="M2", attach="22", length="200")
     # 只有待分配的导入号：同一单据可分几次导入
     ok(run(api, xlsx(rec(pi, bill, uid("SA"), org)), w.admin))
     ok(run(api, xlsx(rec(pi, bill, uid("SB"), org, serial="000002")), w.admin))
@@ -318,7 +318,7 @@ def test_bill_with_generated_or_allocated_sns_cannot_import(w, api, sql):
     r = ok(check(api, xlsx(rec(pi, bill, uid("SC"), org, **line2)), w.admin))
     assert codes(r) == {2: ["BILL_HAS_SN"]} and issue(r, 2)["params"] == {"bill_no": bill, "count": 2}, str(r)
     # 生成的号（还待分配）挂在第 1 行：导入到第 2 行也不能
-    _, pi2, bill2 = mk(w, ("M1", 2), ("M2", 2, "200", "A2"), org=org)
+    _, pi2, bill2 = mk(w, ("M1", 2), ("M2", 2, "200", "22"), org=org)
     p = "B" + uid("").replace("-", "")
     ok(w.bind_pi(pi2, w.rule(p, with_length=False, pi=pi2)))
     w.generate(pi2, lines=[(bill2, 1)])
@@ -332,11 +332,11 @@ def test_bill_with_generated_or_allocated_sns_cannot_import(w, api, sql):
 
 
 def test_import_registers_every_column_and_blocks_reimport(w, api, sql):
-    org, pi, bill = mk(w, ("M1", 2), ("M2", 1, "0200", "A2"))
+    org, pi, bill = mk(w, ("M1", 2), ("M2", 1, "0200", "22"))
     a, b, c = uid("SA"), uid("SB"), uid("SC")
     content = xlsx(
         rec(pi, bill, a, org, serial="00A1Z", seq_len="5", base="36", unit="M"),
-        rec(pi, bill, b, org, seq="2", material="M2", attach="A2", length="0200", serial="000002"),
+        rec(pi, bill, b, org, seq="2", material="M2", attach="22", length="0200", serial="000002"),
         # 流水号、生产组织编号不填：流水号按十进制流水号换算（补前导 0），生产组织取单据的
         rec(pi, bill, c, "", serial="", dec="1295", seq_len="3", base="36", org_name=f"组织{org}"),
     )
@@ -365,7 +365,7 @@ def test_import_registers_every_column_and_blocks_reimport(w, api, sql):
     )
     assert [tuple(x[k] for k in cols) for x in rows] == [
         (a, pi, bill, 1, 1, "M1", "1", "100", "00A1Z", 36, 5, 10 * 36**2 + 1 * 36 + 35, "M", "C1", org, 2),
-        (b, pi, bill, 2, 2, "M2", "A2", "0200", "000002", 10, 6, 2, "", "C1", org, 3),
+        (b, pi, bill, 2, 2, "M2", "22", "0200", "000002", 10, 6, 2, "", "C1", org, 3),
         (c, pi, bill, 1, 1, "M1", "1", "100", "0ZZ", 36, 3, 1295, "", "C1", org, 4),
     ]
     assert rows[0]["file_name"] == "旧号.xlsx"
@@ -382,7 +382,7 @@ def test_import_registers_every_column_and_blocks_reimport(w, api, sql):
     assert {
         x["sn"]: (x["material_code"], x["attach_no"], x["length_text"], x["customer_code"], x["gen_org_code"])
         for x in items
-    } == {a: ("M1", "1", "100", "C1", org), b: ("M2", "A2", "0200", "C1", org)}
+    } == {a: ("M1", "1", "100", "C1", org), b: ("M2", "22", "0200", "C1", org)}
     au = sql.one(
         "SELECT * FROM sn_audit WHERE action = 'SN_IMPORT' AND result = 'OK' AND batch_no = %s", done["import_no"]
     )

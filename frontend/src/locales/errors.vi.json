@@ -90,6 +90,7 @@
   "RULE_PREFIX_OVERLAP": "Tiền tố {prefix} và tiền tố {other} của PI {pi} cái này là phần đầu của cái kia, có thể tạo SN trùng; vui lòng đổi",
   "RULE_PREFIX_CHANGE_REQUIRED": "Quy tắc {rule_code} phiên bản {version} đã dùng cho PI {other_pi}, phải nhập tiền tố mới cho PI này",
   "RULE_PI_PREFIX_LOCKED": "PI {pi} đã tạo số với tiền tố {prefix}; mỗi PI chỉ dùng một tiền tố quy tắc, không thể đổi sang {new}. Muốn đổi chiều dài, đơn vị, hậu tố hãy sửa quy tắc trong thư viện quy tắc",
+  "RULE_PREFIX_GROW_LOCKED": "Dãy số của tiền tố {prefix} đã vượt số chữ số của quy tắc (đã tự mở rộng); không thể tắt tự mở rộng",
   "RULE_LINE_REQUIRED": "Vui lòng chọn dòng vật tư",
   "RULE_GLOBAL_READONLY": "Chỉ quản trị hệ thống mới được sửa, xóa quy tắc dùng chung: {rule_code}",
   "RULE_FACTORY_REQUIRED": "Vui lòng chọn tổ chức sản xuất sở hữu quy tắc",

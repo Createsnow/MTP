@@ -90,6 +90,7 @@
   "RULE_PREFIX_OVERLAP": "Prefix {prefix} and prefix {other} of PI {pi} start with one another and may produce identical SNs; please change it",
   "RULE_PREFIX_CHANGE_REQUIRED": "Rule {rule_code} version {version} is already used by PI {other_pi}; enter a new prefix for this PI",
   "RULE_PI_PREFIX_LOCKED": "PI {pi} already has SNs generated with prefix {prefix}; a PI can use only one rule prefix, so {new} cannot be used. To change length, unit or suffix, edit the rule in the rule library",
+  "RULE_PREFIX_GROW_LOCKED": "The serials of prefix {prefix} already exceed the rule length (auto-extended); auto-extend cannot be turned off",
   "RULE_LINE_REQUIRED": "Please select material lines",
   "RULE_GLOBAL_READONLY": "Only the system administrator can modify or delete global rules: {rule_code}",
   "RULE_FACTORY_REQUIRED": "Please choose the production org the rule belongs to",

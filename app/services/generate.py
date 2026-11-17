@@ -1,34 +1,28 @@
 """SN 生成（F-09）。删号见 deletion，分配见 allocation。
 
-生成：在一张 PI 下整单（勾选单据）或按物料行（点选）生成，须先勾选（页面不勾选不能生成）；最小单位是物料行——范围内每个
-还有额度的物料行一次生成它的全部额度，不拆成两次。排号顺序：所选物料行不分单据（不分组织）按附件项次从小到大
-（按数字比），一个项次排完再排下一个项次；项次相同按单据勾选 / 点选先后（单据之间接号），同一单据内按行号（金蝶明细
-行号，单据序号）从小到大。号都排在该 PI 的一套流水上，
-各物料行按自己的规则写出（前缀 + 流水 + 分隔符 + 米数 + 分隔符 + 单位 + 后缀）。
+以规则前缀为排号基准：一个 PI 一个规则前缀（rules.pi_rule 登记）；同一前缀下各 PI、各单据共用一套十进制流水，
+每次生成都接在前缀最大号（sn_prefix_counter，只增不减）之后。号上记 seq_prefix，(seq_prefix, seq_dec) 唯一。
+
+生成：在一张 PI 下整单（勾选单据）或按物料行（点选）生成，须先勾选；最小单位是物料行——范围内每个还有额度的物料行
+一次生成它的全部额度，不拆成两次。排号顺序（_gen_order）：先按附件项次从小到大（按数字比）；同项次时，
+点选物料行按点击先后，勾整张单据按单据勾选先后、同一单据内按行号。
+
+项次拦截（_check_order，按前缀）：一行的项次在这个前缀下已开始（有现存的号）时不拦，接在最大号之后生成；
+还没开始时，登记了这个前缀的 PI 里只要还有更小项次的行有额度，就拦住（ATTACH_ORDER_BLOCKED，列出挡路的行）。
+项次为空或不是数字的行自己不能生成，并挡住这个前缀全部没开始的项次。失效的物料行、冻结或暂停交付单据的行、
+删过号的行不挡。同一次生成里的行彼此不挡（小项次排在前）。
 
 流水来源（预演时选）：
-- MAX 从 PI 最大流水号 + 1 起往后编（默认）；
-- RANGE 用户手动填起止流水号（十进制），在空号段（删号腾出的流水）或未使用的号（最大号之后）中取：范围内空闲的
-  流水按从小到大使用，用够为止；不够时其余从 max(最大号, 止号) + 1 起接着编（溢出）。
-一个物料行可能分到几段不连续的号（plan item 的 segs）。PI 最大流水号只增不减（删号不退回），所以空号段来自删号，
-以及跳过的流水（RANGE 起号在最大号之后、自定义规则的起始号）。
+- MAX 从前缀最大号 + 1 起往后编（默认）；起始号（PI 登记的）大于下一个号时从起始号起，跳过的流水成为空号段；
+- RANGE 手动填起止流水号（十进制），在前缀的空号段（删号腾出、起始号跳过的流水，同前缀各 PI 都能用）或最大号之后
+  取：范围内空闲的流水从小到大使用，再用所选空号段，不够时其余从 max(最大号, 止号) + 1 起接着编。
 
-自定义规则可带起始号（还没生成过、即首次用这条自定义规则时）：该物料行从「最大号之后」编号时第一个号不小于起始号
-（起始号不大于下一个号时不起作用）；RANGE 时手动起止号内的空闲流水照常先用，溢出部分才按起始号。
-
-必须先预演（只给出起止号、各物料行数量和号段，不落库），
-预演只对发起人有效、默认 30 分钟、只能生成一次；范围、条件或流水来源改变、所选规则版本被别的 PI 先用、
-PI 最大号变化、空号段变化（按 RANGE 生成时）、同步改了范围内物料行数量时预演失效。
-一次生成在一个事务里完成（共用一个生成批次），撞号整次回滚（含与 SN 导入登记的号相同，
-见 sn_import）；不超过 SN_GEN_SYNC_THRESHOLD 当场完成，更多转后台任务（进度、可取消）；服务重启时没跑完的任务视为失败。
-生成（含取消）、删号与分配共用 PI 操作锁。
-
-共用前缀（见 rules.check_prefix）：别的 PI 已用的前缀本 PI 也可以用（格式的流水部分须相同）。流水仍按 PI 记，
-但本 PI 用到的前缀被别的 PI 用过时（shared_of），「最大号」取 max(本 PI 最大号, 这些 PI 的最大号)，
-空号段、手动起止号、起始号平移、重排预留都不用这些 PI 已用、已预留的流水
-（它们删号退回、不在预留里的空号可以用），所以同前缀不会拼出相同的号；不共用前缀时与原来完全相同。
-生成事务开头拿本次用到的前缀的前缀锁（同前缀的生成串行），拿到后按最新数据再核对一次，
-与别的 PI 已用、已预留的流水有重叠时预演失效。
+必须先预演（只给出起止号、各物料行数量和号段，不落库），预演只对发起人有效、默认 30 分钟、只能生成一次。
+确认生成时在前缀锁内按最新数据重算：物料行、数量、规则不变而只是同前缀别的 PI 先生成了（最大号变大）时，
+自动顺延到新的最大号之后（任务计划 shifted）；手动起止号内的号被占用、项次拦截、规则或额度变了时预演失效。
+一次生成在一个事务里完成（共用一个生成批次），撞号整次回滚（含与 SN 导入登记的号相同，见 sn_import）；
+不超过 SN_GEN_SYNC_THRESHOLD 当场完成，更多转后台任务（进度、可取消）；服务重启时没跑完的任务视为失败。
+生成（含取消）、删号与分配共用 PI 操作锁；同一前缀的生成另由前缀锁串行。
 
 并发：一个实例同时写号池的生成不超过 SN_GEN_CONCURRENCY（默认 4，当场与后台合计），其余在任务里排队
 （任务照常是生成中，PI 操作锁照常占着）；多张 PI 同时写号池时撞上死锁（MySQL 1213，整笔事务已回滚）自动整笔重做，
@@ -55,7 +49,7 @@ from app.core.errors import ErrorCode, biz
 from app.core.exceptions import BizError
 from app.core.security import CurrentUser
 from app.db.session import ER_LOCK_NOWAIT, db, error_no, is_deadlock, is_duplicate, marks, retry_deadlock
-from app.services import audit, bill_stats, changes, factories, line_void, locks, orders, reserve, rules
+from app.services import audit, bill_stats, changes, factories, line_void, locks, orders, rules, seg
 
 log = structlog.get_logger()
 
@@ -100,8 +94,8 @@ JOB_FIELDS = (
 
 _INSERT_ITEM = (
     "INSERT INTO sn_item(sn, pi_no, customer_code, bill_no, bill_seq, material_code, gen_org_code, gen_bill_no, "
-    "gen_bill_seq, seq_pi_no, seq_dec, length_text, attach_no, rule_version_id, gen_batch, status, created_at, "
-    "updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING_ALLOC',%s,%s)"
+    "gen_bill_seq, seq_pi_no, seq_dec, length_text, attach_no, rule_version_id, seq_prefix, gen_batch, status, "
+    "created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING_ALLOC',%s,%s)"
 )
 
 #: 大批量生成走后台线程
@@ -157,6 +151,8 @@ def job_json(j: dict | None) -> dict | None:
         ]
         out["bills"] = sorted({x["bill_no"] for x in plan["items"]})
         out["revoked_qty"] = sum(x["qty"] for x in plan["items"] if x.get("revoked"))
+        # 确认生成时同前缀别的 PI 先生成了：号段自动顺延到新的最大号之后（与预演时不同）
+        out["shifted"] = bool(plan.get("shifted"))
     return out
 
 
@@ -181,86 +177,36 @@ def limits() -> dict:
 
 
 def last_seq(pi: str) -> int:
-    """PI 最大流水号（只增不减：删号不退回）。"""
+    """本 PI 自己生成的号中最大的流水（统计用；排号按前缀，见 prefix_of / rules.prefix_last）。"""
     return int(db.scalar("SELECT COALESCE(MAX(last_seq_dec), 0) FROM sn_pi_counter WHERE pi_no = %s", pi) or 0)
 
 
-# ================================================================== 共用前缀
+def prefix_of(pi: str) -> str | None:
+    """本 PI 登记的规则前缀（一个 PI 一个前缀，见 rules.pi_rule）；没选规则为 None。"""
+    return db.scalar("SELECT prefix FROM sn_pi_rule WHERE pi_no = %s", pi)
 
 
-@dataclass(frozen=True)
-class Shared:
-    """与本 PI 共用前缀的别的 PI：pis 这些 PI；top 它们的最大号（含预留）；segs 它们已用（号池里流水归属它们的号，
-    含已转出的）与已预留的流水（升序、合并）。不共用时都为空。"""
-
-    pis: tuple[str, ...] = ()
-    top: int = 0
-    segs: tuple[tuple[int, int], ...] = ()
+# ================================================================== 空号段（按前缀）
 
 
-NO_SHARED = Shared()
-
-
-def shared_of(pi: str, prefixes=None) -> Shared:
-    """本 PI 用到的前缀（prefixes 另加本次要用的；默认 rules.pi_prefixes）被别的 PI 用过时，那些 PI 的最大号与
-    已用、已预留的流水。本 PI 接号不能用这些流水；它们删号退回、不在预留里的空号可以用。"""
-    ps = sorted(rules.pi_prefixes(pi) | set(prefixes or ()))
-    if not ps:
-        return NO_SHARED
-    pis = tuple(
-        db.column(
-            f"SELECT DISTINCT claimed_pi FROM sn_rule_version WHERE prefix IN ({marks(len(ps))}) "
-            "AND claimed_pi IS NOT NULL AND claimed_pi <> %s ORDER BY claimed_pi",
-            *ps,
-            pi,
-        )
-    )
-    if not pis:
-        return NO_SHARED
-    m = marks(len(pis))
-    top = int(db.scalar(f"SELECT COALESCE(MAX(last_seq_dec), 0) FROM sn_pi_counter WHERE pi_no IN ({m})", *pis) or 0)
-    used = [
-        (int(r["s"]), int(r["e"]))
-        for r in db.all(
-            "SELECT MIN(seq_dec) s, MAX(seq_dec) e FROM (SELECT seq_pi_no, seq_dec, "
-            "seq_dec - ROW_NUMBER() OVER (PARTITION BY seq_pi_no ORDER BY seq_dec) g "
-            f"FROM sn_item WHERE seq_pi_no IN ({m})) t GROUP BY seq_pi_no, g",
-            *pis,
-        )
-    ]
-    kept = [
-        (int(r["start_seq"]), int(r["end_seq"]))
-        for r in db.all(f"SELECT start_seq, end_seq FROM sn_pi_reserve WHERE pi_no IN ({m})", *pis)
-    ]
-    return Shared(pis, top, tuple(reserve.merge(used + kept)))
-
-
-def after_seq(pi: str, sh: Shared | None = None) -> int:
-    """从「最大号之后」接号时的最大号：max(本 PI 最大号, 共用前缀的别的 PI 的最大号)；不共用时即本 PI 最大号。"""
-    sh = shared_of(pi) if sh is None else sh
-    return max(last_seq(pi), sh.top)
-
-
-# ================================================================== 空号段
-
-
-def gap_segments(pi: str, last: int | None = None) -> list[tuple[int, int]]:
-    """PI 流水 1..最大号之间没有号占用的连续段（升序）。按流水归属 PI 算：转走的号仍占原 PI 的流水，
-    转入的号不占本 PI 的流水。"""
-    top = last_seq(pi) if last is None else last
+def gap_segments(prefix: str | None, last: int | None = None) -> list[tuple[int, int]]:
+    """前缀流水 1..最大号之间没有号占用的连续段（升序）：删号腾出、起始号跳过的流水，同前缀各 PI 都能用。"""
+    if not prefix:
+        return []
+    top = rules.prefix_last(prefix) if last is None else last
     if top <= 0:
         return []
     out = [
         (int(r["s"]), int(r["e"]))
         for r in db.all(
             "SELECT prev + 1 s, seq_dec - 1 e FROM (SELECT seq_dec, LAG(seq_dec, 1, 0) OVER (ORDER BY seq_dec) prev "
-            "FROM sn_item WHERE seq_pi_no = %s AND seq_dec <= %s) t WHERE seq_dec - prev > 1 ORDER BY seq_dec",
-            pi,
+            "FROM sn_item WHERE seq_prefix = %s AND seq_dec <= %s) t WHERE seq_dec - prev > 1 ORDER BY seq_dec",
+            prefix,
             top,
         )
     ]
     used_top = int(
-        db.scalar("SELECT COALESCE(MAX(seq_dec), 0) FROM sn_item WHERE seq_pi_no = %s AND seq_dec <= %s", pi, top)
+        db.scalar("SELECT COALESCE(MAX(seq_dec), 0) FROM sn_item WHERE seq_prefix = %s AND seq_dec <= %s", prefix, top)
     )
     if used_top < top:
         out.append((used_top + 1, top))
@@ -268,7 +214,7 @@ def gap_segments(pi: str, last: int | None = None) -> list[tuple[int, int]]:
 
 
 def gaps(pi_in: str | None, cu: CurrentUser | None = None) -> dict:
-    """空号段：起止流水号与枚数（最多列 GAP_LIST_MAX 段，合计照常给全）、最大号与下一个号。"""
+    """本 PI 前缀的空号段：起止流水号与枚数（最多列 GAP_LIST_MAX 段，合计照常给全）、前缀最大号与下一个号。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -279,16 +225,14 @@ def gaps(pi_in: str | None, cu: CurrentUser | None = None) -> dict:
     return gaps_of(pi)
 
 
-def free_segments(pi: str, last: int | None = None, sh: Shared | None = None) -> list[dict]:
-    """空号段按来源单据拆段（升序）：来源单据 = 流水上最后一次删掉的号的生成单据（gen_bill_no）。
-    物料行的预留号段（见 reserve）不是空号段。空号来自删号、预留退回（平移、手动起止号、数量调小）与跳过的流水；
-    查不到删号存档的空号，来源单据为空串。共用前缀时到共同的最大号为止，扣掉别的 PI 已用、已预留的流水
-    （别的 PI 删号退回的空号来源单据为空串）。"""
-    sh = shared_of(pi) if sh is None else sh
-    top = after_seq(pi, sh) if last is None else last
-    raw = reserve.subtract(gap_segments(pi, top), reserve.all_segs(reserve.rows(pi)))
-    if sh.segs:
-        raw = reserve.subtract(raw, list(sh.segs))
+def free_segments(prefix: str | None, last: int | None = None) -> list[dict]:
+    """空号段按来源单据拆段（升序）：来源单据 = 流水上最后一次删掉的号的生成单据（gen_bill_no，
+    可能是同前缀别的 PI 的）；
+    起始号跳过的流水来源单据为空串。"""
+    if not prefix:
+        return []
+    top = rules.prefix_last(prefix) if last is None else last
+    raw = gap_segments(prefix, top)
     if not raw:
         return []
     # 只取现在没有号占用的流水；同一流水删过多次取最后一次（号池 id 自增不复用，大的在后）
@@ -298,22 +242,21 @@ def free_segments(pi: str, last: int | None = None, sh: Shared | None = None) ->
             "SELECT bill_no, MIN(seq_dec) s, MAX(seq_dec) e FROM ("
             "SELECT d.gen_bill_no bill_no, d.seq_dec, "
             "d.seq_dec - ROW_NUMBER() OVER (PARTITION BY d.gen_bill_no ORDER BY d.seq_dec) g "
-            "FROM sn_item_deleted d WHERE d.seq_pi_no = %s AND d.seq_dec <= %s "
+            "FROM sn_item_deleted d WHERE d.seq_prefix = %s AND d.seq_dec <= %s "
             "AND d.id = (SELECT MAX(x.id) FROM sn_item_deleted x "
-            "WHERE x.seq_pi_no = d.seq_pi_no AND x.seq_dec = d.seq_dec) "
-            "AND NOT EXISTS (SELECT 1 FROM sn_item i WHERE i.seq_pi_no = d.seq_pi_no AND i.seq_dec = d.seq_dec)"
+            "WHERE x.seq_prefix = d.seq_prefix AND x.seq_dec = d.seq_dec) "
+            "AND NOT EXISTS (SELECT 1 FROM sn_item i WHERE i.seq_prefix = d.seq_prefix AND i.seq_dec = d.seq_dec)"
             ") t GROUP BY bill_no, g ORDER BY s",
-            pi,
+            prefix,
             top,
         )
     ]
-    # 删号存档的流水可能是物料行的预留（不是空号段）：只留落在空号段里的部分
-    marked = [(a, b, bill) for s0, e0, bill in marked for a, b in reserve.intersect([(s0, e0)], raw)]
     marked.sort()
     out: list[tuple[int, int, str]] = []
     i = 0
     for s, e in raw:
         pos = s
+        # 删掉的号都没有号占用，连续的一段一定落在同一个空号段里
         while i < len(marked) and marked[i][0] <= e:
             a, b, bill = marked[i]
             if a > pos:
@@ -326,70 +269,25 @@ def free_segments(pi: str, last: int | None = None, sh: Shared | None = None) ->
     return [{"start_seq": a, "end_seq": b, "qty": b - a + 1, "bill_no": bill} for a, b, bill in out]
 
 
-def reserved_segments(
-    pi: str, last: int | None = None, bill: str | None = None, sh: Shared | None = None
-) -> list[dict]:
-    """预留号段里还空着的流水（按物料行，升序）：[{bill_no, seq, start_seq, end_seq, qty}]；bill 给出时只列该单据的。
-    共用前缀时不含别的 PI 已用、已预留的流水。"""
-    sh = shared_of(pi) if sh is None else sh
-    top = after_seq(pi, sh) if last is None else last
-    unused = reserve.subtract(gap_segments(pi, top), list(sh.segs)) if sh.segs else gap_segments(pi, top)
-    out = []
-    for (b, q), segs in reserve.rows(pi).items():
-        if bill is not None and b != bill:
-            continue
-        for a, e in reserve.intersect(segs, unused):
-            out.append({"bill_no": b, "seq": q, "start_seq": a, "end_seq": e, "qty": e - a + 1})
-    return sorted(out, key=lambda x: x["start_seq"])
-
-
-def first_seqs(pi: str, lines: list[Line], last: int, sh: Shared | None = None) -> dict[tuple[str, int], int]:
-    """各物料行下次按预留生成时的第一个流水（生成页规则列的「第一个号」用）：预留里第一个空着的流水，
-    起始号与预留起号不同时按平移；没有预留（或预留已用完）的不列，按最大号 + 1（及起始号）算。
-    last 为接号的最大号（after_seq）；共用前缀时不用别的 PI 已用、已预留的流水。"""
-    start = reserve.start_of(pi)
-    sh = shared_of(pi) if sh is None else sh
-    if start is not None and not reserve.has_items(pi):
-        # 号已全部删掉：下次按默认生成时重排预留（见 reserve.rebuildable），各行都从原预留起号估算；
-        # 共用前缀时重排会占到别的 PI 的流水的，从共同的最大号之后估算（同 _assign）
-        if sh.segs and reserve.intersect([(a, e) for *_, a, e in reserve.build(pi, [], start)], list(sh.segs)):
-            start = last + 1
-        return {(x.bill_no, x.seq): start for x in lines}
-    rs = reserve.rows(pi) if start is not None else {}
-    if not rs:
-        return {}
-    unused = reserve.merge(gap_segments(pi, last) + [(last + 1, reserve.INF)])
-    if sh.segs:
-        unused = reserve.subtract(unused, list(sh.segs))
-    out = {}
-    for x in lines:
-        free = reserve.intersect(rs.get((x.bill_no, x.seq), []), unused)
-        if not free:
-            continue
-        st = x.res.seq_start if x.res is not None else None
-        out[(x.bill_no, x.seq)] = free[0][0] + (st - start if st is not None and st != start else 0)
-    return out
-
-
-def gaps_of(pi: str, sh: Shared | None = None) -> dict:
-    """空号段、预留里空着的流水与最大号。共用前缀时最大号为共同的最大号（after_seq）。"""
-    sh = shared_of(pi) if sh is None else sh
-    last = after_seq(pi, sh)
-    segs = free_segments(pi, last, sh)
-    res = reserved_segments(pi, last, sh=sh)
+def gaps_of(pi: str) -> dict:
+    """本 PI 前缀的空号段与前缀最大号（同前缀各 PI 看到的相同）；没选规则时为空。
+    reserve_start / reserved*：早先的号段预留已取消，保留字段（空），页面接口不变。"""
+    prefix = prefix_of(pi)
+    last = rules.prefix_last(prefix)
+    segs = free_segments(prefix, last)
     return {
         "pi_no": pi,
+        "prefix": prefix,
         "last_seq": last,
         "next_seq": last + 1,
         "count": len(segs),
         "total": sum(x["qty"] for x in segs),
         "segments": segs[:GAP_LIST_MAX],
         "truncated": len(segs) > GAP_LIST_MAX,
-        # 号段预留：预留起号（本 PI 还没有预留为 null）、各物料行预留里还空着的流水
-        "reserve_start": reserve.start_of(pi),
-        "reserved_count": len(res),
-        "reserved_total": sum(x["qty"] for x in res),
-        "reserved": res[:GAP_LIST_MAX],
+        "reserve_start": None,
+        "reserved_count": 0,
+        "reserved_total": 0,
+        "reserved": [],
     }
 
 
@@ -444,7 +342,7 @@ def bill_segments(cu: CurrentUser, pi_in: str | None, bill_in: str | None) -> di
     """单据号段：已用号段 = 单据挂在本 PI 下现有的号按物料行（单据序号）分开、行内按流水连续合并成段（转入的号
     按流水归属 PI 单独成段），按附件项次（号上的值）从小到大排（与排号同一比较，空的排最后），项次相同按序号（行号），
     同一物料行内本 PI 的在前、再按流水；每段带序号、物料、附件项次；
-    空闲号段 = 本单据生成后删掉、现在没有号占用的流水。另给 PI 最大号与下一个号（同一 PI 各单据共用流水，
+    空闲号段 = 本单据生成后删掉、现在没有号占用的流水。另给前缀最大号与下一个号（同一前缀各 PI 共用流水，
     页面在底部「流水」显示，不列在单据号段里）。"""
     pi, bill, facs = _bill_key(cu, pi_in, bill_in)
     isql, iargs = factories.item_scope_sql(facs)
@@ -486,10 +384,9 @@ def bill_segments(cu: CurrentUser, pi_in: str | None, bill_in: str | None) -> di
     ]
     # 稳定排序：同一物料行的几段保持 SQL 里的先后（本 PI 的在前、按流水），截断前排好，列出的是排在最前的号段
     use.sort(key=lambda x: (not x["attach_no"].strip(), attach_order(x["attach_no"]), x["bill_seq"]))
-    sh = shared_of(pi)
-    last = after_seq(pi, sh)
-    free = [x for x in free_segments(pi, last, sh) if x["bill_no"] == bill]
-    res = reserved_segments(pi, last, bill, sh)
+    prefix = prefix_of(pi)
+    last = rules.prefix_last(prefix)
+    free = [x for x in free_segments(prefix, last) if x["bill_no"] == bill]
     return {
         "pi_no": pi,
         "bill_no": bill,
@@ -503,9 +400,9 @@ def bill_segments(cu: CurrentUser, pi_in: str | None, bill_in: str | None) -> di
         "free_count": len(free),
         "free_qty": sum(x["qty"] for x in free),
         "free_truncated": len(free) > SEG_LIST_MAX,
-        # 本单据各物料行预留号段里还空着的流水（生成时用；见 reserve）
-        "reserved": res[:SEG_LIST_MAX],
-        "reserved_qty": sum(x["qty"] for x in res),
+        # 早先的号段预留已取消：保留字段（空），页面接口不变
+        "reserved": [],
+        "reserved_qty": 0,
     }
 
 
@@ -564,7 +461,7 @@ def seq_choice(
             raise biz(ErrorCode.GEN_SEQ_RANGE_INVALID)
         picked.append([a, b])
     if picked:
-        out["gaps"] = [list(g) for g in reserve.merge(picked)]
+        out["gaps"] = [list(g) for g in seg.merge(picked)]
     return out
 
 
@@ -606,131 +503,49 @@ class _Taker:
         return out
 
 
-def _assign(pi: str, keys: list[tuple[str, int]], todo: list[Line], base: int, seq: dict) -> dict:
-    """按排号顺序给每个物料行切号（见 reserve）：
-    - MAX：用该行预留号段里空着的流水；起始号与预留起号不同时平移；没有预留或不够的接在最大号之后；
-      本 PI 的号已全部删掉时视为第一次生成：丢弃旧预留，按本次勾选 / 点选先后从原预留起号起重排（reserve.rebuildable）；
-    - RANGE：放弃预留，用起止号内空着的流水，再用所选空号段，仍不够的接在最大号之后。
-    都不占别的物料行的预留号段。返回各行号段与来源、本次要落库的预留、最大号（含新建的预留）与各来源枚数。
-    共用前缀（shared_of）：接号从 max(本 PI 最大号, 别的 PI 最大号) 之后起，别的 PI 已用、已预留的流水都不用；
-    不共用时 sh 为空，与原来相同。"""
-    run = [(x.bill_no, x.seq) for x in todo]
-    run_set = set(run)
-    sh = shared_of(pi, {x.res.spec().prefix for x in todo})
-    taken = list(sh.segs)
-    # 接号的最大号（不共用前缀时即本 PI 最大号 base）
-    after = max(base, sh.top)
-    start = reserve.start_of(pi)
-    rebuild = seq["mode"] == SEQ_MAX and reserve.rebuildable(pi) is not None
-    rs = {} if rebuild else reserve.rows(pi)
-    new = start is None or rebuild
-    layout: list[tuple[str, int, int, int]] = []
-    top = base
-    if new:
-        # 第一次生成从最大号 + 1 起；号全部删掉后重排从原预留起号起（1～最大号此时都空着）
-        start = start if rebuild else after + 1
-
-        def first_start(st: int) -> int:
-            if seq["mode"] == SEQ_MAX:
-                # 第一次生成就填了起始号：预留表从起始号排（填的不一样时取最小的，其余的行按平移）
-                firsts = [x.res.seq_start for x in todo if x.res.seq_start and x.res.seq_start > st]
-                if firsts:
-                    return min(firsts)
-            return st
-
-        start = first_start(start)
-        layout = reserve.build(pi, [k[0] for k in keys], start)
-        if taken and reserve.intersect([(a, e) for *_, a, e in layout], taken):
-            # 共用前缀：重排的预留会占到别的 PI 已用、已预留的流水时，改从共同的最大号之后排
-            start = first_start(after + 1)
-            layout = reserve.build(pi, [k[0] for k in keys], start)
-        rs = {(b, q): [(a, e)] for b, q, a, e in layout}
-        top = max([base] + [e for *_, e in layout])
-    # 没有号的流水：1～最大号之间的空号（含预留里空着的）与最大号之后；共用前缀时扣掉别的 PI 已用、已预留的流水
-    unused = reserve.merge(gap_segments(pi, after) + [(after + 1, reserve.INF)])
-    if taken:
-        unused = reserve.subtract(unused, taken)
+def _assign(prefix: str, todo: list[Line], last: int, seq: dict) -> dict:
+    """按排号顺序给每个物料行切号（同一前缀下各 PI 共用一套流水，last 为前缀最大号）：
+    - MAX：依次接在前缀最大号之后；
+    - RANGE：先用起止号内空着的流水，再用所选空号段，仍不够的接在 max(最大号, 止号) 之后。
+    起始号（PI 登记的）：接在最大号之后时第一个号不小于它，跳过的流水成为空号段。
+    返回各行号段与来源、生成后的最大号与各来源枚数。"""
+    unused = seg.merge(gap_segments(prefix, last) + [(last + 1, seg.INF)])
+    floor = next((x.res.seq_start for x in todo if x.res.seq_start), None)
     lines: dict[tuple[str, int], dict] = {}
-    keep: dict[tuple[str, int], list] = {}
     range_qty = gap_qty = over = 0
     if seq["mode"] == SEQ_RANGE:
         lo, hi = seq["start"], seq["end"]
-        others = reserve.all_segs(rs, run_set)
-        avail = reserve.subtract(unused, others)
-        in_range = reserve.intersect(avail, [(lo, hi)])
-        picked = reserve.merge(seq.get("gaps") or [])
+        in_range = seg.intersect(unused, [(lo, hi)])
+        picked = seg.merge(seq.get("gaps") or [])
         for a, b in picked:
-            if reserve.subtract([(a, b)], reserve.intersect(avail, [(1, max(top, after))])):
+            if seg.subtract([(a, b)], seg.intersect(unused, [(1, last)])):
                 raise biz(ErrorCode.GEN_GAP_INVALID, start=a, end=b)
-        extra = reserve.subtract(picked, in_range)
-        tail_from = max(top, after, hi) + 1
+        extra = seg.subtract(picked, in_range)
+        tail_from = max(last, hi) + 1
         taker = _Taker(in_range + extra, tail_from)
         for x in todo:
-            k = (x.bill_no, x.seq)
-            segs = taker.take(x.quota, x.res.seq_start)
-            tail = reserve.total(reserve.intersect(segs, [(tail_from, reserve.INF)]))
-            gap = reserve.total(reserve.intersect(segs, extra))
-            range_qty += reserve.total(reserve.intersect(segs, in_range))
+            segs = taker.take(x.quota, floor)
+            tail = seg.total(seg.intersect([tuple(g) for g in segs], [(tail_from, seg.INF)]))
+            gap = seg.total(seg.intersect([tuple(g) for g in segs], extra))
+            range_qty += seg.total(seg.intersect([tuple(g) for g in segs], in_range))
             gap_qty += gap
             over += tail
-            lines[k] = {"segs": segs, "src": SEQ_RANGE, "tail": tail, "gap": gap}
-            # 原预留里空着的退回成空号段，已有号的部分照留
-            keep[k] = reserve.merge(reserve.subtract(rs.get(k, []), unused) + [tuple(g) for g in segs])
+            lines[(x.bill_no, x.seq)] = {"segs": segs, "src": SEQ_RANGE, "tail": tail, "gap": gap}
     else:
-        rest: list[tuple[Line, int, list]] = []
-        targets: list[tuple[int, int]] = []
-        for x in todo:
-            k = (x.bill_no, x.seq)
-            mine = rs.get(k, [])
-            free = reserve.intersect(mine, unused)
-            st = x.res.seq_start
-            if mine and st is not None and st != start:
-                parts = reserve.take(free, x.quota)
-                tgt = reserve.shift(parts, st - start)
-                ok = reserve.subtract(unused, reserve.all_segs(rs, {k}))
-                if tgt and (reserve.subtract(tgt, ok) or reserve.intersect(tgt, targets)):
-                    raise biz(
-                        ErrorCode.GEN_SHIFT_CONFLICT, bill_no=x.bill_no, seq=x.seq, start=tgt[0][0], end=tgt[-1][1]
-                    )
-                targets = reserve.merge(targets + tgt)
-                lines[k] = {"segs": tgt, "src": "SHIFT"}
-                base_keep = reserve.subtract(mine, free)
-            elif mine:
-                parts = reserve.take(free, x.quota)
-                lines[k] = {"segs": parts, "src": "RESERVE"}
-                # 数量调小：预留里用不完的退回成空号段
-                base_keep = reserve.subtract(mine, reserve.subtract(free, parts))
-            else:
-                parts = []
-                lines[k] = {"segs": [], "src": "TAIL"}
-                base_keep = []
-            rest.append((x, x.quota - reserve.total(parts), base_keep))
-        tail_from = max([top, after] + [b for _, b in targets]) + 1
+        tail_from = last + 1
         taker = _Taker([], tail_from)
-        for x, n, base_keep in rest:
-            k = (x.bill_no, x.seq)
-            # 没有预留的行仍按起始号（第一个号不小于它）；有预留的不足部分直接接在最大号之后
-            t = taker.take(n, x.res.seq_start if lines[k]["src"] == "TAIL" else None) if n > 0 else []
-            segs = reserve.merge(lines[k]["segs"] + [tuple(g) for g in t])
-            lines[k]["segs"] = segs
-            lines[k]["tail"] = n if n > 0 else 0
-            keep[k] = reserve.merge(base_keep + segs)
-    plan_reserve = {
-        "new": new,
-        "rebuild": rebuild,
-        "start": start,
-        "others": [[b, q, a, e] for b, q, a, e in layout if (b, q) not in run_set],
-        "set": [{"bill_no": k[0], "seq": k[1], "segs": [list(g) for g in keep[k]]} for k in run],
-    }
+        for x in todo:
+            segs = taker.take(x.quota, floor)
+            over += x.quota
+            lines[(x.bill_no, x.seq)] = {"segs": segs, "src": "TAIL", "tail": x.quota, "gap": 0}
+    top = max([last] + [g[1] for v in lines.values() for g in v["segs"]])
     return {
-        "lines": {k: {**v, "segs": [list(g) for g in v["segs"]]} for k, v in lines.items()},
-        "reserve": plan_reserve,
+        "lines": lines,
         "top": top,
-        "shared": list(sh.pis),
         "range_qty": range_qty,
         "gap_qty": gap_qty,
         "overflow_qty": over,
-        "tail_from": tail_from,
+        "tail_from": max(tail_from, floor or 0),
     }
 
 
@@ -759,6 +574,8 @@ class Line:
     issues: list[str] = field(default_factory=list)
     #: 物料行失效（line_void）：不参与排号，额度按 0 算
     void: bool = False
+    #: 项次拦截（ATTACH_ORDER_BLOCKED）：挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行）
+    blockers: list[dict] = field(default_factory=list)
 
     @property
     def quota(self) -> int:
@@ -766,14 +583,14 @@ class Line:
 
 
 def _load_lines(pi: str, keys: list[tuple[str, int]]) -> list[Line]:
-    """按给定顺序取物料行（快照 + 计数 + 附件项次 + 生效规则 + 单据冻结），并判断生成条件。"""
+    """按给定顺序取物料行（快照 + 计数 + 附件项次 + 规则 + 单据冻结），并判断生成条件。"""
     return load_lines_of({pi: keys})[pi]
 
 
 def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Line]]:
     """多张 PI 的 _load_lines 一次取（生成页列表逐 PI 判断「需先选规则 / 不能生成」用）：快照、计数、附件项次、
-    米数、产品单位、物料行选的规则、单据冻结、失效条件各一条 SQL，只有 PI 绑定的规则、前缀能否使用按 PI 查；
-    每张 PI 的结果与单独调用 _load_lines 相同。"""
+    米数、产品单位、单据冻结、失效条件各一条 SQL，PI 的规则登记按 PI 查，项次拦截按前缀查一次；
+    每张 PI 的结果与单独调用 _load_lines 相同。每组的物料行视为一次生成（彼此不挡）。"""
     out: dict[str, list[Line]] = {pi: [] for pi in groups}
     all_keys = [k for keys in groups.values() for k in keys]
     if not all_keys:
@@ -784,16 +601,16 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
         for r in db.all(f"SELECT * FROM sn_prd_mo WHERE bill_no IN ({marks(len(bills))})", *bills)
     }
     counts, fills, lens, units = orders.line_extras(all_keys)
-    sels = rules.selections(all_keys)
     blocks = changes.generation_blocks(bills)
     vrule = line_void.current()
+    regs = rules.pi_rules([pi for pi, keys in groups.items() if keys])
+    # 前缀能否用的判断结果、各前缀的项次拦截状态（同一次判断里共用）
+    taken: dict = {}
     for pi, keys in groups.items():
         if not keys:
             continue
-        default = rules.pi_default(pi)
-        memo: dict[int, rules.Resolved | None] = {}
-        # 前缀能否用的判断结果；另记本 PI 锁定的前缀（一个 PI 只用一个规则前缀，见 _locked_prefix），用到时才查
-        taken: dict = {}
+        reg = regs.get(pi)
+        res = rules._registered(pi, reg)
         for k in keys:
             r = snap.get(k)
             if r is None:
@@ -818,23 +635,19 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
                 unit,
                 unit_src,
                 attach,
-                _effective(pi, sels.get(k), default, memo),
+                res,
                 blocks[r["bill_no"]],
                 void=vrule.is_void(r),
             )
-            _check(line, taken)
+            _check(line, reg, taken)
             out[pi].append(line)
+        if reg is not None:
+            _check_order(reg["prefix"], out[pi], set(keys), taken)
     return out
 
 
-def _effective(pi: str, sel: dict | None, default: rules.Resolved | None, memo: dict) -> rules.Resolved | None:
-    """物料行生效的规则（同 rules.effective）；PI 没绑规则（default 为 None）时不再逐行重查 PI 绑定。"""
-    res = rules.effective(pi, sel, use_default=False, memo=memo)
-    return default if res is None else res
-
-
-def _check(line: Line, taken: dict | None = None) -> None:
-    """生成条件（只对还有额度的物料行）。taken：前缀能否给本 PI 用的判断结果（同一次判断里共用）。"""
+def _check(line: Line, reg: dict | None, taken: dict) -> None:
+    """生成条件（只对还有额度的物料行）。reg：本 PI 的规则登记；taken：前缀能否用的判断结果（同一次判断里共用）。"""
     if line.quota <= 0:
         return
     if line.block:
@@ -845,11 +658,10 @@ def _check(line: Line, taken: dict | None = None) -> None:
         line.issues.append("RULE_PREFIX")
     elif line.res.plan in (rules.PLAN_NEW, rules.PLAN_CLAIM, rules.PLAN_SHARE) and not _prefix_ok(line, taken):
         # 自定义规则选定后（或规则库版本首次归属本 PI、共用别的 PI 的前缀前）前缀被尚未归属的版本占用、
-        # 与别的前缀一个是另一个的开头，或已按别的进制 / 位数用了这个前缀：须改前缀，免得生成时才失败；
-        # 被流水部分相同、已归属 PI 的版本占用（本 PI 别的单据先生成，或别的 PI 已用）不算，生成时共用这个前缀
+        # 与别的前缀一个是另一个的开头，或已按别的进制 / 位数用了这个前缀：须改前缀，免得生成时才失败
         line.issues.append("RULE_PREFIX")
-    elif (lk := _locked_prefix(line.pi, taken)) is not None and line.res.spec().prefix != lk:
-        # 一个 PI 只用一个规则前缀：本 PI 已生成的号还在时，物料行的规则须用同一前缀（规则在规则库换了前缀等）
+    elif reg is not None and line.res.spec().prefix != reg["prefix"]:
+        # 一个 PI 一个规则前缀：规则在规则库换了前缀（另出版本）后与本 PI 登记的前缀不同，须重新选规则
         line.issues.append("RULE_PI_PREFIX")
     spec = line.res.spec() if line.res is not None and line.res.ready else None
     # 米数、产品单位用金蝶原值（含中文也照用）；金蝶为空且页面未填写时须先填写（规则不带米数 / 单位时不影响）
@@ -857,19 +669,11 @@ def _check(line: Line, taken: dict | None = None) -> None:
         line.issues.append("LENGTH_EMPTY")
     if spec is not None and spec.with_unit and line.unit_source == orders.UNIT_EMPTY:
         line.issues.append("UNIT_EMPTY")
-    # 附件项次必填
+    # 附件项次必填，且须为数字（按数字排先后）
     if not line.attach:
         line.issues.append("ATTACH_EMPTY")
-
-
-def _locked_prefix(pi: str, memo: dict | None) -> str | None:
-    """本 PI 锁定的前缀（rules.pi_used_prefix，同一次判断里只查一次）；本 PI 没有号时 None（不锁定）。"""
-    if memo is None:
-        return rules.pi_used_prefix(pi)
-    k = ("locked", pi)
-    if k not in memo:
-        memo[k] = rules.pi_used_prefix(pi)
-    return memo[k]
+    elif attach_key(line.attach) is None:
+        line.issues.append("ATTACH_NOT_NUMERIC")
 
 
 def _prefix_ok(line: Line, memo: dict | None) -> bool:
@@ -888,17 +692,127 @@ def _prefix_ok(line: Line, memo: dict | None) -> bool:
 _ATTACH_NUM = re.compile(r"^\d+(\.\d+)?$")
 
 
-def attach_order(attach: str) -> tuple:
-    """附件项次的排号次序：按数字比大小（"2" 在 "10" 前，"01" 与 "1" 相同）；不是数字的排在数字之后、按文字比。"""
+def attach_key(attach: str | None) -> Decimal | None:
+    """附件项次的数值（"01" 与 "1" 相同）；为空或不是数字时 None（不能生成，见 _check）。"""
     v = (attach or "").strip()
-    if _ATTACH_NUM.match(v):
-        return (0, Decimal(v), "")
-    return (1, Decimal(0), v)
+    return Decimal(v) if _ATTACH_NUM.match(v) else None
 
 
-def _gen_order(ls: list[Line]) -> list[Line]:
-    """排号顺序：同一 PI 所选物料行不分单据（不分组织）按附件项次从小到大（attach_order），一个项次排完再排下一个；
-    项次相同按单据点选 / 勾选先后（第一次出现的先后），同一单据内按行号（单据序号）从小到大。"""
+def attach_order(attach: str) -> tuple:
+    """附件项次的排序次序：按数字比大小（"2" 在 "10" 前，"01" 与 "1" 相同）；不是数字的排在数字之后、按文字比。"""
+    k = attach_key(attach)
+    if k is not None:
+        return (0, k, "")
+    return (1, Decimal(0), (attach or "").strip())
+
+
+# ================================================================== 项次拦截（按前缀）
+
+#: 被拦时最多列出的挡路物料行
+BLOCKER_LIST_MAX = 20
+
+
+def _prefix_order_state(prefix: str, memo: dict) -> tuple[set[Decimal], list[dict]]:
+    """前缀的项次状态：(已开始的项次, 候选挡路行)。
+    - 已开始的项次：这个前缀下现存的号（本系统生成的）的附件项次；号全删掉的项次回到没开始。
+    - 候选挡路行：登记了这个前缀的全部 PI 的物料行中还有额度的；失效的物料行、冻结或暂停交付单据的行、
+      删过号的行（删号后重新生成接在最大号之后）不挡。项次为空或不是数字的 key 为 None（挡全部没开始的项次）。"""
+    mk = ("order", prefix)
+    if mk in memo:
+        return memo[mk]
+    started = {
+        k
+        for k in (
+            attach_key(a)
+            for a in db.column(
+                "SELECT DISTINCT attach_no FROM sn_item WHERE seq_prefix = %s AND origin = 'GEN'", prefix
+            )
+        )
+        if k is not None
+    }
+    snap = db.all(
+        "SELECT m.* FROM sn_prd_mo m JOIN sn_pi_rule r ON r.pi_no = m.pi WHERE r.prefix = %s "
+        "ORDER BY m.pi, m.bill_no, m.seq",
+        prefix,
+    )
+    cands: list[dict] = []
+    if snap:
+        keys = [(r["bill_no"], r["seq"]) for r in snap]
+        counts, fills, _lens, _units = orders.line_extras(keys)
+        bills = sorted({k[0] for k in keys})
+        ph = marks(len(bills))
+        held = set(
+            db.column(
+                f"SELECT bill_no FROM sn_bill_ledger WHERE bill_no IN ({ph}) "
+                "AND (pi_frozen <> 0 OR suspend IS NOT NULL)",
+                *bills,
+            )
+        )
+        deleted = {
+            (r["bill_no"], int(r["bill_seq"]))
+            for r in db.all(
+                f"SELECT DISTINCT bill_no, bill_seq FROM sn_item_deleted WHERE bill_no IN ({ph})",
+                *bills,
+            )
+        }
+        vrule = line_void.current()
+        for r in snap:
+            k = (r["bill_no"], r["seq"])
+            c = counts.get(k)
+            quota = orders.sn_qty(r) - (0 if c is None else int(c["own_generated"]))
+            if quota <= 0 or vrule.is_void(r) or r["bill_no"] in held or k in deleted:
+                continue
+            attach, _src = orders.effective_attach(r, fills.get(k))
+            ak = attach_key(attach)
+            cands.append(
+                {
+                    "pi_no": r["pi"],
+                    "bill_no": r["bill_no"],
+                    "seq": r["seq"],
+                    "material_code": r["material_code"],
+                    "attach": attach,
+                    "quota": quota,
+                    "key": ak,
+                    "reason": "ATTACH_EMPTY"
+                    if not attach
+                    else ("ATTACH_NOT_NUMERIC" if ak is None else "NOT_GENERATED"),
+                }
+            )
+    memo[mk] = (started, cands)
+    return memo[mk]
+
+
+def _check_order(prefix: str, ls: list[Line], run: set[tuple[str, int]], memo: dict) -> None:
+    """项次拦截：同一前缀下，一行的项次已开始（有现存的号）时不拦，接在最大号之后生成；还没开始时，
+    只要登记了这个前缀的 PI 里还有更小项次（或项次为空、不是数字）的行有额度，就拦住（ATTACH_ORDER_BLOCKED）。
+    run 为这次一起生成的行：彼此不挡（同一次生成里小项次排在前）。"""
+    todo = [x for x in ls if x.quota > 0 and attach_key(x.attach) is not None]
+    if not todo:
+        return
+    started, cands = _prefix_order_state(prefix, memo)
+    others = [b for b in cands if (b["bill_no"], b["seq"]) not in run]
+    if not others:
+        return
+    for x in todo:
+        k = attach_key(x.attach)
+        if k in started:
+            continue
+        bl = [b for b in others if b["key"] is None or b["key"] < k]
+        if bl:
+            x.issues.append("ATTACH_ORDER_BLOCKED")
+            x.blockers = [
+                {n: b[n] for n in ("pi_no", "bill_no", "seq", "material_code", "attach", "quota", "reason")}
+                for b in bl[:BLOCKER_LIST_MAX]
+            ]
+
+
+def _gen_order(ls: list[Line], scope: str) -> list[Line]:
+    """排号顺序：先按附件项次从小到大（attach_order）。
+    - 点选物料行（LINES）：同项次严格按点击先后（ls 即点击顺序），不按单据分组；
+    - 勾整张单据（BILLS）：同项次按单据勾选先后（第一次出现的先后），同一单据内按行号。"""
+    if scope == SCOPE_LINES:
+        idx = {id(x): i for i, x in enumerate(ls)}
+        return sorted(ls, key=lambda x: (attach_order(x.attach), idx[id(x)]))
     rank: dict[str, int] = {}
     for x in ls:
         rank.setdefault(x.bill_no, len(rank))
@@ -928,11 +842,13 @@ def _scope_keys(pi: str, scope: str, bills_in: list[str] | None, lines_in: list[
 # ================================================================== 预演
 
 
-def _plan(pi: str, scope: str, keys: list[tuple[str, int]], base: int, seq: dict | None = None) -> dict:
-    """按排号顺序（见 _gen_order）给每个还有额度的物料行切号（整行额度，不拆行）；流水来源见 seq（默认 MAX）。
-    返回计划（不落库）；不能生成时 issues 非空。"""
+def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = None) -> dict:
+    """按排号顺序（见 _gen_order）给每个还有额度的物料行切号（整行额度，不拆行），接在本 PI 规则前缀的最大号之后；
+    流水来源见 seq（默认 MAX）。返回计划（不落库）；不能生成时 issues 非空（项次拦截另带挡路的物料行）。"""
     seq = seq or {"mode": SEQ_MAX}
-    ls = _gen_order(_load_lines(pi, keys))
+    prefix = prefix_of(pi)
+    base = rules.prefix_last(prefix)
+    ls = _gen_order(_load_lines(pi, keys), scope)
     todo = [x for x in ls if x.quota > 0]
     quota = sum(x.quota for x in todo)
     issues = [
@@ -943,6 +859,8 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], base: int, seq: dict
             "issues": x.issues,
             # 自定义前缀被占用时给出前缀，确认生成时按前缀冲突提示
             "prefix": x.res.version["prefix"] if "RULE_PREFIX" in x.issues and x.res.ready else None,
+            # 项次拦截：挡住本行的物料行（最多 BLOCKER_LIST_MAX 行）
+            "blockers": x.blockers,
         }
         for x in todo
         if x.issues
@@ -953,7 +871,9 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], base: int, seq: dict
         "quota": quota,
         "issues": issues,
         "items": [],
+        # 前缀最大号（生成时按最新的最大号接号，只是起号变了时自动顺延，见 _generate_in_tx）
         "base_last_seq": base,
+        "prefix": prefix,
         "seq": seq,
     }
     if not todo:
@@ -964,7 +884,7 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], base: int, seq: dict
     qty = quota
     if qty > settings.gen_max_per_run:
         raise biz(ErrorCode.GEN_QTY_OVER_MAX, qty=qty, max=settings.gen_max_per_run)
-    got = _assign(pi, keys, todo, base, seq)
+    got = _assign(prefix, todo, base, seq)
     for x in todo:
         n = x.quota
         spec = x.res.spec()
@@ -1025,8 +945,8 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], base: int, seq: dict
                 "line_qty": x.qty,
                 "own_before": x.own,
                 "qty": n,
-                # 号的来源：RESERVE 预留号段 / SHIFT 按起始号平移 / RANGE 手动起止号 / TAIL 没有预留、接在最大号之后；
-                # tail_qty 接在最大号之后的枚数（没有预留或预留不够），gap_qty 用所选空号段的枚数（手动起止号）
+                # 号的来源：RANGE 手动起止号 / TAIL 接在前缀最大号之后；
+                # tail_qty 接在最大号之后的枚数，gap_qty 用所选空号段的枚数（手动起止号）
                 "seq_src": a_["src"],
                 "tail_qty": a_["tail"],
                 "gap_qty": a_.get("gap", 0),
@@ -1051,19 +971,18 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], base: int, seq: dict
     out["qty"] = qty
     out["start_seq"] = min(x["start_seq"] for x in out["items"])
     out["end_seq"] = max(x["end_seq"] for x in out["items"])
-    # 生成后的 PI 最大号（只增不减，含预留号段）
+    # 生成后的前缀最大号（只增不减）
     out["new_last"] = max(got["top"], out["end_seq"])
     # 用到的空闲流水（手动起止号内）、所选空号段与溢出（从最大号之后接着编）的枚数
     out["range_qty"] = got["range_qty"]
     out["gap_qty"] = got["gap_qty"]
     out["overflow_qty"] = got["overflow_qty"]
-    # 接在最大号之后的号从哪个流水起（含新建的预留）
+    # 接在最大号之后的号从哪个流水起
     out["tail_from"] = got["tail_from"]
-    # 共用前缀的别的 PI（没有为空表）：生成时按最新数据再核对不用它们已用、已预留的流水
-    out["shared_pis"] = got["shared"]
-    # 号段预留：本次落库的预留（第一次生成时建预留表）；预留起号
-    out["reserve"] = got["reserve"]
-    out["reserve_start"] = got["reserve"]["start"]
+    # 早先的共用前缀、号段预留字段已取消（同一前缀各 PI 共用一套流水）：保留字段，页面接口不变
+    out["shared_pis"] = []
+    out["reserve"] = None
+    out["reserve_start"] = None
     out["start_sn"] = out["items"][0]["start_sn"]
     out["end_sn"] = out["items"][-1]["end_sn"]
     return out
@@ -1090,7 +1009,7 @@ def preview(
     seq = seq_choice(seq_mode, seq_start, seq_end, seq_gaps)
     keys = _scope_keys(pi, sc, bills, lines)
     cu.check_write(*orders.bill_orgs(k[0] for k in keys))
-    plan = _plan(pi, sc, keys, last_seq(pi), seq)
+    plan = _plan(pi, sc, keys, seq)
     gap = gaps_of(pi)
     if plan["issues"]:
         return {**plan, "generatable": False, "limits": limits(), "gaps": gap}
@@ -1120,26 +1039,40 @@ def preview(
     }
 
 
+#: 预演与生成时须相同的字段（号段可以顺延，见 _same_plan）
 _KEY_FIELDS = (
     "bill_no",
     "seq",
     "qty",
-    "start_seq",
-    "end_seq",
-    "start_sn",
-    "end_sn",
     "rule_key",
     "rule_plan",
     "line_qty",
     "own_before",
-    "segs",
 )
 
 
+def _fixed_segs(plan: dict, x: dict) -> list[tuple[int, int]]:
+    """手动起止号（RANGE）时该行落在起止号内、所选空号段里的号（不能顺延）；MAX 时为空。"""
+    sq = plan.get("seq") or {}
+    if sq.get("mode") != SEQ_RANGE:
+        return []
+    zone = [(sq["start"], sq["end"])] + [tuple(g) for g in sq.get("gaps") or []]
+    return seg.intersect([tuple(g) for g in x["segs"]], zone)
+
+
 def _same_plan(a: dict, b: dict) -> bool:
+    """预演 a 与按最新数据算的 b 是否同一计划：物料行（顺序）、数量、规则相同；手动起止号内、所选空号段里的号相同。
+    只是接在最大号之后的号变了（同前缀别的 PI 先生成，最大号变大）不算变：生成时自动顺延（_generate_in_tx）。"""
     if len(a["items"]) != len(b["items"]):
         return False
-    return all(all(x.get(k) == y.get(k) for k in _KEY_FIELDS) for x, y in zip(a["items"], b["items"], strict=True))
+    for x, y in zip(a["items"], b["items"], strict=True):
+        if any(x.get(k) != y.get(k) for k in _KEY_FIELDS) or _fixed_segs(a, x) != _fixed_segs(b, y):
+            return False
+    return True
+
+
+def _shifted(a: dict, b: dict) -> bool:
+    return any(x["segs"] != y["segs"] for x, y in zip(a["items"], b["items"], strict=True))
 
 
 # ================================================================== 生成
@@ -1148,6 +1081,8 @@ def _same_plan(a: dict, b: dict) -> bool:
 def generate(cu: CurrentUser, token: str | None) -> dict:
     """凭预演令牌生成。占用 PI 操作锁（后台任务结束时释放）。"""
     p = None if util.blank(token) else db.one("SELECT * FROM sn_gen_preview WHERE token = %s", util.trim(token))
+    # 同前缀别的 PI 在预演后先生成（前缀最大号变大）：物料行、数量、规则不变时自动顺延到新的最大号之后，
+    # 结果里给出实际号段（shifted）；手动起止号内的号被占用、项次拦截等变了时报预演已失效
     if p is None or p["created_by"] != cu.emp_no:
         raise biz(ErrorCode.GEN_PREVIEW_REQUIRED)
     if db.exists("SELECT EXISTS(SELECT 1 FROM sn_gen_job WHERE preview_token = %s)", p["token"]):
@@ -1158,12 +1093,9 @@ def generate(cu: CurrentUser, token: str | None) -> dict:
     held = locks.pi_lock(pi)
     try:
         stored = json.loads(p["plan_json"])
-        actual = last_seq(pi)
-        if actual != p["base_last_seq"]:
-            raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=p["base_last_seq"], actual=actual)
         keys = [tuple(k) for k in stored["keys"]]
         cu.check_write(*orders.bill_orgs(k[0] for k in keys))
-        fresh = _plan(pi, stored["scope"], keys, actual, stored.get("seq"))
+        fresh = _plan(pi, stored["scope"], keys, stored.get("seq"))
         # 确认生成时再查一次前缀能否用：自定义前缀在预演后被别的规则占用（尚未归属的版本，或别的 PI 按别的进制 /
         # 位数用了）时报前缀冲突 / 格式锁定（页面弹窗提示）
         for i in fresh["issues"]:
@@ -1190,7 +1122,11 @@ def generate(cu: CurrentUser, token: str | None) -> dict:
                 RUNNING,
                 pi,
                 p["token"],
-                json.dumps(fresh, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(
+                    {**fresh, "keys": stored["keys"], "shifted": _shifted(stored, fresh)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
                 cu.emp_no,
                 util.now(),
             )
@@ -1240,10 +1176,18 @@ def _run(cu: CurrentUser, job_id: int, rethrow: bool) -> None:
                 log.warning("gen_deadlock_retry", job=job_id, pi=j["pi_no"], attempt=attempt)
             with db.tx():
                 _generate_in_tx(cu, j, plan)
+                # 实际生成的号段（自动顺延时与预演不同）随状态一起写
                 n = db.exec(
-                    "UPDATE sn_gen_job SET status = %s, done_qty = qty, current_sn = end_sn, running_pi = NULL, "
-                    "finished_at = %s WHERE id = %s AND status = %s AND cancel_at IS NULL",
+                    "UPDATE sn_gen_job SET status = %s, done_qty = qty, start_seq_dec = %s, end_seq_dec = %s, "
+                    "start_sn = %s, end_sn = %s, current_sn = %s, plan_json = %s, running_pi = NULL, finished_at = %s "
+                    "WHERE id = %s AND status = %s AND cancel_at IS NULL",
                     SUCCESS,
+                    plan["start_seq"],
+                    plan["end_seq"],
+                    plan["start_sn"],
+                    plan["end_sn"],
+                    plan["end_sn"],
+                    json.dumps(plan, ensure_ascii=False, separators=(",", ":")),
                     util.now(),
                     job_id,
                     RUNNING,
@@ -1313,33 +1257,31 @@ def _lock_row(table: str, where: str, args: tuple, insert_sql: str, insert_args:
     return db.one(f"SELECT * FROM {table} WHERE {where} FOR UPDATE", *args)
 
 
-def _plan_segs(plan: dict) -> list[tuple[int, int]]:
-    """计划要占的流水：各物料行的号段与本次落库的预留号段。"""
-    segs = [tuple(g) for x in plan["items"] for g in x["segs"]]
-    r = plan.get("reserve") or {}
-    segs += [(a, e) for _b, _q, a, e in r.get("others") or []]
-    segs += [tuple(g) for x in r.get("set") or [] for g in x["segs"]]
-    return reserve.merge(segs)
-
-
-def _check_shared(pi: str, plan: dict) -> None:
-    """生成事务内（已拿本次前缀的前缀锁）：按最新已提交的数据再核对，计划要占的流水不能是共用前缀的别的 PI
-    已用、已预留的；预演后别的 PI 先用同一前缀生成了的，报预演已失效（重新预演从新的最大号之后接号）。
-    独立短事务里读：本事务的一致性快照可能早于别的 PI 的生成提交（同前缀的提交已由前缀锁排在前面）。"""
-    with db.new_tx():
-        sh = shared_of(pi, {x["prefix"] for x in plan["items"]})
-    if sh.segs and reserve.intersect(_plan_segs(plan), list(sh.segs)):
-        raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
-
-
 def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
+    """生成事务。plan 为任务里存的计划，按最新数据重算后就地换成实际生成的计划（自动顺延时号段变了）。"""
     now = util.now()
     pi = j["pi_no"]
-    # 先拿本次用到的前缀的前缀锁（锁到事务结束）：同前缀（共用前缀的几张 PI）的生成串行，
-    # 后到的等前一笔提交后按最新数据核对（_check_shared）；不同前缀互不影响
-    locks.hold_prefixes({x["prefix"] for x in plan["items"]})
-    _check_shared(pi, plan)
-    c = _lock_row(
+    prefix = plan.get("prefix") or plan["items"][0]["prefix"]
+    # 先拿前缀锁（锁到事务结束）：同一前缀各 PI 的生成串行，后到的等前一笔提交后按最新的前缀最大号重算；
+    # 不同前缀互不影响。拿锁之后才第一次读库，本事务看到的是前一笔已提交的数据
+    locks.hold_prefixes({prefix})
+    _lock_row(
+        "sn_prefix_counter",
+        "prefix = %s",
+        (prefix,),
+        "INSERT IGNORE INTO sn_prefix_counter(prefix, last_seq_dec, seq_grow, created_by, created_at, updated_at) "
+        "VALUES (%s, 0, 1, %s, %s, %s)",
+        (prefix, cu.emp_no, now, now),
+    )
+    fresh = _plan(pi, plan["scope"], [tuple(k) for k in plan["keys"]], plan.get("seq"))
+    if fresh["issues"] or fresh["prefix"] != prefix or not _same_plan(plan, fresh):
+        raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
+    shifted = bool(plan.get("shifted")) or _shifted(plan, fresh)
+    keys = plan["keys"]
+    plan.clear()
+    plan.update({**fresh, "keys": keys, "shifted": shifted})
+    # 任务行的号段、计划在事务结束时随状态一起写（_run）：事务中途不锁任务行，进度、取消另用短连接写它
+    _lock_row(
         "sn_pi_counter",
         "pi_no = %s",
         (pi,),
@@ -1350,11 +1292,6 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
         raise biz(ErrorCode.CONFLICT_RETRY)
     if _cancel_requested(j["id"]):
         raise biz(ErrorCode.GEN_CANCELED)
-    if c["last_seq_dec"] != plan["base_last_seq"]:
-        raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=plan["base_last_seq"], actual=c["last_seq_dec"])
-    # 重排预留（号已全部删掉）：写号之前本 PI 仍须有预留、且仍没有号
-    if (plan.get("reserve") or {}).get("rebuild") and reserve.rebuildable(pi) is None:
-        raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=plan["base_last_seq"], actual=c["last_seq_dec"])
     # 事务内按最新快照和计数表重新校验额度（锁计数行）；预演后物料行失效（改了失效条件或状态刷新）也算计划已变
     vrule = line_void.current()
     for x in plan["items"]:
@@ -1381,9 +1318,8 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
         same = [(y["bill_no"], y["seq"]) for y in plan["items"] if y["rule_key"] == x["rule_key"]]
         res = _resolved_of(pi, x)
         versions[x["rule_key"]] = rules.realize(cu, pi, res, same)
-    # 沿用已用前缀的版本时另记的起始号只管这一次生成：生成过的物料行清掉（之后流水接续）；上限自动突破照旧保留
-    for x in plan["items"]:
-        rules.keep_grow(x["bill_no"], x["seq"])
+    # PI 登记的起始号只管这一次生成：生成后清掉（之后流水接续）
+    db.exec("UPDATE sn_pi_rule SET seq_start = NULL WHERE pi_no = %s", pi)
     for no in sorted({x["bill_no"] for x in plan["items"]}):
         changes.ensure_ledger(no)
         # 写号之前先给台账加共享锁：订单变更正在改这张单的暂停时等它提交，之后改暂停的等这次生成提交，
@@ -1425,6 +1361,7 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
                     x["length"],
                     x["attach"],
                     v["id"],
+                    spec.prefix,
                     j["gen_batch"],
                     now,
                     now,
@@ -1462,16 +1399,17 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
             x["bill_no"],
             x["seq"],
         )
-    # 号段预留：第一次生成时建预留表，本次生成的物料行改为计划给出的号段（早先的计划没有 reserve）
-    if plan.get("reserve"):
-        if plan["reserve"].get("new") and not plan["reserve"].get("rebuild") and reserve.start_of(pi) is not None:
-            raise biz(ErrorCode.GEN_PREVIEW_STALE, pi=pi, expected=plan["base_last_seq"], actual=c["last_seq_dec"])
-        reserve.save(pi, plan["reserve"], cu.emp_no)
-    # 最大号只增不减（含预留号段）：用预留号段、空号段生成时可能不变
+    # 前缀最大号只增不减：用空号段生成时可能不变；PI 统计记本 PI 自己生成的最大号与枚数
+    db.exec(
+        "UPDATE sn_prefix_counter SET last_seq_dec = GREATEST(last_seq_dec, %s), updated_at = %s WHERE prefix = %s",
+        plan["new_last"],
+        now,
+        prefix,
+    )
     db.exec(
         "UPDATE sn_pi_counter SET last_seq_dec = GREATEST(last_seq_dec, %s), generated_qty = generated_qty + %s, "
         "updated_at = %s WHERE pi_no = %s",
-        plan.get("new_last", plan["end_seq"]),
+        plan["end_seq"],
         plan["qty"],
         now,
         pi,

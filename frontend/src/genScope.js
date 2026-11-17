@@ -73,7 +73,7 @@ export function genLimit(qty, limits, unlocked) {
 }
 
 /**
- * 生成的流水来源（预演请求体的一部分）：mode = "MAX" 按各物料行的预留号段（没有预留的接在最大号之后）；
+ * 生成的流水来源（预演请求体的一部分）：mode = "MAX" 接在本 PI 规则前缀的最大号之后（同一前缀各 PI 共用一套流水）；
  * "RANGE" 手动起止流水号（十进制），在空号段与未使用的号中取，不够时用 gaps（勾选的空号段 [[起, 止], …]，按从小到大），
  * 再不够（或没勾选）后台从最大号之后接着编。只填起号按单个号。
  * 返回 { body, error }：body 合并进预演请求；起止号不合法时 body 为 null、error 为 "SEQ_RANGE"。
@@ -93,8 +93,8 @@ export function seqSource(mode, start, end, gaps) {
 
 /**
  * 「选规则」的默认前缀。rulePrefix 为生成详情的 rule_prefix（见后台 rules.pi_prefix），lines 为所选物料行（按点选顺序）。
- * - 本 PI 已生成的号还在（rulePrefix.custom 非空）：沿用已用的前缀 rulePrefix.prefix，之后各张单据都用它；
- * - 否则：点选的第一个单据编码后 7 位（只保存了规则、还没生成的不算已用）；
+ * - 本 PI 已登记规则（rulePrefix.custom 非空；一个 PI 一个规则前缀）：沿用登记的前缀 rulePrefix.prefix；
+ * - 否则：点选的第一个单据编码后 7 位；
  * - 都取不到：PI 第一张单据编码后 7 位（rulePrefix.prefix）。
  */
 export function defaultRulePrefix(rulePrefix, lines) {
@@ -129,10 +129,16 @@ export function compareAttach(a, b) {
 
 /**
  * 生成的排号顺序（与后台 generate._gen_order 一致）：所选物料行不分单据（不分组织）按附件项次从小到大
- * （compareAttach），一个项次排完再排下一个；项次相同按单据勾选 / 点选先后（第一次出现的先后），
- * 同一单据内按行号（单据序号）从小到大。attachOf(line) 取物料行的附件项次。返回新数组。
+ * （compareAttach），一个项次排完再排下一个；项次相同时：
+ * - byClick（点选物料行）：严格按点击先后（lines 即点击顺序），不按单据分组；
+ * - 否则（勾整张单据）：按单据勾选先后（第一次出现的先后），同一单据内按行号（单据序号）从小到大。
+ * attachOf(line) 取物料行的附件项次。返回新数组。
  */
-export function genOrder(lines, attachOf) {
+export function genOrder(lines, attachOf, byClick = false) {
+  if (byClick) {
+    const idx = new Map(lines.map((l, i) => [l, i]));
+    return [...lines].sort((a, b) => compareAttach(attachOf(a), attachOf(b)) || idx.get(a) - idx.get(b));
+  }
   const rank = new Map();
   for (const l of lines) if (!rank.has(l.bill_no)) rank.set(l.bill_no, rank.size);
   return [...lines].sort(

@@ -633,6 +633,8 @@
         "SEP_TOO_LONG": "流水与米数、米数与单位之间的内容各不能超过 {max} 位"
       },
       "changeConfirm": "所选物料行已生成过号，确认改选规则？",
+      "seqGrowPrefix": "按前缀统一设置：前缀第一次被选时按这里的选择，之后在规则库修改",
+      "seqGrowLocked": "本 PI 的前缀已登记，自动突破请在规则库修改",
       "savedPi": "已保存：本 PI {n} 个物料行同用此规则"
     },
     "filter": {
@@ -685,11 +687,21 @@
       "NO_RULE": "需先选规则",
       "RULE_PREFIX": "规则须换前缀",
       "RULE_PI_PREFIX": "与本 PI 已用前缀不同",
+      "ATTACH_ORDER_BLOCKED": "靠前项次未生成完",
+      "ATTACH_NOT_NUMERIC": "附件项次须为数字",
       "LENGTH_EMPTY": "米数待填写",
       "UNIT_EMPTY": "产品单位待填写",
       "ATTACH_EMPTY": "附件项次待填写",
       "QUOTA_EMPTY": "没有可生成额度"
     },
+    "blockerTitle": "同前缀下这些物料行须先生成完（或处理后）：",
+    "blocker": "PI {pi} · {bill} 行 {seq} · 项次 {attach} · {reason}",
+    "blockerReason": {
+      "NOT_GENERATED": "未生成",
+      "ATTACH_EMPTY": "附件项次为空",
+      "ATTACH_NOT_NUMERIC": "附件项次不是数字"
+    },
+    "genShifted": "同前缀别的 PI 刚生成过，本次号段已顺延为 {start} ～ {end}",
     "piRule": "规则 {rule} · 前缀 {prefix}",
     "piRuleCustom": "自定义",
     "unitChinese": "产品单位不能含中文，请填写如 M、m、L",
@@ -1126,6 +1138,8 @@
     "pis": "使用的 PI",
     "pisSelected": "已选未生成",
     "topSeq": "最大号",
+    "seqGrow": "上限自动突破",
+    "seqGrowTip": "按前缀统一设置，作用于这个前缀下的全部 PI；流水已超出规则位数后不能关闭",
     "status": "状态",
     "unused": "未使用",
     "detail": "详情",

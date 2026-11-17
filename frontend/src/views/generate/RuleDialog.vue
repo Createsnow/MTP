@@ -159,10 +159,13 @@
                   </span>
                   <!-- 上限自动突破（默认开启）：流水用完位数后自动加位（4 位用到 9999 后接 5 位 10000，以此类推）；
                        关闭时保持原逻辑（位数按订单数量定，用完报规则位数已用尽） -->
-                  <span class="fi grow" :class="{ on: p.grow }">
-                    <el-switch v-model="p.grow" size="small" />
-                    {{ t("generate.rule.seqGrow") }}
-                  </span>
+                  <!-- 自动突破按前缀统一设置：前缀第一次被选时按这里的选择，之后只能在规则库改（这里置灰） -->
+                  <el-tooltip placement="top" :content="t(growLocked ? 'generate.rule.seqGrowLocked' : 'generate.rule.seqGrowPrefix')">
+                    <span class="fi grow" :class="{ on: p.grow }">
+                      <el-switch v-model="p.grow" size="small" :disabled="growLocked" />
+                      {{ t("generate.rule.seqGrow") }}
+                    </span>
+                  </el-tooltip>
                   <span v-if="seqShort(p)" class="fi seq-short">
                     {{ t("generate.rule.seqTooShort", { need, max: maxSeq(p), len: p.len, base: p.base }) }}
                   </span>
@@ -234,7 +237,8 @@ import type { CustomRule, OrderLine } from "@/types/api";
 
 /** ctx.rule_prefix（见 rules.pi_prefix）：custom = 本 PI 已生成的号还在时所用前缀的格式，prefix 为这个前缀；
  *  还没有生成的号（或已全部删掉）时 custom 为 null，prefix 为 PI 第一张单据编码后 7 位（没有点选的单据时才用）。 */
-type RulePrefix = { prefix: string; custom: CustomRule | null };
+/** 本 PI 规则登记（rules.pi_prefix）：registered 已登记；seq_grow 为前缀的自动突破开关 */
+type RulePrefix = { prefix: string; custom: CustomRule | null; seq_grow?: boolean; registered?: boolean };
 /** SN 组成的一个组件（见 snParts.js） */
 type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
@@ -438,6 +442,8 @@ const lockTitle = computed(() =>
 );
 /** 本 PI 已用这个前缀（同格式沿用那一版、流水接续）：起始号下限为接续的下一个号，可改大往后跳。 */
 const prefixUsed = computed(() => !!props.rulePrefix?.custom && built.value.spec.prefix === props.rulePrefix.prefix);
+/** 前缀已登记（本 PI 登记的前缀）：自动突破按前缀统一设置，在规则库改 */
+const growLocked = computed(() => !!props.rulePrefix?.registered && built.value.spec.prefix === props.rulePrefix.prefix);
 /** 本 PI 号段预留的预留起号（有预留时起始号默认为它，按预留号段生成；改大即平移） */
 const reserveStart = computed(() => (Number(props.reserveStart) > 0 ? Number(props.reserveStart) : 0));
 /** 起始号下限：有预留时为预留起号；没有时已用前缀为接续的下一个号，否则为 1 */
@@ -468,8 +474,8 @@ function onOpen() {
   // 起始号带出所选物料行已存的：新前缀的自定义规则，或沿用本 PI 已用前缀时另记的（还没生成过）
   const own = props.rulePrefix?.custom ? cur?.prefix === props.rulePrefix.prefix : cur?.mode === "CUSTOM";
   const start = own ? cur?.seq_start ?? null : null;
-  // 上限自动突破带出所选物料行已存的（同上），否则默认开启
-  const grow = own ? cur?.seq_grow ?? true : true;
+  // 上限自动突破按前缀：本 PI 已登记时为前缀的开关，否则默认开启
+  const grow = props.rulePrefix?.registered ? props.rulePrefix.seq_grow ?? true : own ? cur?.seq_grow ?? true : true;
   parts.value = base ? fromSpec({ ...base, seq_start: start, seq_grow: grow }, defaultHead()) : defaultParts(grow);
   target.value = "PRE";
   hot.value = null;

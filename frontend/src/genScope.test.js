@@ -107,7 +107,9 @@ test("generation order: attachment no. first across bills, then bill pick order,
   const ab = [L("A", 1), L("A", 2), L("A", 3), L("B", 1), L("B", 2)];
   assert.deepEqual(genOrder(ab, of3), [L("A", 2), L("A", 3), L("B", 1), L("A", 1), L("B", 2)]);
   const ba = [L("B", 2), L("A", 1), L("B", 1), L("A", 3), L("A", 2)];
-  assert.deepEqual(genOrder(ba, of3), [L("B", 1), L("A", 2), L("A", 3), L("B", 2), L("A", 1)], "点选物料行：单据按第一次点选的先后");
+  assert.deepEqual(genOrder(ba, of3), [L("B", 1), L("A", 2), L("A", 3), L("B", 2), L("A", 1)], "勾整单：单据按勾选先后，单据内按行号");
+  // 点选物料行：同项次严格按点击先后，不按单据分组
+  assert.deepEqual(genOrder(ba, of3, true), [L("B", 1), L("A", 3), L("A", 2), L("B", 2), L("A", 1)], "点选物料行：同项次按点击先后");
 });
 
 test("duplicate attachment numbers are grouped across bills, lines in generation order", () => {

@@ -230,7 +230,14 @@
             <el-table-column :label="t('common.status')" :min-width="lineW.status">
               <template #default="{ row }">
                 <div v-if="row.quota && row.issues?.length" class="issue-tags">
-                  <el-tag v-for="i in row.issues" :key="i" size="small" type="danger" effect="plain">{{ issueText(i) }}</el-tag>
+                  <!-- 项次拦截：悬停列出挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行），由用户自己去处理 -->
+                  <el-tooltip v-for="i in row.issues" :key="i" placement="top" :disabled="i !== 'ATTACH_ORDER_BLOCKED' || !row.blockers?.length">
+                    <template #content>
+                      <div>{{ t("generate.blockerTitle") }}</div>
+                      <div v-for="b in row.blockers" :key="`${b.bill_no}#${b.seq}`">{{ blockerText(b) }}</div>
+                    </template>
+                    <el-tag size="small" type="danger" effect="plain">{{ issueText(i) }}</el-tag>
+                  </el-tooltip>
                 </div>
                 <el-tag v-else size="small" :type="LINE_STATE_TAG[lineState(row)]" disable-transitions>{{ t(`generate.lineState.${lineState(row)}`) }}</el-tag>
               </template>
@@ -399,6 +406,9 @@ const { nameOf } = useFactories();
 const store = useAuthStore();
 const { fmt: fmtTime } = useTime();
 const issueText = (c: string) => t(`generate.issue.${c}`);
+/** 挡路的物料行：PI、单据、行号、附件项次、原因 */
+const blockerText = (b: any) =>
+  t("generate.blocker", { pi: b.pi_no, bill: b.bill_no, seq: b.seq, attach: b.attach || "—", reason: t(`generate.blockerReason.${b.reason}`) });
 const sameLine = (a: LineRef, b: LineRef) => a.bill_no === b.bill_no && a.seq === b.seq;
 const busy = ref("");
 
@@ -759,8 +769,8 @@ function lineClass({ row }: { row: OrderLine }) {
     .join(" ");
 }
 /** 生成时的排号顺序（与后台一致）：所选物料行不分单据按附件项次从小到大（按数字比），一个项次排完再排下一个；
- *  项次相同按单据勾选 / 点选先后，同一单据内按行号从小到大。勾选框旁的数字按这个顺序标（单据头标单据第一次出现的次序，物料行标排号次序）。 */
-const genRows = computed(() => genOrder(pickedRows.value, attachOf) as OrderLine[]);
+ *  项次相同时：点选物料行按点击先后；勾整张单据按单据勾选先后，同一单据内按行号从小到大。勾选框旁的数字按这个顺序标（单据头标单据第一次出现的次序，物料行标排号次序）。 */
+const genRows = computed(() => genOrder(pickedRows.value, attachOf, sel.value.lines.length > 0) as OrderLine[]);
 const genIdx = (l: LineRef) => genRows.value.findIndex((x) => sameLine(x, l));
 const billIdx = (no: string) => [...new Set(genRows.value.map((x) => x.bill_no))].indexOf(no);
 /** 生成范围：勾选的单据或物料行；必须勾选，都不勾选为 null（不预演、不能生成）。
@@ -942,8 +952,10 @@ function resetGen() {
 }
 
 /** 生成完成：清空勾选、刷新详情；号到「SN 分配」页分配。 */
-async function afterGenerated(qty: number) {
-  ElMessage.success(t("generate.genDone", { n: num(qty) }));
+async function afterGenerated(job: any) {
+  ElMessage.success(t("generate.genDone", { n: num(job.qty) }));
+  // 确认时同前缀别的 PI 先生成了：号段自动顺延到新的最大号之后，提示实际号段
+  if (job.shifted) ElMessage.warning({ message: t("generate.genShifted", { start: job.start_sn, end: job.end_sn }), duration: 8000 });
   clearSelection();
   resetGen();
   await reloadCtx();
@@ -956,7 +968,7 @@ async function runGen() {
     const job = await api.genRun(p.token);
     genDlg.value = false;
     if (job.status === "RUNNING") startPoll(job);
-    else await afterGenerated(job.qty);
+    else await afterGenerated(job);
   } catch {
     // 预演失效等：重新预演
     genDlg.value = false;
@@ -991,7 +1003,7 @@ function stopPoll(clear = true) {
 
 async function finishPoll(r: any) {
   stopPoll();
-  if (r.status === "SUCCESS") return afterGenerated(r.qty);
+  if (r.status === "SUCCESS") return afterGenerated(r);
   if (r.status === "CANCELED") ElMessage.info(t("generate.genCanceled"));
   else ElMessage.error(r.error_msg || t("generate.job.FAILED"));
   resetGen();

@@ -633,6 +633,8 @@
         "SEP_TOO_LONG": "Phần giữa tuần tự và chiều dài, hoặc giữa chiều dài và đơn vị, tối đa {max} ký tự"
       },
       "changeConfirm": "Một số dòng đã có SN. Đổi quy tắc?",
+      "seqGrowPrefix": "Thiết lập theo tiền tố: lần chọn đầu tiên quyết định, sau đó sửa trong thư viện quy tắc",
+      "seqGrowLocked": "Tiền tố của PI đã đăng ký; hãy sửa tự mở rộng trong thư viện quy tắc",
       "savedPi": "Đã lưu: {n} dòng của PI này dùng quy tắc này"
     },
     "filter": {
@@ -685,11 +687,21 @@
       "NO_RULE": "Chưa có quy tắc",
       "RULE_PREFIX": "Quy tắc cần tiền tố mới",
       "RULE_PI_PREFIX": "Khác tiền tố PI đã dùng",
+      "ATTACH_ORDER_BLOCKED": "Hạng mục trước chưa tạo xong",
+      "ATTACH_NOT_NUMERIC": "Hạng mục đính kèm phải là số",
       "LENGTH_EMPTY": "Chiều dài chờ điền",
       "UNIT_EMPTY": "Đơn vị chờ điền",
       "ATTACH_EMPTY": "Hạng mục đính kèm chờ điền",
       "QUOTA_EMPTY": "Không còn hạn mức"
     },
+    "blockerTitle": "Các dòng cùng tiền tố sau phải tạo xong (hoặc xử lý) trước:",
+    "blocker": "PI {pi} · {bill} dòng {seq} · hạng mục {attach} · {reason}",
+    "blockerReason": {
+      "NOT_GENERATED": "chưa tạo",
+      "ATTACH_EMPTY": "hạng mục trống",
+      "ATTACH_NOT_NUMERIC": "hạng mục không phải số"
+    },
+    "genShifted": "PI khác cùng tiền tố vừa tạo trước; lần này đã lùi sang {start} ~ {end}",
     "piRule": "Quy tắc {rule} · tiền tố {prefix}",
     "piRuleCustom": "Tùy chỉnh",
     "unitChinese": "Đơn vị không được có chữ Trung Quốc; hãy nhập ví dụ M, m, L",
@@ -1126,6 +1138,8 @@
     "pis": "PI sử dụng",
     "pisSelected": "Đã chọn, chưa tạo",
     "topSeq": "Số lớn nhất",
+    "seqGrow": "Tự tăng chữ số khi hết",
+    "seqGrowTip": "Thiết lập theo tiền tố cho mọi PI dùng nó; không thể tắt khi dãy số đã vượt số chữ số",
     "status": "Trạng thái",
     "unused": "Chưa dùng",
     "detail": "Chi tiết",

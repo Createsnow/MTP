@@ -158,6 +158,13 @@
           <b class="sn-mono">{{ detail.group.prefix }}</b>
           <el-tag size="small" effect="plain">{{ t("rules.seqFormatVal", { base: detail.group.base, n: detail.group.seq_len }) }}</el-tag>
           <span v-if="detail.group.top_seq" class="muted">{{ t("rules.topSeq") }} <span class="sn-mono">{{ detail.group.top_text }}</span></span>
+          <!-- 流水上限自动突破：按前缀统一设置（作用于这个前缀下的全部 PI）；已突破后不能关闭 -->
+          <el-tooltip placement="bottom" :content="t('rules.seqGrowTip')">
+            <span class="muted">
+              {{ t("rules.seqGrow") }}
+              <el-switch :model-value="detail.group.seq_grow !== false" size="small" :loading="growSaving" @change="(v: any) => setGrow(!!v)" />
+            </span>
+          </el-tooltip>
         </div>
       </template>
       <template v-if="detail.group">
@@ -312,6 +319,21 @@ const detail = reactive({
   usage: [] as any[], usageLoading: false, usageError: "",
 });
 const detailRule = computed(() => detail.group?.rules.find((x: any) => x.rule.id === detail.ruleId) ?? null);
+const growSaving = ref(false);
+/** 改前缀的流水上限自动突破开关（PUT /rules/prefixes/grow） */
+async function setGrow(v: boolean) {
+  const g = detail.group;
+  if (!g) return;
+  growSaving.value = true;
+  try {
+    await api.rulePrefixGrow({ prefix: g.prefix, seq_grow: v });
+    g.seq_grow = v;
+    ElMessage.success(t("common.saved"));
+    load();
+  } finally {
+    growSaving.value = false;
+  }
+}
 async function openDetail(g: any) {
   Object.assign(detail, { group: g, ruleId: g.rules[0]?.rule.id ?? 0, usage: [], usageError: "" });
   loadSample();

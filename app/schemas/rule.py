@@ -81,12 +81,14 @@ class LineSelectIn(In):
     new_prefix: str | None = None
 
 
-class LineClearIn(In):
-    pi_no: str | None = None
-    lines: list[LineRef] | None = None
-
-
 class PiBindIn(In):
     pi_no: str | None = None
     rule_id: int | None = None
     new_prefix: str | None = None
+
+
+class PrefixGrowIn(In):
+    """规则库按前缀改流水上限自动突破开关。"""
+
+    prefix: str | None = None
+    seq_grow: bool = True

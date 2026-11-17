@@ -131,6 +131,7 @@ class ErrorCode(Enum):
         "PI {pi} 已用前缀 {prefix} 生成过号，一个 PI 只能用一个规则前缀，不能改用 {new}；"
         "要改米数、单位、后缀请在规则库修改规则",
     )
+    RULE_PREFIX_GROW_LOCKED = (409, "前缀 {prefix} 的流水已超出规则位数（已自动突破），不能关闭流水上限自动突破")
     RULE_LINE_REQUIRED = (400, "请选择物料行")
     RULE_GLOBAL_READONLY = (403, "全局规则只有系统管理员能修改、删除：{rule_code}")
     RULE_FACTORY_REQUIRED = (400, "请选择规则所属的生产组织")

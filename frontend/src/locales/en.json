@@ -633,6 +633,8 @@
         "SEP_TOO_LONG": "Text between serial and length, or between length and unit, is limited to {max} characters"
       },
       "changeConfirm": "Some selected lines already have SNs. Change the rule?",
+      "seqGrowPrefix": "Set per prefix: the first selection of the prefix decides, later change it in the rule library",
+      "seqGrowLocked": "This PI's prefix is registered; change auto-extend in the rule library",
       "savedPi": "Saved: {n} lines of this PI use this rule"
     },
     "filter": {
@@ -685,11 +687,21 @@
       "NO_RULE": "No rule",
       "RULE_PREFIX": "Rule needs new prefix",
       "RULE_PI_PREFIX": "Differs from the PI's prefix",
+      "ATTACH_ORDER_BLOCKED": "Earlier attachment items not generated",
+      "ATTACH_NOT_NUMERIC": "Attachment item must be numeric",
       "LENGTH_EMPTY": "Length to fill",
       "UNIT_EMPTY": "Unit to fill",
       "ATTACH_EMPTY": "Attachment item to fill",
       "QUOTA_EMPTY": "No quota left"
     },
+    "blockerTitle": "These lines under the same prefix must be generated (or fixed) first:",
+    "blocker": "PI {pi} · {bill} line {seq} · item {attach} · {reason}",
+    "blockerReason": {
+      "NOT_GENERATED": "not generated",
+      "ATTACH_EMPTY": "attachment item empty",
+      "ATTACH_NOT_NUMERIC": "attachment item not numeric"
+    },
+    "genShifted": "Another PI on the same prefix generated first; this run was shifted to {start} ~ {end}",
     "piRule": "Rule {rule} · prefix {prefix}",
     "piRuleCustom": "Custom",
     "unitChinese": "The unit cannot contain Chinese characters; enter e.g. M, m, L",
@@ -1126,6 +1138,8 @@
     "pis": "PIs using it",
     "pisSelected": "Chosen, not generated",
     "topSeq": "Max serial",
+    "seqGrow": "Auto-extend when full",
+    "seqGrowTip": "Set per prefix for all PIs using it; cannot be turned off once serials exceed the rule length",
     "status": "Status",
     "unused": "Unused",
     "detail": "Details",

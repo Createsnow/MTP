@@ -27,7 +27,8 @@ CHUNK = 2000
 
 _ARCHIVE_COLS = (
     "id, sn, factory_code, pi_no, customer_code, bill_no, bill_seq, material_code, rev, gen_org_code, gen_bill_no, "
-    "gen_bill_seq, seq_pi_no, seq_dec, length_text, attach_no, rule_version_id, gen_batch, status, delivery_mode, "
+    "gen_bill_seq, seq_pi_no, seq_dec, seq_prefix, length_text, attach_no, rule_version_id, gen_batch, status, "
+    "delivery_mode, "
     "delivery_batch_no, mes_holder, created_at, allocated_at, delivered_at"
 )
 

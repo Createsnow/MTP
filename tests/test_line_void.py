@@ -144,10 +144,7 @@ def test_void_lines_excluded_from_numbering_and_counts(w, api, sql):
         r["bill_seq"]: r["n"]
         for r in sql.all("SELECT bill_seq, COUNT(*) n FROM sn_item WHERE pi_no = %s GROUP BY bill_seq", pi)
     }
-    assert got == {1: 2, 3: 4, 4: 5}, "失效行不生成"
-    assert not sql.all("SELECT * FROM sn_pi_reserve WHERE pi_no = %s AND bill_no = %s AND seq = 2", pi, bill), (
-        "第一次生成排号段预留时不给失效行留号段"
-    )
+    assert got == {1: 2, 3: 4, 4: 5}, "失效行不生成，也不挡后面的项次 3、4"
     row = pi_row(w, pi)
     assert row["quota"] == 0 and row["status"] in ("TO_ALLOCATE", "DONE"), "剩下的额度只在失效行上：已生成完"
     alloc = ok(api.get(f"/api/allocation/context?pi={pi}", w.admin))
@@ -219,7 +216,6 @@ def test_void_line_config_operations_rejected(w, api):
     assert (r.code, r.body["params"]) == ("LINE_VOID", {"bill_no": bill, "seq": 1}), str(r)
     ok(w.select(pi, [(bill, 2)], rule_id=rid))
     body = m(pi_no=pi, lines=[m(bill_no=bill, seq=1)])
-    assert api.post("/api/rules/line-clear", body, w.admin).code == "LINE_VOID"
     assert api.post("/api/generate/revoke-config", body, w.admin).code == "LINE_VOID"
     for path, value in (("attach", "9"), ("length", "50"), ("unit", "M")):
         assert api.put(f"/api/orders/{path}", m(bill_no=bill, seq=1, value=value), w.admin).code == "LINE_VOID", path

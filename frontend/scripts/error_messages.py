@@ -95,6 +95,7 @@ E = {
 "RULE_PREFIX_OVERLAP": ("Prefix {prefix} and prefix {other} of PI {pi} start with one another and may produce identical SNs; please change it", "Tiền tố {prefix} và tiền tố {other} của PI {pi} cái này là phần đầu của cái kia, có thể tạo SN trùng; vui lòng đổi"),
 "RULE_PREFIX_CHANGE_REQUIRED": ("Rule {rule_code} version {version} is already used by PI {other_pi}; enter a new prefix for this PI", "Quy tắc {rule_code} phiên bản {version} đã dùng cho PI {other_pi}, phải nhập tiền tố mới cho PI này"),
 "RULE_PI_PREFIX_LOCKED": ("PI {pi} already has SNs generated with prefix {prefix}; a PI can use only one rule prefix, so {new} cannot be used. To change length, unit or suffix, edit the rule in the rule library", "PI {pi} đã tạo số với tiền tố {prefix}; mỗi PI chỉ dùng một tiền tố quy tắc, không thể đổi sang {new}. Muốn đổi chiều dài, đơn vị, hậu tố hãy sửa quy tắc trong thư viện quy tắc"),
+"RULE_PREFIX_GROW_LOCKED": ("The serials of prefix {prefix} already exceed the rule length (auto-extended); auto-extend cannot be turned off", "Dãy số của tiền tố {prefix} đã vượt số chữ số của quy tắc (đã tự mở rộng); không thể tắt tự mở rộng"),
 "RULE_LINE_REQUIRED": ("Please select material lines", "Vui lòng chọn dòng vật tư"),
 "RULE_GLOBAL_READONLY": ("Only the system administrator can modify or delete global rules: {rule_code}", "Chỉ quản trị hệ thống mới được sửa, xóa quy tắc dùng chung: {rule_code}"),
 "RULE_FACTORY_REQUIRED": ("Please choose the production org the rule belongs to", "Vui lòng chọn tổ chức sản xuất sở hữu quy tắc"),

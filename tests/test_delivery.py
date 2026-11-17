@@ -145,7 +145,7 @@ def test_manual_attach_goes_to_mes(w, sql):
     w.enable_mes(org)
     pi, bill = uid("PI"), uid("MO")
     w.order(bill, org, "C1", pi, ("M1", 2, "0100", ""))
-    ok(w.api.put("/api/orders/attach", m(bill_no=bill, seq=1, value="A-07"), w.admin))
+    ok(w.api.put("/api/orders/attach", m(bill_no=bill, seq=1, value="07"), w.admin))
     ok(w.bind_pi(pi, w.rule("P" + uid("").replace("-", ""), seq_len=6)))
     w.generate(pi)
     w.order(bill, org, "C1", pi, ("M1", 2, "0100", "K-01"))
@@ -153,10 +153,10 @@ def test_manual_attach_goes_to_mes(w, sql):
     w.allocate(pi)
     w.push()
     body = MES.received[-1]["batch"]
-    assert body["pi"] == pi and {x["attachNo"] for x in body["items"]} == {"A-07"}
+    assert body["pi"] == pi and {x["attachNo"] for x in body["items"]} == {"07"}
     ta, _ = w.mes_account(org)
     got = ok(w.mes_delivered(ta, pi=pi))["items"]
-    assert [x["attachNo"] for x in got] == ["A-07", "A-07"]
+    assert [x["attachNo"] for x in got] == ["07", "07"]
 
 
 def test_batch_detail_segments_split_at_gaps(w, sql):

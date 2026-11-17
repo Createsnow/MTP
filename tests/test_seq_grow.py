@@ -1,10 +1,8 @@
-"""生成页自定义规则的「流水上限自动突破」开关（F-08 / F-09）：
-开启时流水用完位数后自动加位（2 位用到 99 后 100 起为 3 位），每个位数各是一个规则版本（同前缀、同格式），
-号挂在自己位数的版本上；关闭（不传）时保持原逻辑（用完报规则位数已用尽）。"""
+"""「流水上限自动突破」开关（F-08 / F-09），按规则前缀统一设置（sn_prefix_counter.seq_grow，默认开启；
+第一张 PI 选这个前缀时定下，之后在规则库改）：开启时流水用完位数后自动加位（2 位用到 99 后 100 起为 3 位），
+每个位数各是一个规则版本（同前缀、同格式），号挂在自己位数的版本上；关闭时用完报规则位数已用尽。"""
 
 from __future__ import annotations
-
-import json
 
 from conftest import MES, m, ok, q, uid
 
@@ -28,14 +26,12 @@ def sns(sql, pi):
 
 def test_grow_crosses_width_and_each_width_is_a_version(w, api, sql):
     """开启：2 位流水用到 99 后接 3 位 100 起；预演按位数分段（各段带位数），号挂在自己位数的版本上；
-    突破版本同前缀、归属本 PI、derived_from 为原版本，不改规则的当前版本；开关记在物料行上，生成后照旧保留。"""
+    突破版本同前缀、归属本 PI、derived_from 为原版本，不改规则的当前版本；开关按前缀，生成后照旧保留。"""
     org, pi, bill = mk(w, ("M1", 120), ("M2", 5))
     p = P()
     c = m(prefix=p, base=10, seq_len=2, with_length=False, seq_grow=True)
     ok(w.select(pi, [(bill, 1)], custom=c))
-    assert json.loads(sql.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 1", bill))[
-        "seq_grow"
-    ]
+    assert sql.scalar("SELECT seq_grow FROM sn_prefix_counter WHERE prefix = %s", p) == 1
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     rule1 = next(x for b in ctx["bills"] for x in b["lines"] if x["seq"] == 1)["rule"]
     assert rule1["seq_grow"] is True and rule1["max_seq"] == 10**12 - 1
@@ -69,8 +65,8 @@ def test_grow_crosses_width_and_each_width_is_a_version(w, api, sql):
         (vs[0]["id"], 99, 1, 99),
         (vs[1]["id"], 21, 100, 120),
     ]
-    row = sql.one("SELECT rule_id, custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 1", bill)
-    assert (row["rule_id"], json.loads(row["custom_json"])) == (rid, {"seq_grow": True}), "开关生成后照旧保留"
+    assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) == rid
+    assert sql.scalar("SELECT seq_grow FROM sn_prefix_counter WHERE prefix = %s", p) == 1, "开关生成后照旧保留"
     # 生成页：物料行现有号的开始 / 结束 SN 按位数比（…120 在 …99 之后）；默认规则仍是原版本的 2 位
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     line1 = next(x for b in ctx["bills"] for x in b["lines"] if x["seq"] == 1)
@@ -79,8 +75,7 @@ def test_grow_crosses_width_and_each_width_is_a_version(w, api, sql):
     assert ctx["rule_prefix"]["prefix"] == p and ctx["rule_prefix"]["custom"]["seq_len"] == 2
     # 本 PI 另一物料行沿用这个前缀（同格式、开启）：接着 121 起，沿用已有的 3 位版本，不另出版本
     ok(w.select(pi, [(bill, 2)], custom=c))
-    row = sql.one("SELECT rule_id, custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 2", bill)
-    assert (row["rule_id"], json.loads(row["custom_json"])) == (rid, {"seq_grow": True})
+    assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) == rid
     w.generate(pi, lines=[(bill, 2)])
     assert sns(sql, pi)[-5:] == [f"{p}{i}" for i in range(121, 126)]
     assert sql.count("SELECT COUNT(*) FROM sn_rule_version WHERE rule_id = %s", rid) == 2
@@ -95,20 +90,19 @@ def test_grow_crosses_width_and_each_width_is_a_version(w, api, sql):
 
 
 def test_grow_off_keeps_original_logic(w, api, sql):
-    """关闭（不传或 false）：位数用尽照旧报规则位数已用尽；物料行存的自定义规则与原来相同（不带 seq_grow）。"""
+    """前缀第一次被选时关闭：位数用尽照旧报规则位数已用尽；之后再选（不传开关）不改前缀的设置。"""
     org, pi, bill = mk(w, ("M1", 100))
     p = P()
     c = m(prefix=p, base=10, seq_len=2, with_length=False)
-    for body in (c, {**c, "seq_grow": False}):
+    for body in ({**c, "seq_grow": False}, c):
         ok(w.select(pi, [(bill, 1)], custom=body))
-        assert "seq_grow" not in json.loads(
-            sql.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = 1", bill)
-        )
+        assert sql.scalar("SELECT seq_grow FROM sn_prefix_counter WHERE prefix = %s", p) == 0
         r = w.preview(pi)
         assert r.code == "GEN_RULE_EXHAUSTED" and r.body["params"] == {"max": 99, "end": 100}
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     rule = ctx["bills"][0]["lines"][0]["rule"]
     assert rule["seq_grow"] is False and rule["max_seq"] == 99
+    assert ctx["rule_prefix"]["seq_grow"] is False
     assert w.select(pi, [(bill, 1)], custom={**c, "seq_start": 100}).code == "RULE_SEQ_START_INVALID"
     assert sql.count("SELECT COUNT(*) FROM sn_item WHERE pi_no = %s", pi) == 0
 
@@ -149,23 +143,23 @@ def test_grow_with_length_unit_and_free_range(w, api, sql):
     ok(w.select(pi, [(bill, 1), (bill, 2)], custom={**c, "seq_start": 98}))
     w.generate(pi, lines=[(bill, 1)])
     assert sns(sql, pi) == [f"{p}98-100M", f"{p}99-100M", f"{p}100-100M"]
-    # 第一次生成就填了起始号：预留表从 98 起（序号 1 98～100，序号 2 101～104），最大号 104
-    # 空号段 1..97：手动起止号 96 ~ 97 用 96、97（2 位），序号 2 放弃预留，不够的从最大号之后接着编（105、106，3 位）
+    # 起始号 98 跳过的 1～97 是空号段：手动起止号 96 ~ 97 用 96、97（2 位），
+    # 不够的从最大号 100 之后接着编（101、102，3 位）
     pv = ok(w.preview(pi, lines=[(bill, 2)], seq=(96, 97)))
     assert [(g["start_sn"], g["end_sn"], g["seq_len"]) for g in pv["items"][0]["seg_list"]] == [
         (f"{p}96-100M", f"{p}97-100M", 2),
-        (f"{p}105-100M", f"{p}106-100M", 3),
+        (f"{p}101-100M", f"{p}102-100M", 3),
     ]
     w.generate(pi, lines=[(bill, 2)], seq=(96, 97))
     # 按 SN 区间查询：跨位数的起止号按号池精确取流水
-    got = ok(api.get("/api/sn" + q(pi=pi, seq_from=f"{p}97-100M", seq_to=f"{p}105-100M"), w.admin))
+    got = ok(api.get("/api/sn" + q(pi=pi, seq_from=f"{p}97-100M", seq_to=f"{p}101-100M"), w.admin))
     assert sorted(x["sn"] for x in got["items"]) == sorted(
-        [f"{p}97-100M", f"{p}98-100M", f"{p}99-100M", f"{p}100-100M", f"{p}105-100M"]
+        [f"{p}97-100M", f"{p}98-100M", f"{p}99-100M", f"{p}100-100M", f"{p}101-100M"]
     )
     # 删号按 SN 起止号（同一物料行）跨位数
     r = ok(w.delete(pi, start_sn=f"{p}99-100M", end_sn=f"{p}100-100M", reason="t"))
     assert r["qty"] == 2
-    assert sns(sql, pi) == [f"{p}96-100M", f"{p}97-100M", f"{p}98-100M", f"{p}105-100M", f"{p}106-100M"]
+    assert sns(sql, pi) == [f"{p}96-100M", f"{p}97-100M", f"{p}98-100M", f"{p}101-100M", f"{p}102-100M"]
     rec = ok(w.api.get(f"/api/generate/deleted?pi={pi}", w.admin)).body[0]
     assert (rec["start_sn"], rec["end_sn"]) == (f"{p}99-100M", f"{p}100-100M"), "删号记录的起止号按位数比"
 
@@ -190,21 +184,21 @@ def test_grow_delivery_serial_and_export(w, api, sql):
 
 def test_locked_prefix_format_after_all_sns_deleted(w, api, sql):
     """号全部删掉后前缀仍归属本 PI、进制和流水位数仍锁定：生成页上下文 prefix_locked 给出锁定的格式
-    （rule_prefix 不变，custom 回到 None）；按默认 4 位保存报 RULE_PREFIX_FORMAT_LOCKED，
-    按锁定的 5 位（开启上限自动突破）可保存、流水接续。"""
+    （rule_prefix 仍为登记的前缀与格式）；按默认 4 位保存报 RULE_PREFIX_FORMAT_LOCKED，
+    按锁定的 5 位可保存，接在前缀最大号之后。"""
     org, pi, bill = mk(w, ("M1", 3))
     p = bill[-7:]
     ok(w.select(pi, [(bill, 1)], custom=m(prefix=p, base=10, seq_len=5, with_length=False)))
     w.generate(pi)
     ok(w.delete(pi, bills=[bill], reason="t"))
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
-    assert ctx["rule_prefix"] == {"prefix": p, "custom": None}
+    assert (ctx["rule_prefix"]["prefix"], ctx["rule_prefix"]["custom"]["seq_len"]) == (p, 5)
     assert ctx["prefix_locked"][p]["seq_len"] == 5 and ctx["prefix_locked"][p]["base"] == 10
     c = m(prefix=p, base=10, seq_len=4, with_length=False, seq_grow=True)
     assert w.select(pi, [(bill, 1)], custom=c).code == "RULE_PREFIX_FORMAT_LOCKED"
     ok(w.select(pi, [(bill, 1)], custom={**ctx["prefix_locked"][p], "seq_grow": True}))
     w.generate(pi)
-    assert sns(sql, pi) == [f"{p}{i:05d}" for i in (1, 2, 3)], "删掉的流水仍是该行的预留，再生成回到原号段"
+    assert sns(sql, pi) == [f"{p}{i:05d}" for i in (4, 5, 6)], "删掉的流水成为空号段，再生成接在最大号之后"
     # 上限自动突破另出的版本不列为锁定格式（锁定的仍是原版本的位数）
     _, pi2, bill2 = mk(w, ("M1", 101), org=org)
     p2 = P()

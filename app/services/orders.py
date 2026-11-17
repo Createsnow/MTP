@@ -719,9 +719,9 @@ def _line_view_of(line: dict) -> dict:
     return line_view(line, counts.get(k), fills.get(k), lfill=lens.get(k), ufill=units.get(k))
 
 
-#: 物料行在本系统做的配置：物料行选定的规则、手填的附件项次、手填的米数、手填的产品单位
+#: 物料行在本系统做的配置：手填的附件项次、手填的米数、手填的产品单位（规则登记在 PI 上，见 rules.pi_rule，
+#: 在生成页「选规则」改选）
 _LINE_CONFIG = (
-    ("sn_line_rule", "rule"),
     ("sn_line_attach", "attach"),
     ("sn_line_length", "length"),
     ("sn_line_unit", "unit"),
@@ -729,9 +729,9 @@ _LINE_CONFIG = (
 
 
 def revoke_config(cu: CurrentUser, pi_in: str | None, lines_in: list[dict] | None) -> dict:
-    """撤销物料行配置（生成页待处理、可生成页签底部「撤销」，可多行）：所选物料行中还没有号的，物料行选定的规则、
-    手填的附件项次、手填的米数、手填的产品单位一并删除，恢复为未配置（规则改回按 PI / 客户默认，
-    附件项次、米数、产品单位取金蝶值，金蝶为空时待填写）。
+    """撤销物料行配置（生成页待处理、可生成页签底部「撤销」，可多行）：所选物料行中还没有号的，
+    手填的附件项次、手填的米数、手填的产品单位一并删除，恢复为未配置（取金蝶值，金蝶为空时待填写）。
+    规则登记在 PI 上（一个 PI 一个规则前缀），不在这里撤销。
     有号的行不动（有号的行先删号）。一个事务内完成。返回撤销了配置的行数与因有号跳过的行数。"""
     pi = util.trim(pi_in)
     if not pi:

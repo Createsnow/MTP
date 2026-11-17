@@ -149,11 +149,11 @@ def test_detail_filters_one_bill_line(w, api):
 
 
 def test_detail_and_file_sorted_by_attach_no(w, api):
-    """分配页「已分配」明细按附件项次从小到大（按数字比：2 在 10 前，不是数字的排后），项次相同按单据序号、流水；
+    """分配页「已分配」明细按附件项次从小到大（按数字比：2 在 10 前），项次相同按单据序号、流水；
     分页跨项次衔接；下载文件同一顺序；明细带十进制流水号。"""
     org = w.org(uid("O")[:10])
     pi, bill = uid("PI"), uid("MO")
-    w.order(bill, org, "C1", pi, ("M1", 2, "100", "10"), ("M2", 3, "100", "2"), ("M3", 1, "100", "A"), ("M4", 1))
+    w.order(bill, org, "C1", pi, ("M1", 2, "100", "10"), ("M2", 3, "100", "2"), ("M3", 1, "100", "20"), ("M4", 1))
     ok(w.bind_pi(pi, w.rule(P())))
     w.generate(pi)
     w.allocate(pi)
@@ -166,7 +166,7 @@ def test_detail_and_file_sorted_by_attach_no(w, api):
         ("2", 2),
         ("10", 1),
         ("10", 1),
-        ("A", 3),
+        ("20", 3),
     ]
     assert all(isinstance(x["seq_dec"], int) for x in got), "带十进制流水号"
     paged = [x["sn"] for p in (1, 2, 3, 4) for x in ok(api.get(url + f"&page_size=2&page={p}", w.admin))["items"]]

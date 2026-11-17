@@ -1,37 +1,25 @@
 """SN 规则库与规则选取（F-08）。
 
-全局不撞号（5.2.4）：前缀 + 流水唯一（同一 PI 内一个十进制流水同一时刻只有一枚号；共用前缀的几张 PI 之间流水不重）。
-- 规则版本首次用于生成（或为某张 PI 换前缀另出、自定义规则生成）时归属该 PI。
-  同一 PI 的多个物料行可共用一个版本。
-- 共用前缀：别的 PI 已用的前缀本 PI 也可以用（流水部分须相同）。别的 PI 选同一条规则时默认共用前缀，
-  生成时为它另出同前缀、同格式的版本（share_version，derived_from 记由哪一版而来）；也可以填新前缀，
-  按原格式另出属于它的版本（换前缀）。流水仍按 PI 记：共用前缀的 PI 接在这几张 PI 的最大号之后，不用彼此已用、
-  已预留的流水（generate.shared_of），号不连续（如 PI-1 为 1～100、PI-2 为 101～200，PI-1 再补号从 201 起）。
+以规则前缀为排号基准：同一前缀下各 PI 共用一套十进制流水（sn_prefix_counter 记前缀最大号，号上记 seq_prefix，
+(seq_prefix, seq_dec) 唯一），排号、项次拦截见 generate。
+- 一个 PI 一个规则前缀：选规则（select_for_lines / bind_pi）即登记在 PI 上（sn_pi_rule：前缀、规则库规则或自定义规则
+  参数、起始号），本 PI 全部物料行、之后同步进来的单据都用它。本 PI 有号（生成过、没全删）时前缀锁定
+  （RULE_PI_PREFIX_LOCKED），没号时可以改选；改选须对本 PI 全部单据的生产组织都有授权。
+- 规则版本首次用于生成（或为某张 PI 换前缀另出、自定义规则生成）时归属该 PI。别的 PI 选同一条规则时默认共用前缀，
+  生成时为它另出同前缀、同格式的版本（share_version，derived_from 记由哪一版而来）；也可以填新前缀另出版本（换前缀）。
 - 同一前缀下进制、流水位数、字符表锁定（流水紧跟前缀、定长，前缀 + 流水才能唯一区分号）；米数（补 0、前后分隔符）、
-  单位、后缀可改：版本生成过号后改这几项，另出一版沿用同一前缀（仍归属原 PI）；改进制、位数或字符表须换新前缀。
-  同一前缀可有多个版本（同一 PI 的不同规则、共用前缀的别的 PI 也可共用），都须已归属 PI、格式的流水部分相同；
+  单位、后缀可各不相同：版本生成过号后改这几项，另出一版沿用同一前缀；改进制、位数或字符表须换新前缀。
   尚未归属 PI 的版本独占前缀，规则库保存时前缀不能与已有前缀相同。
-- 任何两个不同的前缀都不能一个是另一个的开头（如 SD 与 SDD，同一 PI 内也不行：
-  流水不同也可能拼出相同的号）。万一拼出的完整 SN 相同，仍由号池唯一约束拦下、整次生成回滚。
+- 任何两个不同的前缀都不能一个是另一个的开头（如 SD 与 SDD：流水不同也可能拼出相同的号）。
+  万一拼出的完整 SN 相同，仍由号池唯一约束拦下、整次生成回滚。
 
-规则按 PI 维度绑定（不按客户绑定）：新建规则须填 PI（分类只能是 PI）；早先按未分类 / 客户分类的规则原样保留，
-修改时须补填 PI。规则选取按物料行：物料行已选规则 ＞ PI 绑定规则，都没有时须先选规则。
-选法：规则库（选一条规则，本 PI 用哪一版见 resolve）或自定义（前缀、进制、位数、米数及其补 0 位数与前后分隔符、
-是否带单位、后缀）；
-自定义规则生成成功后存入规则库并归属本 PI（编码 PI-PI号-n，名称 PI号_vn，n 为本 PI 第几条自定义规则），
-本 PI 选了同一自定义规则、这次没生成的物料行一并改记为这条规则；生成失败或取消不留规则。
-自定义前缀默认取点选的第一个单据编码后 7 位；本 PI 已生成的号还在时默认沿用已用的前缀（见 pi_prefix）。
-前缀已被本 PI 同格式的版本占用时
-沿用该版本（own_version；这时填的起始号另记在物料行，下次生成从 max(PI 下一个号, 起始号) 起，跳过的流水成为空号段），
-被别的 PI、别的规则或别的格式占用时报前缀冲突；
-自定义规则的前缀在选定后被别的规则先占用时，预演标「规则须换前缀」，确认生成时报前缀冲突。
-物料行生成过号后可改选，已生成的号不变，流水接续。
+自定义规则（前缀、进制、位数、米数及其补 0 位数与前后分隔符、是否带单位、后缀、起始号）：只登记在 PI 上，
+生成成功后才存入规则库（编码 PI-PI号-n，名称 PI号_vn），PI 登记改记为这条规则；生成失败或取消不留规则。
+与本 PI 已有的、或规则库里前缀、格式完全相同的规则归到那条规则下，不另建。起始号只管下一次生成（生成后清掉）。
 
-流水上限自动突破（自定义规则的开关，默认开启；记在物料行上，不是格式的一部分）：开启时流水用完规则位数后自动加位
-（4 位用到 9999 后接 5 位 10000，以此类推，最多 12 位）。每个位数各是一个版本：生成时按需为本规则另出
-「同前缀、同格式、只有流水位数不同」的版本（突破版本：derived_from 为原版本且前缀相同，与换前缀另出的版本区分；
-归属同一 PI，不改规则的当前版本），号挂在自己位数的版本上；前缀校验时突破版本按原版本的流水格式比较。
-关闭时保持原逻辑（用完报规则位数已用尽）。
+流水上限自动突破按前缀统一设置（sn_prefix_counter.seq_grow，默认开启）：第一张 PI 选这个前缀时按这次的选择定下，
+之后在规则库改（set_prefix_grow），已突破过规则位数后不能关闭。开启时流水用完规则位数后自动加位（最多 12 位），
+每个位数各是一个版本（突破版本：derived_from 为原版本且前缀相同，归属本 PI，不改规则的当前版本）。
 """
 
 from __future__ import annotations
@@ -217,8 +205,8 @@ def check_prefix(
     """前缀能否给一个（归属 pi 的；pi = None 为尚未归属）版本用；区分大小写。
     - 已有同前缀的版本（不含 exclude_version）：都须已归属 PI（本 PI 或别的 PI，pi 非空），且进制、流水位数、字符表
       与 spec 相同，否则 RULE_PREFIX_CONFLICT（尚未归属的版本在用，或规则库保存时前缀已被用）/
-      RULE_PREFIX_FORMAT_LOCKED（流水部分不同）。别的 PI 已用的前缀可共用：流水接在这几张 PI 的最大号之后，
-      不用彼此已用、已预留的流水（generate.shared_of）。
+      RULE_PREFIX_FORMAT_LOCKED（流水部分不同）。别的 PI 已用的前缀可共用：同一前缀下各 PI 共用一套流水
+      （sn_prefix_counter、号上的 seq_prefix 唯一）。
     - 与任何别的前缀一个是另一个的开头：RULE_PREFIX_OVERLAP。
     在事务内调用：先拿这个前缀的前缀锁（锁到事务结束），并发占用同一前缀时后到的等前一个提交。
     规则库保存等短事务另对同前缀的版本加锁（FOR UPDATE，没有时锁住索引间隙）。
@@ -245,7 +233,7 @@ def _prefix_rules(
         if v["id"] == exclude_version:
             continue
         # 尚未归属 PI 的版本独占前缀；规则库保存（pi 为空）不能与已有前缀相同。
-        # 已归属别的 PI 的前缀可以共用（流水部分须相同，同前缀的流水在这几张 PI 间不重，见 generate.shared_of）
+        # 已归属别的 PI 的前缀可以共用（流水部分须相同，同前缀各 PI 共用一套流水，见 generate）
         if pi is None or v["claimed_pi"] is None:
             raise biz(ErrorCode.RULE_PREFIX_CONFLICT, prefix=prefix)
         # 突破版本（同前缀、由原版本加位而来）按原版本的流水格式比较
@@ -376,27 +364,24 @@ def pi_used_prefix(pi: str) -> str | None:
 
 
 def pi_prefix(pi: str) -> dict:
-    """生成页「选规则」的默认前缀（返回结构不变：prefix、custom）。
-    - 本 PI 已生成的号（流水归属本 PI，含已转到别的单据 / PI 的）还在：custom 为这个前缀的格式，prefix 为它，
-      之后各张单据都沿用（保存时沿用那一版、流水接续）；不论这个前缀是单据编码后 7 位还是手填的。
-      用过几个前缀时取流水最小的号所在的那个（还在的号里最早生成的）。
-    - 还没有生成的号，或已生成的号全部删掉了：custom 为 None，页面按默认规则取点选的第一个单据编码后 7 位；
-      prefix 为 PI 第一张单据（单据编号最小）编码后 7 位，只在取不到点选的单据时兜底。
-      只给物料行保存了规则、还没有生成的，不算已用。"""
-    used = _pi_used_version(pi)
-    if used is None:
+    """生成页「选规则」的默认前缀：prefix、custom（格式；没有为 None）、seq_grow（前缀的自动突破开关）、
+    registered（本 PI 已登记规则）。
+    - 本 PI 已登记规则（一个 PI 一个规则前缀）：为登记的前缀与格式，各单据都沿用；
+    - 还没登记：custom 为 None，页面按默认规则取点选的第一个单据编码后 7 位；
+      prefix 为 PI 第一张单据（单据编号最小）编码后 7 位，只在取不到点选的单据时兜底。"""
+    row = pi_rule(pi)
+    res = _registered(pi, row)
+    if row is None or res is None or res.version is None:
         first = db.scalar("SELECT MIN(bill_no) FROM sn_prd_mo WHERE pi = %s", pi) or ""
-        return {"prefix": first[-7:], "custom": None}
-    # 格式取本 PI 这个前缀最新的版本（规则另出过新版时与 own_version 沿用的一致；不算上限自动突破另出的版本），
-    # 没有时取号所在的版本（号在突破版本上时取它的原版本）
-    v = db.one(
-        "SELECT v.* FROM sn_rule_version v LEFT JOIN sn_rule_version p ON p.id = v.derived_from "
-        "AND p.prefix = v.prefix AND p.seq_len <> v.seq_len WHERE v.prefix = %s AND v.claimed_pi = %s AND p.id IS NULL "
-        "ORDER BY v.id DESC LIMIT 1",
-        used["prefix"],
-        pi,
-    ) or base_of(used)
-    return {"prefix": used["prefix"], "custom": _custom_dict(spec_of(v))}
+        p = first[-7:]
+        return {"prefix": p, "custom": None, "seq_grow": prefix_grow(p) if p else True, "registered": False}
+    v = res.version if res.plan == PLAN_NEW else base_of(res.version)
+    return {
+        "prefix": row["prefix"],
+        "custom": _custom_dict(spec_of(v)),
+        "seq_grow": prefix_grow(row["prefix"]),
+        "registered": True,
+    }
 
 
 def pi_prefix_locked(pi: str) -> dict[str, dict]:
@@ -623,9 +608,9 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
     """规则库按前缀归档（只读）：一个前缀一组，组内是用这个前缀的规则，每条规则列出使用它的 PI。
     - 同一前缀下进制、流水位数、字符表锁定（check_prefix），放在组上；米数、单位、后缀在规则上（取该规则在这个前缀上
       最新的版本，不算上限自动突破另出的版本）。一条规则换过前缀时出现在每个用过的前缀下。
-    - pis：版本已归属的 PI（生成过号，含共用前缀另出的版本）；selected_pis：物料行已选、还没生成的 PI
+    - pis：版本已归属的 PI（生成过号，含共用前缀另出的版本）；selected_pis：已登记这条规则、还没生成的 PI
       （按 resolve 本 PI 将用这个前缀的）。
-    - top_seq：用这个前缀的各 PI 的最大号（含预留，sn_pi_counter）；共用前缀的 PI 接在它之后。
+    - top_seq：前缀最大号（sn_prefix_counter，只增不减）；用这个前缀的 PI 接在它之后。seq_grow：前缀的自动突破开关。
     facs = 授权范围（None = 全部）：只列全局规则和范围内组织的规则。q 匹配前缀、规则编码、名称、PI；pi 精确筛选。"""
     vsql, args = _visible_sql(facs)
     rs = db.all("SELECT * FROM sn_rule WHERE 1=1" + vsql + " ORDER BY rule_code", *args)
@@ -634,12 +619,7 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
     picked: dict[int, set[str]] = {}
     if ids:
         m = marks(len(ids))
-        for row in db.all(
-            f"SELECT DISTINCT rule_id, pi_no FROM sn_line_rule WHERE rule_id IN ({m}) "
-            f"UNION SELECT rule_id, pi_no FROM sn_pi_rule WHERE rule_id IN ({m})",
-            *ids,
-            *ids,
-        ):
+        for row in db.all(f"SELECT rule_id, pi_no FROM sn_pi_rule WHERE rule_id IN ({m})", *ids):
             picked.setdefault(row["rule_id"], set()).add(row["pi_no"])
     groups: dict[str, dict] = {}
     for r in rs:
@@ -707,18 +687,20 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
         if want and want not in g["pis"] and want not in g["selected_pis"]:
             continue
         out.append(g)
-    tops: dict[str, int] = {}
-    all_pis = sorted({p for g in out for p in g["pis"]})
-    if all_pis:
-        tops = {
-            row["pi_no"]: int(row["last_seq_dec"] or 0)
+    counters: dict[str, dict] = {}
+    names_ = sorted(g["prefix"] for g in out)
+    if names_:
+        counters = {
+            row["prefix"]: row
             for row in db.all(
-                f"SELECT pi_no, last_seq_dec FROM sn_pi_counter WHERE pi_no IN ({marks(len(all_pis))})", *all_pis
+                f"SELECT prefix, last_seq_dec, seq_grow FROM sn_prefix_counter WHERE prefix IN ({marks(len(names_))})",
+                *names_,
             )
         }
     res = []
     for g in sorted(out, key=lambda x: (x["last_at"], x["prefix"]), reverse=True):
-        top = max([tops.get(p, 0) for p in g["pis"]] or [0])
+        c = counters.get(g["prefix"])
+        top = 0 if c is None else int(c["last_seq_dec"] or 0)
         spec = g["spec"]
         res.append(
             {
@@ -734,6 +716,8 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
                 "factories": sorted(g["factories"], key=lambda f: (f is not None, f or "")),
                 "top_seq": top,
                 "top_text": _seq_text_of(top, spec),
+                # 流水上限自动突破（按前缀；前缀还没登记时默认开启）
+                "seq_grow": True if c is None else bool(c["seq_grow"]),
             }
         )
     return res
@@ -741,7 +725,7 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
 
 def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> dict:
     """前缀详情：用这个前缀的各 PI 占的流水（号池里流水归属该 PI、挂在这个前缀的版本上的号：最小、最大流水与枚数，
-    含已转出的）与 PI 的最大号（含预留）。前缀须有授权范围内能看到的规则。"""
+    含已转出的）、PI 自己生成的最大号与前缀最大号。前缀须有授权范围内能看到的规则。"""
     prefix = util.trim(prefix_in)
     vsql, args = _visible_sql(facs)
     vs = db.all(
@@ -803,8 +787,10 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         "seq_len": spec.seq_len,
         "charset": spec.charset,
         "pis": out,
-        "top_seq": max([x["top_seq"] for x in out] or [0]),
-        "top_text": _seq_text_of(max([x["top_seq"] for x in out] or [0]), spec),
+        # 前缀最大号（只增不减）与自动突破开关
+        "top_seq": prefix_last(prefix),
+        "top_text": _seq_text_of(prefix_last(prefix), spec),
+        "seq_grow": prefix_grow(prefix),
     }
 
 
@@ -1042,10 +1028,8 @@ def delete(cu: CurrentUser, rule_id: int) -> dict:
         vs = db.all("SELECT * FROM sn_rule_version WHERE rule_id = %s FOR UPDATE", r["id"])
         if any(v["used"] for v in vs):
             raise biz(ErrorCode.RULE_IN_USE, rule_code=r["rule_code"])
-        pi = (
-            db.scalar("SELECT pi_no FROM sn_pi_rule WHERE rule_id = %s LIMIT 1", r["id"])
-            or db.scalar("SELECT pi_no FROM sn_line_rule WHERE rule_id = %s LIMIT 1", r["id"])
-            or next((v["claimed_pi"] for v in vs if v["claimed_pi"]), None)
+        pi = db.scalar("SELECT pi_no FROM sn_pi_rule WHERE rule_id = %s LIMIT 1", r["id"]) or next(
+            (v["claimed_pi"] for v in vs if v["claimed_pi"]), None
         )
         if pi is not None:
             raise biz(ErrorCode.RULE_ASSIGNED, rule_code=r["rule_code"], pi=pi)
@@ -1081,10 +1065,10 @@ class Resolved:
     custom: dict | None = None
     #: plan = SHARE / PREFIX：当前版本已归属的 PI
     other_pi: str | None = None
-    #: 起始号（十进制流水）：从 PI 最大号之后编号时第一个号不小于它；不参与 key。自定义规则（plan = NEW）取规则参数；
-    #: 自定义时沿用本 PI 已用前缀的版本（own_version）取物料行另记的起始号（见 _start_json），生成后清掉
+    #: 起始号（十进制流水）：从前缀最大号之后编号时第一个号不小于它；不参与 key。登记在 PI 上（sn_pi_rule.seq_start），
+    #: 生成后清掉
     seq_start: int | None = None
-    #: 流水上限自动突破（自定义规则的开关，记在物料行上，见 _start_json）；不参与 key（同格式共用同一版）
+    #: 流水上限自动突破（按前缀，见 sn_prefix_counter.seq_grow）；不参与 key（同格式共用同一版）
     seq_grow: bool = False
 
     @property
@@ -1189,73 +1173,6 @@ def _custom_resolved(source: str, c: dict) -> Resolved:
     )
 
 
-def _custom_json(res: Resolved) -> str:
-    """物料行选定的自定义规则存入 sn_line_rule.custom_json：格式参数，有起始号时另带 seq_start，
-    开启上限自动突破时另带 seq_grow（关闭时不写，与原来相同）。"""
-    c = dict(res.custom)
-    if res.seq_start is not None:
-        c["seq_start"] = res.seq_start
-    if res.seq_grow:
-        c["seq_grow"] = True
-    return json.dumps(c, ensure_ascii=False, sort_keys=True)
-
-
-def _start_json(seq_start: int | None, grow: bool = False) -> str | None:
-    """物料行记 rule_id（沿用本 PI 已用前缀的版本，或自定义规则生成后改记的规则）时另记的：起始号 seq_start、
-    上限自动突破 seq_grow（开启时），存入同一行的 custom_json；都没有为 None。
-    起始号生成过一次就清掉（同自定义规则：起始号只管下一次生成，之后流水接续），
-    上限自动突破一直保留（见 keep_grow）。"""
-    c: dict = {}
-    if seq_start is not None:
-        c["seq_start"] = int(seq_start)
-    if grow:
-        c["seq_grow"] = True
-    return json.dumps(c, sort_keys=True) if c else None
-
-
-def _start_of(sel: dict) -> int | None:
-    """物料行记了 rule_id 时 custom_json 里另记的起始号（见 _start_json）；没有为 None。"""
-    if sel.get("rule_id") is None or not sel.get("custom_json"):
-        return None
-    v = json.loads(sel["custom_json"]).get("seq_start")
-    return int(v) if isinstance(v, int) and v > 0 else None
-
-
-def _grow_of(custom_json: str | None) -> bool:
-    """物料行的 custom_json 里是否开启了上限自动突破。"""
-    return bool(custom_json) and json.loads(custom_json).get("seq_grow") is True
-
-
-def keep_grow(no: str, seq: int, rule_id: int | None = None) -> None:
-    """物料行生成过号后（记 rule_id）：custom_json 只保留上限自动突破（起始号只管这一次生成）；没开启时清空。
-    rule_id 给出时同时改记为这条规则（自定义规则生成后存入规则库）。"""
-    cur = db.scalar("SELECT custom_json FROM sn_line_rule WHERE bill_no = %s AND seq = %s", no, seq)
-    cj = _start_json(None, _grow_of(cur))
-    if rule_id is None:
-        db.exec(
-            "UPDATE sn_line_rule SET custom_json = %s WHERE bill_no = %s AND seq = %s AND rule_id IS NOT NULL",
-            cj,
-            no,
-            seq,
-        )
-    else:
-        db.exec(
-            "UPDATE sn_line_rule SET rule_id = %s, custom_json = %s WHERE bill_no = %s AND seq = %s",
-            rule_id,
-            cj,
-            no,
-            seq,
-        )
-
-
-def _same_custom(custom_json: str, custom: dict) -> bool:
-    """物料行存的自定义规则与 custom 格式相同（不看起始号、上限自动突破）。"""
-    c = json.loads(custom_json)
-    c.pop("seq_start", None)
-    c.pop("seq_grow", None)
-    return c == custom
-
-
 def _custom_dict(spec: codec.Spec) -> dict:
     return {
         "prefix": spec.prefix,
@@ -1270,58 +1187,110 @@ def _custom_dict(spec: codec.Spec) -> dict:
     }
 
 
-def pi_default(pi: str) -> Resolved | None:
-    """PI 绑定的规则（各物料行的默认）；没绑时 None。"""
-    b = db.one("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi)
-    if b is not None:
-        r = db.one("SELECT * FROM sn_rule WHERE id = %s", b["rule_id"])
-        if r is not None:
-            return resolve(r, pi, SRC_PI)
-    return None
+# ================================================================== PI 规则登记、规则前缀
 
 
-def effective(
-    pi: str,
-    sel: dict | None,
-    default: Resolved | None = None,
-    use_default: bool = True,
-    memo: dict[int, Resolved | None] | None = None,
-) -> Resolved | None:
-    """物料行生效的规则：物料行已选 ＞ PI 绑定；都没有返回 None（须先选规则）。
-    memo：同一 PI 的多个物料行选了同一条规则时只解析一次（规则 id → 解析结果）。"""
-    if sel is not None:
-        if sel.get("custom_json") and sel.get("rule_id") is None:
-            return _custom_resolved(SRC_LINE, json.loads(sel["custom_json"]))
-        rid = sel.get("rule_id")
-        if rid is not None:
-            if memo is not None and rid in memo:
-                res = memo[rid]
-            else:
-                r = db.one("SELECT * FROM sn_rule WHERE id = %s", rid)
-                res = None if r is None else resolve(r, pi, SRC_LINE)
-                if memo is not None:
-                    memo[rid] = res
-            if res is not None:
-                start = _start_of(sel)
-                grow = _grow_of(sel.get("custom_json"))
-                # 起始号、上限自动突破（自定义规则归到已有规则下时另记在物料行）对本 PI 将用的版本有效：
-                # 已归属本 PI、首次归属或共用前缀（memo 共用的解析结果不改，另复制一份）
-                if res.version is None or (start is None and not grow):
-                    return res
-                return replace(res, seq_start=start, seq_grow=grow)
-    if not use_default:
-        return None
-    return default if default is not None else pi_default(pi)
+def pi_rule(pi: str) -> dict | None:
+    """PI 规则登记（sn_pi_rule）：前缀、规则库规则或自定义规则参数、起始号；没选过为 None。"""
+    return db.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s", pi)
 
 
-def selections(keys: list[tuple[str, int]]) -> dict[tuple[str, int], dict]:
-    if not keys:
+def pi_rules(pis: list[str]) -> dict[str, dict]:
+    if not pis:
         return {}
-    bills = sorted({k[0] for k in keys})
-    return {
-        (r["bill_no"], r["seq"]): r
-        for r in db.all(f"SELECT * FROM sn_line_rule WHERE bill_no IN ({marks(len(bills))})", *bills)
-    }
+    return {r["pi_no"]: r for r in db.all(f"SELECT * FROM sn_pi_rule WHERE pi_no IN ({marks(len(pis))})", *pis)}
+
+
+def prefix_row(prefix: str) -> dict | None:
+    return db.one("SELECT * FROM sn_prefix_counter WHERE prefix = %s", prefix)
+
+
+def prefix_grow(prefix: str) -> bool:
+    """前缀的流水上限自动突破开关；前缀还没登记时按默认开启。"""
+    v = db.scalar("SELECT seq_grow FROM sn_prefix_counter WHERE prefix = %s", prefix)
+    return True if v is None else bool(v)
+
+
+def prefix_last(prefix: str | None) -> int:
+    """前缀最大流水（只增不减）；没有为 0。"""
+    if not prefix:
+        return 0
+    return int(db.scalar("SELECT last_seq_dec FROM sn_prefix_counter WHERE prefix = %s", prefix) or 0)
+
+
+def ensure_prefix(cu: CurrentUser, prefix: str, grow: bool | None) -> None:
+    """登记规则前缀（第一张 PI 选这个前缀时）：自动突破开关按这次的选择（不填默认开启）；已登记的不改。"""
+    if db.exists("SELECT EXISTS(SELECT 1 FROM sn_prefix_counter WHERE prefix = %s)", prefix):
+        return
+    now = util.now()
+    db.exec(
+        "INSERT IGNORE INTO sn_prefix_counter(prefix, last_seq_dec, seq_grow, created_by, created_at, updated_at) "
+        "VALUES (%s, 0, %s, %s, %s, %s)",
+        prefix,
+        0 if grow is False else 1,
+        cu.emp_no,
+        now,
+        now,
+    )
+
+
+def set_prefix_grow(cu: CurrentUser, prefix_in: str | None, grow: bool) -> dict:
+    """按前缀改流水上限自动突破开关（作用于这个前缀下的全部 PI）；已突破过规则位数（最大号超过原位数的最大流水）
+    后不能关闭。前缀须已登记（有 PI 选过）或规则库里有用这个前缀的规则；有规则时须能修改其中一条。"""
+    prefix = util.trim(prefix_in)
+    with db.tx():
+        locks.hold_prefix(prefix)
+        vs = db.all("SELECT * FROM sn_rule_version WHERE prefix = %s ORDER BY id", prefix) if prefix else []
+        regs = db.all("SELECT * FROM sn_pi_rule WHERE prefix = %s", prefix) if prefix else []
+        if not vs and not regs:
+            raise biz(ErrorCode.RULE_NOT_FOUND)
+        if vs:
+            rids = sorted({v["rule_id"] for v in vs})
+            denied: BizError | None = None
+            for r in db.all(f"SELECT * FROM sn_rule WHERE id IN ({marks(len(rids))})", *rids):
+                try:
+                    check_editable(cu, r)
+                    break
+                except BizError as e:
+                    denied = e
+            else:
+                raise denied
+            spec = spec_of(next(iter(_base_versions(vs)), vs[0]))
+        else:
+            for r in regs:
+                _check_pi_scope(cu, r["pi_no"])
+            spec = _custom_spec(json.loads(regs[0]["custom_json"] or "{}"))
+        ensure_prefix(cu, prefix, True)
+        if not grow and prefix_last(prefix) > codec.max_seq(spec):
+            raise biz(ErrorCode.RULE_PREFIX_GROW_LOCKED, prefix=prefix)
+        db.exec(
+            "UPDATE sn_prefix_counter SET seq_grow = %s, updated_at = %s WHERE prefix = %s",
+            1 if grow else 0,
+            util.now(),
+            prefix,
+        )
+        audit.record(cu, audit.entry(audit.RULE_UPDATE).info(f"prefix={prefix} seq_grow={int(grow)}"))
+    return {"prefix": prefix, "seq_grow": grow}
+
+
+def _registered(pi: str, row: dict | None) -> Resolved | None:
+    """登记行 → 本 PI 将用的规则（起始号取登记的，自动突破取前缀的）；规则已删时 None。"""
+    if row is None:
+        return None
+    if row["rule_id"] is None:
+        res = _custom_resolved(SRC_PI, json.loads(row["custom_json"] or "{}"))
+    else:
+        r = db.one("SELECT * FROM sn_rule WHERE id = %s", row["rule_id"])
+        if r is None:
+            return None
+        res = resolve(r, pi, SRC_PI)
+    start = None if row["seq_start"] is None else int(row["seq_start"])
+    return replace(res, seq_start=start, seq_grow=prefix_grow(row["prefix"]))
+
+
+def pi_default(pi: str) -> Resolved | None:
+    """本 PI 的规则（一个 PI 一个规则，全部物料行都用它）；没选过时 None。"""
+    return _registered(pi, pi_rule(pi))
 
 
 def info(res: Resolved | None, length: str | None = None, start_seq: int = 1, unit: str | None = None) -> dict | None:
@@ -1374,18 +1343,11 @@ def info(res: Resolved | None, length: str | None = None, start_seq: int = 1, un
 
 
 def line_rules_brief(pi: str, keys: list[tuple[str, int]]) -> dict[tuple[str, int], dict]:
-    """订单页右表的「SN 规则」列。"""
+    """订单页右表的「SN 规则」列：一个 PI 一个规则，各物料行相同。"""
     if not keys or not pi:
         return {}
-    sels = selections(keys)
-    default = pi_default(pi)
-    memo: dict[int, Resolved | None] = {}
-    out = {}
-    for k in keys:
-        # PI 没绑规则（default 为 None）时不再逐行重查 PI 绑定
-        res = effective(pi, sels.get(k), use_default=False, memo=memo)
-        out[k] = info(default if res is None else res)
-    return out
+    v = info(pi_default(pi))
+    return dict.fromkeys(keys, v)
 
 
 # ================================================================== 选取 / 绑定
@@ -1414,21 +1376,18 @@ def _derive(cu: CurrentUser, rule: dict, pi: str, new_prefix: str | None) -> dic
 def _resolve_for_select(cu: CurrentUser, rule: dict, pi: str, source: str, new_prefix: str | None) -> Resolved:
     """规则已归属别的 PI 时：填了新前缀则为本 PI 换前缀另出版本；不填则共用前缀（生成时另出同前缀的版本）。"""
     res = resolve(rule, pi, source)
-    if res.plan == PLAN_SHARE:
+    if res.plan in (PLAN_SHARE, PLAN_PREFIX):
         if util.blank(new_prefix):
+            if res.plan == PLAN_PREFIX:
+                t = current_version(rule)
+                raise biz(
+                    ErrorCode.RULE_PREFIX_CHANGE_REQUIRED,
+                    rule_code=rule["rule_code"],
+                    version=t["version"],
+                    other_pi=res.other_pi,
+                )
             check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
             return res
-        _derive(cu, rule, pi, new_prefix)
-        return resolve(rule, pi, source)
-    if res.plan == PLAN_PREFIX:
-        if util.blank(new_prefix):
-            t = current_version(rule)
-            raise biz(
-                ErrorCode.RULE_PREFIX_CHANGE_REQUIRED,
-                rule_code=rule["rule_code"],
-                version=t["version"],
-                other_pi=res.other_pi,
-            )
         _derive(cu, rule, pi, new_prefix)
         res = resolve(rule, pi, source)
     return res
@@ -1447,7 +1406,7 @@ def _line_keys(pi: str, lines: list[dict] | None) -> list[tuple[str, int, dict]]
         keys.append((no, int(seq), line))
     if not keys:
         raise biz(ErrorCode.RULE_LINE_REQUIRED)
-    # 失效的物料行（line_void）不能选规则、改回默认
+    # 失效的物料行（line_void）不能选规则
     vrule = line_void.current()
     bad = next(((no, seq) for no, seq, line in keys if vrule.is_void(line)), None)
     if bad is not None:
@@ -1455,19 +1414,13 @@ def _line_keys(pi: str, lines: list[dict] | None) -> list[tuple[str, int, dict]]
     return keys
 
 
-def _sel_ident(sel: dict | None) -> tuple | None:
-    """物料行已选规则的标识（判断本 PI 是否同一个规则）：规则库规则按规则 id，自定义规则按格式参数
-    （不看起始号、上限自动突破）；没选为 None。"""
-    if sel is None:
+def _row_ident(row: dict | None) -> tuple | None:
+    """PI 登记的规则标识（判断是否改选）：规则库规则按规则 id，自定义规则按格式参数；没登记为 None。"""
+    if row is None:
         return None
-    if sel.get("rule_id") is not None:
-        return ("R", int(sel["rule_id"]))
-    if sel.get("custom_json"):
-        c = json.loads(sel["custom_json"])
-        c.pop("seq_start", None)
-        c.pop("seq_grow", None)
-        return ("C", json.dumps(c, sort_keys=True))
-    return None
+    if row["rule_id"] is not None:
+        return ("R", int(row["rule_id"]))
+    return ("C", json.dumps(json.loads(row["custom_json"] or "{}"), sort_keys=True))
 
 
 def _pi_lines(pi: str) -> list[dict]:
@@ -1497,6 +1450,53 @@ def same_format_rule(cu: CurrentUser | None, pi: str, spec: codec.Spec) -> Resol
     return None
 
 
+def _check_locked(pi: str, target: str | None) -> None:
+    """一个 PI 一个规则前缀：本 PI 有号（生成过、没全删）时只能用号上的前缀；没有号时可以改选。"""
+    locked = pi_used_prefix(pi)
+    if locked is not None and target != locked:
+        raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=locked, new=target or "-")
+
+
+def _register(
+    cu: CurrentUser,
+    pi: str,
+    res: Resolved,
+    rule_id: int | None,
+    custom: dict | None,
+    seq_start: int | None,
+    grow: bool | None,
+    label: str,
+) -> None:
+    """登记本 PI 的规则（覆盖原登记；之后同步进来的单据也用它），前缀第一次被选时登记前缀与自动突破开关。
+    改选（原来登记的是别的规则）作用于整张 PI，须对本 PI 全部单据的生产组织都有授权。"""
+    prefix = res.version["prefix"]
+    prev = db.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s FOR UPDATE", pi)
+    ident = ("R", int(rule_id)) if rule_id is not None else ("C", json.dumps(custom, sort_keys=True))
+    if prev is not None and _row_ident(prev) != ident:
+        _check_pi_scope(cu, pi)
+    ensure_prefix(cu, prefix, grow)
+    now = util.now()
+    db.exec(
+        "INSERT INTO sn_pi_rule(pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE prefix = VALUES(prefix), rule_id = VALUES(rule_id), "
+        "custom_json = VALUES(custom_json), seq_start = VALUES(seq_start), bound_by = VALUES(bound_by), "
+        "bound_at = VALUES(bound_at)",
+        pi,
+        prefix,
+        rule_id,
+        None if custom is None else json.dumps(custom, ensure_ascii=False, sort_keys=True),
+        seq_start,
+        cu.emp_no,
+        now,
+    )
+    audit.record(
+        cu,
+        audit.entry(audit.RULE_PI_BIND)
+        .pi(pi)
+        .info(label + ("" if prev is None else f" (was {prev['prefix']} rule_id={prev['rule_id'] or '-'})")),
+    )
+
+
 def select_for_lines(
     cu: CurrentUser,
     pi_in: str | None,
@@ -1505,26 +1505,42 @@ def select_for_lines(
     custom: dict | None,
     new_prefix: str | None = None,
 ) -> dict:
-    """选定 / 改选规则：一个 PI 只有一个规则，选定的规则作用于本 PI 的全部有效物料行。
+    """选定 / 改选规则：一个 PI 一个规则前缀，登记在 PI 上，本 PI 全部物料行、之后同步进来的单据都用它。
     规则库（rule_id；版本已归属别的 PI 时默认共用前缀，填 new_prefix 则换前缀）或自定义（custom；与本 PI 已有的
-    或规则库里前缀、格式完全相同的规则归到那条规则下）。
-    - lines：点选 / 勾选的物料行（须属本 PI、有写权限），起始号只记在这些行上；本 PI 别的物料行改记为同一规则
-      （原来就是这条规则的不动）。
-    - 本 PI 已生成的号还在时前缀锁定（pi_used_prefix），只能选用这个前缀的规则；号全部删掉后可改选。
-    - 本 PI 别的物料行已选了别的规则（改选）时，须对本 PI 全部单据的生产组织都有授权（同 PI 绑定）。"""
+    或规则库里前缀、格式完全相同的规则归到那条规则下；不同的生成成功后才存入规则库）。
+    - lines：点选 / 勾选的物料行（须属本 PI、有写权限）。
+    - 起始号（custom.seq_start）记在 PI 上，只管下一次生成。
+    - 流水上限自动突破（custom.seq_grow）按前缀：前缀第一次被选时按这次的选择（不填默认开启），之后在规则库改。
+    - 本 PI 有号时前缀锁定（RULE_PI_PREFIX_LOCKED），号全部删掉（或还没生成）可以改选。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
     with db.tx():
         keys = _line_keys(pi, lines)
         cu.check_write(*{line["org_code"] for _, _, line in keys})
-        locked = pi_used_prefix(pi)
-        own = None
-        rule = None
+        grow = None
         if custom is not None:
             res = _custom_resolved(SRC_LINE, custom)
+            grow = custom.get("seq_grow")
+            grow = None if grow is None else bool(grow)
+            _check_locked(pi, res.version["prefix"])
             own = own_version(pi, res.spec()) or same_format_rule(cu, pi, res.spec())
-            target = res.version["prefix"]
+            start = res.seq_start
+            if own is not None:
+                # 前缀、格式与本 PI 已有的版本或规则库里的规则完全相同：登记为那条规则
+                _adopt(cu, own.rule, pi, {line["org_code"] for line in _pi_lines(pi)})
+                if own.plan == PLAN_SHARE:
+                    check_prefix(own.version["prefix"], spec=own.spec(), pi=pi)
+                elif own.plan == PLAN_CLAIM:
+                    check_prefix(own.version["prefix"], own.version["id"], own.spec(), pi)
+                res = replace(own, seq_start=start)
+                rid, cj = own.rule["id"], None
+                label = f"{own.rule['rule_code']} v{own.version['version']}"
+            else:
+                check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
+                rid, cj = None, dict(res.custom)
+                label = f"custom {format_text(res.spec())}"
+            label += "" if start is None else f" start={seq_label(start, res.spec(), True)}"
         else:
             rule = get_rule(rule_id)
             check_visible(cu, rule)
@@ -1534,123 +1550,17 @@ def select_for_lines(
                 if pre.plan in (PLAN_SHARE, PLAN_PREFIX) and not util.blank(new_prefix)
                 else (pre.version["prefix"] if pre.version is not None else None)
             )
-        if locked is not None and target != locked:
-            raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=locked, new=target or "-")
-        all_lines = _pi_lines(pi)
-        if own is not None:
-            # 前缀、格式与本 PI 已有的版本或规则库里的规则完全相同：改记为那条规则（本 PI 用它将用的版本）；
-            # 填了起始号时另记在物料行（custom_json 只有 seq_start），下次生成从 max(PI 下一个号, 起始号) 起
-            _adopt(cu, own.rule, pi, {line["org_code"] for line in all_lines})
-            if own.plan == PLAN_SHARE:
-                check_prefix(own.version["prefix"], spec=own.spec(), pi=pi)
-            elif own.plan == PLAN_CLAIM:
-                check_prefix(own.version["prefix"], own.version["id"], own.spec(), pi)
-            start, grow = res.seq_start, res.seq_grow
-            res = replace(own, seq_start=start, seq_grow=grow)
-            rid, cj = own.rule["id"], _start_json(start, grow)
-            rest_cj = _start_json(None, grow)
-            label = (
-                f"{own.rule['rule_code']} v{own.version['version']}"
-                + ("" if start is None else f" start={seq_label(start, res.spec(), grow)}")
-                + (" grow" if grow else "")
-            )
-        elif custom is not None:
-            check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
-            rid, cj = None, _custom_json(res)
-            rest_cj = _custom_json(replace(res, seq_start=None))
-            label = (
-                f"custom {format_text(res.spec())}"
-                + ("" if res.seq_start is None else f" start={seq_label(res.seq_start, res.spec(), res.seq_grow)}")
-                + (" grow" if res.seq_grow else "")
-            )
-        else:
+            _check_locked(pi, target)
             res = _resolve_for_select(cu, rule, pi, SRC_LINE, new_prefix)
-            rid, cj = rule["id"], None
-            rest_cj = None
+            rid, cj, start = rule["id"], None, None
             label = f"{rule['rule_code']} v{res.version['version']}"
-        ident = ("R", int(rid)) if rid is not None else _sel_ident({"custom_json": cj})
-        mine = {(no, seq) for no, seq, _ in keys}
-        prev = selections([(r["bill_no"], r["seq"]) for r in all_lines] + list(mine))
-        bound = db.one("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s FOR UPDATE", pi)
-        # 改选（本 PI 别的物料行已选了别的规则，或 PI 绑定的是别的规则）：作用于整张 PI，须对本 PI 全部单据的
-        # 生产组织都有授权
-        if (bound is not None and ("R", int(bound["rule_id"])) != ident) or any(
-            (r["bill_no"], r["seq"]) not in mine and _sel_ident(prev.get((r["bill_no"], r["seq"]))) not in (None, ident)
-            for r in all_lines
-        ):
-            _check_pi_scope(cu, pi)
-        now = util.now()
-        others = [
-            r
-            for r in all_lines
-            if (r["bill_no"], r["seq"]) not in mine and _sel_ident(prev.get((r["bill_no"], r["seq"]))) != ident
-        ]
-        upsert = (
-            "INSERT INTO sn_line_rule(bill_no, seq, pi_no, rule_id, custom_json, set_by, set_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE pi_no = VALUES(pi_no), rule_id = "
-            "VALUES(rule_id), custom_json = VALUES(custom_json), set_by = VALUES(set_by), set_at = VALUES(set_at)"
-        )
-        for no, seq, line in keys:
-            db.exec(upsert, no, seq, pi, rid, cj, cu.emp_no, now)
-            generated = db.count(
-                "SELECT COALESCE(SUM(own_generated), 0) FROM sn_line_count WHERE bill_no = %s AND seq = %s", no, seq
-            )
-            audit.record(
-                cu,
-                audit.entry(audit.RULE_LINE_SELECT)
-                .pi(pi)
-                .bill(no)
-                .material(line["material_code"])
-                .info(f"seq={seq} {label}" + (" (改选，已生成过号)" if (no, seq) in prev and generated else "")),
-            )
-        # 一个 PI 只有一个规则：本 PI 别的物料行改记为同一规则（不带起始号；上限自动突破随这次选择）
-        for r in others:
-            db.exec(upsert, r["bill_no"], r["seq"], pi, rid, rest_cj, cu.emp_no, now)
-        if others:
-            audit.record(
-                cu,
-                audit.entry(audit.RULE_LINE_SELECT)
-                .pi(pi)
-                .info(f"本 PI 其余 {len(others)} 个物料行同用 {label.split(' start=')[0]}"),
-            )
-        # PI 绑定（物料行没选时的默认）是别的规则：改为这条规则；选的是还没存入规则库的自定义规则时解除绑定
-        if bound is not None and ("R", int(bound["rule_id"])) != ident:
-            if rid is None:
-                db.exec("DELETE FROM sn_pi_rule WHERE pi_no = %s", pi)
-                audit.record(cu, audit.entry(audit.RULE_PI_UNBIND).pi(pi).info(f"rule_id={bound['rule_id']} ({label})"))
-            else:
-                db.exec(
-                    "UPDATE sn_pi_rule SET rule_id = %s, bound_by = %s, bound_at = %s WHERE pi_no = %s",
-                    rid,
-                    cu.emp_no,
-                    now,
-                    pi,
-                )
-                audit.record(cu, audit.entry(audit.RULE_PI_BIND).pi(pi).info(label))
-        return {"pi_no": pi, "rule": info(res), "lines": len(mine) + len(others)}
-
-
-def clear_lines(cu: CurrentUser, pi_in: str | None, lines: list[dict] | None) -> dict:
-    """物料行改回按 PI / 客户默认。"""
-    pi = util.trim(pi_in)
-    with db.tx():
-        keys = _line_keys(pi, lines)
-        cu.check_write(*{line["org_code"] for _, _, line in keys})
-        for no, seq, line in keys:
-            if db.exec("DELETE FROM sn_line_rule WHERE bill_no = %s AND seq = %s", no, seq):
-                audit.record(
-                    cu,
-                    audit.entry(audit.RULE_LINE_SELECT)
-                    .pi(pi)
-                    .bill(no)
-                    .material(line["material_code"])
-                    .info(f"seq={seq} cleared"),
-                )
-    return {"pi_no": pi}
+        _register(cu, pi, res, rid, cj, start, grow, label)
+        res = replace(res, seq_grow=prefix_grow(res.version["prefix"]))
+        return {"pi_no": pi, "rule": info(res), "lines": len(_pi_lines(pi))}
 
 
 def _check_pi_scope(cu: CurrentUser, pi: str) -> None:
-    """PI 级的默认规则影响这张 PI 的全部单据：普通操作员须对这张 PI 的全部单据的生产组织都有授权。"""
+    """PI 级的规则影响这张 PI 的全部单据：普通操作员须对这张 PI 的全部单据的生产组织都有授权。"""
     if cu.is_admin:
         return
     orgs = set(db.column("SELECT DISTINCT org_code FROM sn_prd_mo WHERE pi = %s", pi))
@@ -1658,8 +1568,7 @@ def _check_pi_scope(cu: CurrentUser, pi: str) -> None:
 
 
 def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None, new_prefix: str | None = None) -> dict:
-    """给 PI 绑定规则作各物料行的默认；版本已归属别的 PI 时默认共用前缀，填新前缀则换前缀。
-    一个 PI 只有一个规则：本 PI 已生成的号还在时只能绑这个前缀的规则；物料行已选了别的规则的一并改记为这条规则。"""
+    """给 PI 登记规则库规则（同生成页选规则，不带物料行）；版本已归属别的 PI 时默认共用前缀，填新前缀则换前缀。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -1673,47 +1582,26 @@ def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None, new_prefix:
             if pre.plan in (PLAN_SHARE, PLAN_PREFIX) and not util.blank(new_prefix)
             else (pre.version["prefix"] if pre.version is not None else None)
         )
-        locked = pi_used_prefix(pi)
-        if locked is not None and target != locked:
-            raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=locked, new=target or "-")
+        _check_locked(pi, target)
         res = _resolve_for_select(cu, rule, pi, SRC_PI, new_prefix)
-        now = util.now()
-        # 一个 PI 只有一个规则：本 PI 物料行已选了别的规则的，改记为这条规则（上限自动突破照旧保留）
-        for r in db.all("SELECT * FROM sn_line_rule WHERE pi_no = %s", pi):
-            if _sel_ident(r) != ("R", int(rule["id"])):
-                db.exec(
-                    "UPDATE sn_line_rule SET rule_id = %s, custom_json = %s, set_by = %s, set_at = %s "
-                    "WHERE bill_no = %s AND seq = %s",
-                    rule["id"],
-                    _start_json(None, _grow_of(r["custom_json"])),
-                    cu.emp_no,
-                    now,
-                    r["bill_no"],
-                    r["seq"],
-                )
-        db.exec(
-            "INSERT INTO sn_pi_rule(pi_no, rule_id, bound_by, bound_at) VALUES (%s,%s,%s,%s) "
-            "ON DUPLICATE KEY UPDATE rule_id = VALUES(rule_id), bound_by = VALUES(bound_by), bound_at = "
-            "VALUES(bound_at)",
-            pi,
-            rule["id"],
-            cu.emp_no,
-            now,
-        )
-        audit.record(cu, audit.entry(audit.RULE_PI_BIND).pi(pi).info(f"{rule['rule_code']} v{res.version['version']}"))
-        return {"pi_no": pi, "rule": info(res)}
+        _register(cu, pi, res, rule["id"], None, None, None, f"{rule['rule_code']} v{res.version['version']}")
+        return {"pi_no": pi, "rule": info(replace(res, seq_grow=prefix_grow(res.version["prefix"])))}
 
 
 def unbind_pi(cu: CurrentUser, pi_in: str | None) -> dict:
-    """解除 PI 绑定：规则转为通用模板，已选过规则的物料行不受影响。"""
+    """解除 PI 的规则登记：本 PI 有号时不能解除（前缀锁定）。"""
     pi = util.trim(pi_in)
     _check_pi_scope(cu, pi)
     with db.tx():
         b = db.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s FOR UPDATE", pi)
         if b is not None:
+            used = pi_used_prefix(pi)
+            if used is not None:
+                raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=used, new="-")
             db.exec("DELETE FROM sn_pi_rule WHERE pi_no = %s", pi)
-            r = db.one("SELECT rule_code FROM sn_rule WHERE id = %s", b["rule_id"])
-            audit.record(cu, audit.entry(audit.RULE_PI_UNBIND).pi(pi).info(r["rule_code"] if r else str(b["rule_id"])))
+            audit.record(
+                cu, audit.entry(audit.RULE_PI_UNBIND).pi(pi).info(f"{b['prefix']} rule_id={b['rule_id'] or '-'}")
+            )
     return {"pi_no": pi}
 
 
@@ -1773,8 +1661,14 @@ def _custom_names(pi: str) -> tuple[str, str]:
     return f"{stem}{k}", util.cut(f"{pi}_v{k}", 128)
 
 
+def _bind_rule(pi: str, rule_id: int) -> None:
+    """自定义规则存入规则库后：PI 登记改记为这条规则（前缀、起始号不变）。"""
+    db.exec("UPDATE sn_pi_rule SET rule_id = %s, custom_json = NULL WHERE pi_no = %s", rule_id, pi)
+
+
 def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
     """生成事务内：把本次要用的版本落库、标记已使用并归属本 PI，返回版本行。
+    自定义规则（PLAN_NEW）这时才存入规则库（生成失败或取消不留规则），PI 登记改记为这条规则。
     与预演时的判断不一致（期间被别的 PI 先用、前缀被占用）时报预演已失效。"""
     if res.plan == PLAN_NEW:
         spec = res.spec()
@@ -1783,42 +1677,22 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
             raise biz(err)
         from app.services import orders
 
-        # 物料行改记为这条规则：本次生成的行，以及本 PI 选了同一自定义规则、这次没生成的行（可能在别的组织；
-        # 之后接着用这一版，不再按自定义新建——前缀已被这一版占用）
-        # 格式相同即同一条规则，起始号不同也算（起始号只管首次生成，之后流水接续）
-        same = list(
-            dict.fromkeys(
-                [*lines]
-                + [
-                    (r["bill_no"], r["seq"])
-                    for r in db.all(
-                        "SELECT bill_no, seq, custom_json FROM sn_line_rule WHERE pi_no = %s "
-                        "AND custom_json IS NOT NULL",
-                        pi,
-                    )
-                    if _same_custom(r["custom_json"], res.custom)
-                ]
-            )
-        )
-        # 规则库里已有前缀、格式完全相同、已用于生成的规则（本 PI 或别的 PI 已用）：归到那条规则下，不另建
-        # （选规则时已归过去的物料行不会走到这里；这里是选定后别的 PI 先用同格式生成了的）
+        # 规则库里已有前缀、格式完全相同、已用于生成的规则（选定后别的 PI 先用同格式生成了）：归到那条规则下，不另建
         hit = same_format_rule(cu, pi, spec)
         if hit is not None and hit.plan in (PLAN_USE, PLAN_SHARE):
             v = realize(cu, pi, hit, lines)
-            for no, seq in same:
-                keep_grow(no, seq, hit.rule["id"])
+            _bind_rule(pi, hit.rule["id"])
             return v
         check_prefix(spec.prefix, spec=spec, pi=pi, gen=True)
         code, name = _custom_names(pi)
-        # 自定义规则归属这些物料行所在的生产组织（都在同一个组织时；否则为全局规则，各组织都能看到）
-        orgs = orders.bill_orgs(no for no, _ in same) - {"-"}
+        # 自定义规则归属本 PI 的生产组织（一个 PI 一个规则，全部物料行都用它；都在同一个组织时归该组织，
+        # 否则为全局规则，各组织都能看到）
+        orgs = {r["org_code"] for r in _pi_lines(pi)} | (orders.bill_orgs(no for no, _ in lines) - {"-"})
         owner = next(iter(orgs)) if len(orgs) == 1 else None
         rid = _insert_rule(
             cu, code, name, spec, (PI, pi), " (自定义规则，生成成功后存入规则库)", claimed_pi=pi, factory=owner
         )
-        for no, seq in same:
-            # 改记为这条规则；上限自动突破记在各物料行上，照旧保留
-            keep_grow(no, seq, rid)
+        _bind_rule(pi, rid)
         return db.one("SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = 1", rid)
     if res.version is None:
         raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
@@ -1844,7 +1718,7 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
 def share_version(cu: CurrentUser, pi: str, rule: dict, t: dict) -> dict:
     """生成事务内：规则当前版本 t 已归属别的 PI，本 PI 共用它的前缀：另出同前缀、同格式、归属本 PI 的版本
     （derived_from = t；与上限自动突破另出的版本区分：位数相同）。已有则沿用。
-    号不重靠流水：本 PI 接在这个前缀各 PI 的最大号之后，不用别的 PI 已用、已预留的流水（generate.shared_of）。"""
+    号不重靠流水：同一前缀下各 PI 共用一套流水，接在前缀最大号之后（generate）。"""
     db.one("SELECT id FROM sn_rule WHERE id = %s FOR UPDATE", rule["id"])
     v = db.one(
         "SELECT * FROM sn_rule_version WHERE rule_id = %s AND derived_from = %s AND prefix = %s AND seq_len = %s "
@@ -1871,30 +1745,6 @@ def share_version(cu: CurrentUser, pi: str, rule: dict, t: dict) -> dict:
         ),
     )
     return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)
-
-
-def pi_prefixes(pi: str) -> set[str]:
-    """本 PI 已用或将用的前缀：归属本 PI 的版本、物料行选定的规则（当前版本）与自定义规则、PI 绑定的规则。
-    用来找共用前缀的别的 PI（generate.shared_of）。"""
-    out = set(db.column("SELECT DISTINCT prefix FROM sn_rule_version WHERE claimed_pi = %s", pi))
-    rids = set(db.column("SELECT DISTINCT rule_id FROM sn_line_rule WHERE pi_no = %s AND rule_id IS NOT NULL", pi))
-    rids |= set(db.column("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi))
-    if rids:
-        ids = sorted(rids)
-        out |= set(
-            db.column(
-                "SELECT v.prefix FROM sn_rule r JOIN sn_rule_version v ON v.rule_id = r.id "
-                f"AND v.version = r.current_version WHERE r.id IN ({marks(len(ids))})",
-                *ids,
-            )
-        )
-    for cj in db.column(
-        "SELECT custom_json FROM sn_line_rule WHERE pi_no = %s AND rule_id IS NULL AND custom_json IS NOT NULL", pi
-    ):
-        p = json.loads(cj).get("prefix")
-        if p:
-            out.add(p)
-    return out
 
 
 # ================================================================== 进制流水显示
