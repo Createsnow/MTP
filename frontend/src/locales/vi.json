@@ -1105,6 +1105,11 @@
   "rules": {
     "title": "Thư viện quy tắc SN",
     "desc": "Duy trì quy tắc SN: SN = tiền tố + số tuần tự (bù 0) + dấu phân cách + chiều dài (bù 0, tùy chọn) + dấu phân cách + đơn vị (tùy chọn) + hậu tố, không giới hạn ký tự. Quy tắc được lưu theo tiền tố: cùng tiền tố thì cùng cơ số, số chữ số tuần tự và bảng ký tự; một quy tắc dùng được cho nhiều PI (tuần tự nối tiếp sau số lớn nhất chung), mỗi PI chỉ dùng một quy tắc. Ở đây chỉ duy trì quy tắc; chọn quy tắc ở trang tạo.",
+    "piCountVal": "{n} PI",
+    "pickPrefix": "Chọn một tiền tố ở bên trái",
+    "statQty": "Số SN đã tạo",
+    "composition": "Cấu trúc SN",
+    "rulesTitle": "Quy tắc",
     "create": "Tạo quy tắc",
     "owner": "Tổ chức sở hữu",
     "factory": "Tổ chức sản xuất",

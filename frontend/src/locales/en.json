@@ -1105,6 +1105,11 @@
   "rules": {
     "title": "SN rule library",
     "desc": "Maintain SN rules: SN = prefix + serial (zero-padded) + separator + length (zero-padded, optional) + separator + unit (optional) + suffix, any characters allowed. Rules are filed by prefix: base, serial digits and charset are the same under one prefix; a rule can serve several PIs (serials continue after their common maximum) and a PI uses only one rule. Rules are only maintained here; rules are chosen on the generation page.",
+    "piCountVal": "{n} PIs",
+    "pickPrefix": "Pick a prefix on the left",
+    "statQty": "SNs generated",
+    "composition": "SN composition",
+    "rulesTitle": "Rules",
     "create": "New rule",
     "owner": "Owner org",
     "factory": "Production org",
