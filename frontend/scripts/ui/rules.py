@@ -33,7 +33,7 @@ M = {
 "rules.usageRange": ("占用的流水", "Serials used", "Tuần tự đã dùng"),
 "rules.usageQty": ("枚数", "Qty", "Số lượng"),
 "rules.usageGap": ("中间有空号", "has gaps", "có khoảng trống"),
-"rules.usageTop": ("PI 最大号（含预留）", "PI max (incl. reserved)", "Số lớn nhất của PI (gồm dự trữ)"),
+"rules.usageTop": ("PI 最大号", "PI max", "Số lớn nhất của PI"),
 "rules.format": ("格式", "Format", "Định dạng"),
 "rules.sampleOf": ("示例号", "Samples", "Số mẫu"),
 "rules.code": ("规则编码", "Rule code", "Mã quy tắc"),

@@ -7,7 +7,7 @@
 
 - 不参与排号：生成时额度按 0 算（generate.Line.void），也不挡同前缀后面项次的生成（generate._check_order）；
 - 不参与计数：生成页 PI 列表、详情、分配页的订单数与可生成都不算它（已生成、已分配按现有的号照算）；
-- 不能选规则、改回默认规则、撤销配置、填写附件项次 / 米数 / 产品单位，不能作转移目标、SN 导入的目标（LINE_VOID）；
+- 不能选规则、改回默认规则、恢复默认值、填写附件项次 / 米数 / 产品单位，不能作转移目标、SN 导入的目标（LINE_VOID）；
 - 已有的号照常分配、推送、拉取、删号、转移（同一行内转组织不算换行）。
 
 业务状态、领料状态还没取到（空）的物料行不会失效。两项清空即全部生效；页面接口的 enabled 字段保留（关闭也等于不过滤，
@@ -163,7 +163,7 @@ def void_keys(keys: list[tuple[str, int]], rule: Rule | None = None) -> set[tupl
 
 
 def check_not_void(keys: list[tuple[str, int]], rule: Rule | None = None) -> None:
-    """有失效的物料行时拒绝（选规则、撤销配置、填写等），报第一条。"""
+    """有失效的物料行时拒绝（选规则、恢复默认值、填写等），报第一条。"""
     bad = void_keys(keys, rule)
     if bad:
         no, seq = sorted(bad)[0]

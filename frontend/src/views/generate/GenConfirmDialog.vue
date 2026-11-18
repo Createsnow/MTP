@@ -4,10 +4,6 @@
       <!-- 手动起止号：提示用了多少个空闲流水、溢出多少枚从最大号之后接着编 -->
       <el-alert v-if="preview.seq?.mode === 'RANGE'" :type="preview.overflow_qty ? 'warning' : 'info'" :closable="false" show-icon class="usage"
         :title="t('generate.seqUsage', { start: preview.seq.start, end: preview.seq.end, used: num(preview.range_qty), gap: num(preview.gap_qty || 0), over: num(preview.overflow_qty), next: overflowFrom })" />
-      <!-- 没有预留号段或预留不够的物料行：号接在最大号之后（不拦截） -->
-      <el-alert v-if="tails.length" type="warning" :closable="false" show-icon class="usage" :title="t('generate.tailHint')">
-        <div v-for="x in tails" :key="x.bill_no + '#' + x.seq">{{ t("generate.tailItem", { bill: x.bill_no, seq: x.seq, n: num(x.tail_qty) }) }}</div>
-      </el-alert>
       <!-- 附件项次相同（不分单据）：提示同一项次内按单据勾选先后、单据内按 ERP行号生成（不拦截） -->
       <el-alert v-if="dups.length" type="warning" :closable="false" show-icon class="usage" :title="t('generate.attachDupHint')">
         <div v-for="g in dups" :key="g.attach">
@@ -87,8 +83,8 @@
 /** 确认生成：只列本次各物料行的物料编码、订单数量、前缀、进制、流水位数、流水号、十进制流水号、附件项次、米数、产品单位与开始 / 结束 SN；
  *  用空号段时一个物料行可有几段号，每段一行（流水号、十进制流水号、开始 / 结束 SN 对齐）；手动起止号时顶部提示用了多少个空闲流水、
  *  溢出多少枚从最大号之后接着编；
- *  附件项次相同（不分单据）时顶部提示同一项次内按单据勾选先后、单据内按行号（单据序号）从小到大生成；没有预留号段或预留不够、号接在最大号之后的物料行另行提示；
- *  「号来源」列：预留号段 / 起始号平移 / 指定起止号 / 接在最后（另注接在最后、用空号段的枚数）；
+ *  附件项次相同（不分单据）时顶部提示同一项次内按单据勾选先后、单据内按行号（单据序号）从小到大生成；
+ *  「号来源」列：指定起止号 / 接在最后（另注接在最后、用空号段的枚数）；
  *  超过单次默认上限（unlockLimit > 0）时须先勾选解除限制。确认后由父组件凭预演令牌生成。 */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -111,7 +107,7 @@ function decRange(g: any): string {
   if (g.start_seq == null) return "—";
   return g.start_seq === g.end_seq ? String(g.start_seq) : `${g.start_seq} ~ ${g.end_seq}`;
 }
-/** 溢出部分从哪个十进制流水起编：后台给出（含新建的预留）；早先的预演按 max(原最大号, 止号) + 1。 */
+/** 溢出部分从哪个十进制流水起编：后台给出；早先的预演按 max(原最大号, 止号) + 1。 */
 const overflowFrom = computed(() => {
   const p = props.preview;
   if (p?.seq?.mode !== "RANGE") return 0;
@@ -120,17 +116,11 @@ const overflowFrom = computed(() => {
 /** 号来源的名称 */
 function srcLabel(src: string): string {
   const labels: Record<string, string> = {
-    RESERVE: t("generate.src.RESERVE"),
-    SHIFT: t("generate.src.SHIFT"),
     RANGE: t("generate.src.RANGE"),
     TAIL: t("generate.src.TAIL"),
   };
   return labels[src] ?? src;
 }
-/** 号（部分）接在最大号之后的物料行：没有预留号段或预留不够（指定起止号时溢出另在上面提示） */
-const tails = computed<any[]>(() =>
-  props.preview?.generatable && props.preview.seq?.mode !== "RANGE" ? (props.preview.items || []).filter((x: any) => x.tail_qty > 0) : [],
-);
 /** 同一单据内附件项次相同的物料行（预演各行已按排号顺序排好）。 */
 const dups = computed<any[]>(() => (props.preview?.generatable ? dupAttach(props.preview.items || [], (x: any) => x.attach) : []));
 // 每次打开都要重新勾选

@@ -108,9 +108,6 @@
             <el-button v-if="ctx.gaps?.count" link type="warning" size="small" @click="segDlg?.open({})">
               {{ t("generate.gapsLink", { n: num(ctx.gaps.count), qty: num(ctx.gaps.total) }) }}
             </el-button>
-            <el-button v-if="ctx.gaps?.reserved_total" link type="primary" size="small" @click="segDlg?.open({ tab: 'reserved' })">
-              {{ t("generate.reservedLink", { qty: num(ctx.gaps.reserved_total) }) }}
-            </el-button>
           </div>
         </div>
       </template>
@@ -268,41 +265,34 @@
         <p v-if="!shownBills.length" class="muted no-lines">{{ t("common.empty") }}</p>
       </div>
 
-      <!-- 底部操作栏（三个页签相同）：左侧对勾选的行操作 —— 已选信息（清空）、选规则、更多（撤销配置 / 删号 /
-           删号，菜单项后写出作用的行数、枚数；撤销配置没有可作用的行时置灰，删号没有勾选时按 SN 起止号）；右侧生成 —— 生成范围、
+      <!-- 底部操作栏（三个页签相同）：左侧对勾选的行操作 —— 已选信息（恢复默认值：所选还没号的行手填的附件项次、米数、
+           产品单位改回金蝶值，没有可恢复的行时置灰；取消勾选用「全选」框或逐个取消）、选规则、删号（有勾选的已出号行时按所选行删，
+           没有时按 SN 起止号）；右侧生成 —— 生成范围、
            流水来源（弹层：从最大号之后 / 指定起止号、空闲号段）、生成 N 枚（唯一主按钮） -->
       <template #footer>
         <div v-if="ctx" class="bar">
           <span class="sel-info" :class="{ none: !pickedRows.length }">
             <template v-if="pickedRows.length">
               {{ t("generate.selInfo", { bills: pickedBills, lines: pickedRows.length }) }}
-              <el-button link type="primary" @click="clearSelection">{{ t("generate.clearSel") }}</el-button>
+              <el-button link type="primary" :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">
+                {{ defaultRows.length ? t("generate.restoreDefaultN", { n: defaultRows.length }) : t("generate.restoreDefault") }}
+              </el-button>
             </template>
             <template v-else>{{ t("generate.selNone") }}</template>
           </span>
           <!-- 选规则作用于整张 PI：有勾选时按所选行（起始号记在这些行上），没有勾选时按本 PI 全部有效物料行 -->
           <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
-          <el-dropdown trigger="click" placement="top-start" @command="onMore">
-            <el-button :loading="busy === 'config'">{{ t("generate.more") }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
-            <template #dropdown>
-              <el-dropdown-menu class="more-menu">
-                <el-dropdown-item command="config" :disabled="!configRows.length">
-                  <span class="mi">{{ t("generate.revokeConfig") }}<span class="k">{{ t("generate.nLines", { n: configRows.length }) }}</span></span>
-                </el-dropdown-item>
-                <!-- 删号：有勾选的已出号行时按所选行删（弹窗里可改为按 SN 起止号），没有时直接按 SN 起止号 -->
-                <el-dropdown-item command="delete" :disabled="!!running" :class="{ danger: !running }">
-                  <span class="mi">{{ t("generate.deleteMenu") }}<span v-if="deleteRows.length" class="k">{{ t("generate.nLinesQty", { n: deleteRows.length, qty: num(deleteQty) }) }}</span></span>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <!-- 删号：有勾选的已出号行时按所选行删（弹窗里可改为按 SN 起止号），没有时直接按 SN 起止号 -->
+          <el-button type="danger" plain :disabled="!!running" @click="deleteDlg?.open({ lines: deleteRows })">
+            {{ deleteRows.length ? t("generate.deleteBtnN", { n: deleteRows.length, qty: num(deleteQty) }) : t("generate.deleteMenu") }}
+          </el-button>
           <span class="push" />
           <span class="scope">
             {{ t("generate.scopeLabel") }}<b>{{ pickedRows.length ? t("generate.scopeLines", { n: pickedRows.length }) : t("generate.scopeNone") }}</b><br>
             {{ pickedRows.length ? t("generate.scopeSelHint") : t("generate.scopeNoneHint") }}
           </span>
           <span class="vsep" />
-          <SeqSource v-model="seq" :gaps="ctx.gaps" :own="ownReserved" :first="gen.preview?.generatable ? gen.preview.start_seq : null" />
+          <SeqSource v-model="seq" :gaps="ctx.gaps" :first="gen.preview?.generatable ? gen.preview.start_seq : null" />
           <el-button type="primary" :loading="gen.loading" :disabled="!canGen" @click="genDlg = true">
             {{ t("generate.genBtn", { n: num(gen.preview?.generatable ? gen.preview.qty : 0) }) }}
           </el-button>
@@ -310,7 +300,7 @@
       </template>
     </el-drawer>
 
-    <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="ctx.rule_prefix" :prefix-locked="ctx.prefix_locked" :next-seq="ctx.counter?.next_seq" :reserve-start="ctx.counter?.reserve_start" :pi-quota="piQuota" @saved="reloadCtx" />
+    <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="ctx.rule_prefix" :prefix-locked="ctx.prefix_locked" :next-seq="ctx.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
 
     <GenConfirmDialog v-model="genDlg" :preview="gen.preview" :unlock-limit="unlockLimit"
       :loading="busy === 'run'" @confirm="runGen" />
@@ -741,11 +731,6 @@ function onAllBills(on: boolean) {
   sel.value = s;
 }
 /** 选中的物料行（勾选的单据展开），按排号顺序。 */
-/** 所选物料行自己预留里空着的号段（指定起止号时这些行放弃预留，可勾选作剩下的号的去处） */
-const ownReserved = computed<any[]>(() => {
-  const keys = new Set(pickedRows.value.map((l: any) => `${l.bill_no}#${l.seq}`));
-  return (ctx.value?.gaps?.reserved ?? []).filter((x: any) => keys.has(`${x.bill_no}#${x.seq}`));
-});
 const pickedRows = computed(() =>
   selectedLines(sel.value, linesOf)
     .map((r: LineRef) => allLines.value.find((l) => sameLine(l, r)))
@@ -1029,11 +1014,6 @@ const deleteQty = computed(() => deleteRows.value.reduce((a, l) => a + l.generat
 /** 已选物料行涉及的单据数（底部已选信息）。 */
 const pickedBills = computed(() => new Set(pickedRows.value.map((l) => l.bill_no)).size);
 
-/** 底部「更多」菜单。 */
-function onMore(cmd: string) {
-  if (cmd === "config") revokeConfig(configRows.value);
-  else if (cmd === "delete") deleteDlg.value?.open({ lines: deleteRows.value });
-}
 const deleteDlg = ref<InstanceType<typeof DeleteDialog> | null>(null);
 
 function openDelete(rows: LineRef[]) {
@@ -1045,29 +1025,25 @@ async function afterDelete() {
   await reloadCtx();
 }
 
-// ---------------- 撤销配置（待处理、可生成页签）：还没有号的物料行，物料行选定的规则、手填的附件项次、米数和产品单位恢复为未配置
+// ---------------- 恢复默认值（底部已选信息里，原「清空」的位置）：所选还没有号的物料行，手填的附件项次、米数、产品单位删掉，
+// 改回金蝶值（金蝶为空的回到待填写）；规则登记在 PI 上，不在这里改（要换用「选规则」）。完成后保留勾选
 
-/** 物料行在本系统做过配置：物料行选定了规则，或手填了附件项次 / 米数 / 产品单位。 */
-const hasConfig = (l: OrderLine) =>
-  l.rule?.source === "LINE" || l.attach_manual != null || l.length_manual != null || l.unit_manual != null;
-/** 底部批量撤销配置的对象：待处理 / 可生成页签中所选、还没有号、做过配置的物料行。 */
-const configRows = computed(() => {
-  const f = lineFilter.value;
-  return f === "GENERATED" ? [] : pickedRows.value.filter((l) => FILTER_OK[f](l) && !l.edit_lock && hasConfig(l));
-});
+/** 物料行手填过附件项次 / 米数 / 产品单位（与金蝶值不同的页面填写）。 */
+const hasManual = (l: OrderLine) => l.attach_manual != null || l.length_manual != null || l.unit_manual != null;
+/** 恢复默认值的对象：所选、未失效、还没有号、手填过的物料行（不分页签）。 */
+const defaultRows = computed(() => pickedRows.value.filter((l) => !l.void && !l.edit_lock && hasManual(l)));
 
-async function revokeConfig(rows: OrderLine[]) {
+async function restoreDefault(rows: OrderLine[]) {
   if (!ctx.value || !rows.length) return;
   try {
-    await ElMessageBox.confirm(t("generate.revokeConfigConfirm", { n: rows.length }), t("generate.revokeConfigTitle"), { type: "warning" });
+    await ElMessageBox.confirm(t("generate.restoreDefaultConfirm", { n: rows.length }), t("generate.restoreDefault"), { type: "warning" });
   } catch {
     return;
   }
-  busy.value = "config";
+  busy.value = "default";
   try {
     const r: any = await api.revokeConfig(ctx.value.pi_no, rows.map((l) => ({ bill_no: l.bill_no, seq: l.seq })));
-    ElMessage.success(t("generate.revokeConfigDone", { n: r.revoked }));
-    clearSelection();
+    ElMessage.success(t("generate.restoreDefaultDone", { n: r.revoked }));
     await reloadCtx();
   } finally {
     busy.value = "";
@@ -1176,7 +1152,4 @@ onUnmounted(() => {
 .gen-drawer .el-drawer__header { margin-bottom: 8px; align-items: flex-start; }
 .gen-drawer .el-drawer__footer { border-top: 1px solid var(--el-border-color); background: var(--el-fill-color-lighter); padding: 10px 20px; }
 /* 底部「更多」菜单：菜单项后写出作用的行数 / 枚数；删号为红色 */
-.more-menu .mi { display: flex; align-items: center; gap: 16px; min-width: 240px; }
-.more-menu .mi .k { margin-left: auto; font-size: 12px; color: var(--app-muted); }
-.more-menu .danger:not(.is-disabled) { color: var(--el-color-danger); }
 </style>

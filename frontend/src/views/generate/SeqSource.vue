@@ -1,5 +1,5 @@
 <template>
-  <!-- 流水来源：底部一个按钮（显示当前来源，有空闲号段时带角标），点开弹层：按预留号段（默认，没有预留的接在最大号之后）/ 指定起止号；
+  <!-- 流水来源：底部一个按钮（显示当前来源，有空闲号段时带角标），点开弹层：从前缀最大号之后（默认）/ 指定起止号；
        指定起止号时可选范围不够时剩下的号接在最大号之后（默认）还是用勾选的空号段；
        下面列出空闲号段（来源单据、起止流水、枚数），「用这段」填入起止号，指定起止号且选了「用勾选的空号段」时可勾选 -->
   <el-popover v-model:visible="open" placement="top-end" :width="460" trigger="click" popper-class="seq-pop">
@@ -39,11 +39,7 @@
             </template>
           </el-table-column>
           <el-table-column :label="t('generate.srcBill')" min-width="110">
-            <template #default="{ row }">
-              {{ row.bill_no || "—" }}
-              <!-- 所选物料行自己的预留（指定起止号时放弃预留、退回成空号段，可勾选用） -->
-              <el-tag v-if="row.own" size="small" type="info">{{ t("generate.ownReserved", { seq: row.seq }) }}</el-tag>
-            </template>
+            <template #default="{ row }">{{ row.bill_no || "—" }}</template>
           </el-table-column>
           <el-table-column :label="t('generate.seqStart')" prop="start_seq" align="right" />
           <el-table-column :label="t('generate.seqEnd')" prop="end_seq" align="right" />
@@ -52,7 +48,7 @@
           </el-table-column>
           <el-table-column width="64" align="right">
             <template #default="{ row }">
-              <el-button v-if="!row.own" link type="primary" size="small" @click="use(row)">{{ t("generate.gapUse") }}</el-button>
+              <el-button link type="primary" size="small" @click="use(row)">{{ t("generate.gapUse") }}</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -74,7 +70,7 @@ import { num } from "./format";
 
 export type SeqValue = { mode: "MAX" | "RANGE"; start: number | null; end: number | null; gaps?: [number, number][] };
 
-const props = defineProps<{ modelValue: SeqValue; gaps: any; first?: number | null; own?: any[] }>();
+const props = defineProps<{ modelValue: SeqValue; gaps: any; first?: number | null }>();
 const emit = defineEmits<{ "update:modelValue": [v: SeqValue] }>();
 const { t } = useI18n();
 const open = ref(false);
@@ -82,12 +78,8 @@ const open = ref(false);
 const restGaps = ref(false);
 watch(() => props.modelValue.mode, (m) => { if (m !== "RANGE") restGaps.value = false; });
 
-/** 空闲号段；指定起止号、剩下的号用勾选的空号段时，另列所选物料行自己预留里空着的号段（own，生成时退回成空号段） */
-const rows = computed<any[]>(() => {
-  const free = props.gaps?.segments ?? [];
-  if (props.modelValue.mode !== "RANGE" || !restGaps.value || !props.own?.length) return free;
-  return [...free, ...props.own.map((x: any) => ({ ...x, own: true }))].sort((x, y) => x.start_seq - y.start_seq);
-});
+/** 空闲号段（同前缀删号腾出、起始号跳过的流水） */
+const rows = computed<any[]>(() => props.gaps?.segments ?? []);
 const nextSeq = computed(() => (props.modelValue.mode === "MAX" && props.first) || props.gaps?.next_seq || 1);
 const label = computed(() => {
   const v = props.modelValue;

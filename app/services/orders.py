@@ -729,7 +729,7 @@ _LINE_CONFIG = (
 
 
 def revoke_config(cu: CurrentUser, pi_in: str | None, lines_in: list[dict] | None) -> dict:
-    """撤销物料行配置（生成页待处理、可生成页签底部「撤销」，可多行）：所选物料行中还没有号的，
+    """恢复默认值（生成页底部已选信息里的「恢复默认值」，原「撤销配置」，可多行，不分页签）：所选物料行中还没有号的，
     手填的附件项次、手填的米数、手填的产品单位一并删除，恢复为未配置（取金蝶值，金蝶为空时待填写）。
     规则登记在 PI 上（一个 PI 一个规则前缀），不在这里撤销。
     有号的行不动（有号的行先删号）。一个事务内完成。返回撤销了配置的行数与因有号跳过的行数。"""
@@ -748,7 +748,7 @@ def revoke_config(cu: CurrentUser, pi_in: str | None, lines_in: list[dict] | Non
         if len(rows) != len(keys):
             raise biz(ErrorCode.GEN_SCOPE_INVALID)
         cu.check_write(*{r["org_code"] for r in rows})
-        # 失效的物料行（line_void）不能撤销配置
+        # 失效的物料行（line_void）不能恢复默认值
         vrule = line_void.current()
         bad = sorted((r["bill_no"], r["seq"]) for r in rows if vrule.is_void(r))
         if bad:

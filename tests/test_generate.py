@@ -709,7 +709,7 @@ def test_attach_and_length_locked_once_line_has_sns(w, api, sql):
 
 
 def test_revoke_config_resets_lines_without_sns(w, api, sql):
-    """待处理页签撤销配置：没有号的物料行，手填的附件项次、米数和产品单位恢复为未配置（规则登记在 PI 上，不撤）；
+    """恢复默认值（原撤销配置）：没有号的物料行，手填的附件项次、米数和产品单位恢复为未配置（规则登记在 PI 上，不撤）；
     有号的行跳过。"""
     org, pi, bill = mk(w, ("M1", 2, "", ""), ("M2", 2, "", "", "条"), ("M3", 2, "", ""))
     ok(w.bind_pi(pi, w.rule(P())))

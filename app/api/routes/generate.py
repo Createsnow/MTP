@@ -126,9 +126,8 @@ def gen_deleted(cu: OperatorDep, pi: str | None = None) -> list:
 
 @router.post(
     "/revoke-config",
-    summary="撤销物料行配置（待处理、可生成页签）：所选物料行中还没有号的，物料行选定的规则、手填的附件项次、米数、产品单位"
-    "恢复为未配置；"
-    "有号的行跳过（有号的行先删号）",
+    summary="恢复默认值（生成页底部已选信息里）：所选物料行中还没有号的，手填的附件项次、米数、产品单位删掉，改回金蝶值；"
+    "规则登记在 PI 上，不在这里改；有号的行跳过（有号的行先删号）",
 )
 def gen_revoke_config(body: RevokeConfigIn, cu: OperatorDep) -> dict:
     return orders.revoke_config(cu, body.pi_no, [x.model_dump() for x in body.lines or []])
@@ -142,7 +141,7 @@ def gen_void_rule(cu: OperatorDep) -> dict:
 @router.put(
     "/void-rule",
     summary="改生成页过滤配置（全系统生效）：业务状态、领料状态都可为空（空的一项不限，两项都空 = 不过滤），"
-    "命中的物料行整行失效，不参与排号与计数，不能选规则、填写、撤销配置，不能作转移、导入目标；已有的号照常处理",
+    "命中的物料行整行失效，不参与排号与计数，不能选规则、填写、恢复默认值，不能作转移、导入目标；已有的号照常处理",
 )
 def gen_void_rule_save(body: VoidRuleIn, cu: OperatorDep) -> dict:
     return line_void.save(cu, body.enabled, body.biz_status, body.pick_status)

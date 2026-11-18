@@ -170,16 +170,12 @@
                     {{ t("generate.rule.seqTooShort", { need, max: maxSeq(p), len: p.len, base: p.base }) }}
                   </span>
                   <!-- 起始号（十进制流水）：下限 startMin ～ 最大流水，默认为下限；等于下限时按未指定保存（start = null，请求体与原来相同）。
-                       本 PI 已有号段预留时下限为预留起号（按预留号段生成），改大则所选物料行按预留号段整体平移，原预留留作空号段；
-                       还没有预留时：新前缀下限为 1，本 PI 已用这个前缀时为接续的下一个号 -->
+                       新前缀下限为 1，本 PI 已用这个前缀时为接续的下一个号（前缀最大号 + 1） -->
                   <span class="fi">
                     {{ t("generate.rule.seqStart") }}
                     <el-input-number :model-value="p.start ?? startMin" :min="startMin" :max="maxSeq(p)" value-on-clear="min" :step="1"
                       step-strictly size="small" class="w140"
                       @update:model-value="(v: any) => (p.start = Number(v) > startMin ? Number(v) : null)" />
-                    <el-tooltip v-if="reserveStart" placement="top" :content="t('generate.rule.seqStartContinue', { next: startMin })">
-                      <el-icon class="tip"><QuestionFilled /></el-icon>
-                    </el-tooltip>
                   </span>
                 </template>
                 <template v-else-if="p.kind === 'LEN'">
@@ -205,7 +201,7 @@
       </div>
     </div>
 
-    <!-- 底部：左「恢复默认」（自定义页签），右取消、确定；不提供「改回按 PI / 客户默认」（要撤回物料行选定的规则，用详情底部「更多 → 撤销配置」） -->
+    <!-- 底部：左「恢复默认」（自定义页签），右取消、确定；不提供「改回按 PI / 客户默认」（规则登记在 PI 上，要换规则重新选） -->
     <template #footer>
       <div class="foot">
         <span><el-button v-if="mode === 'CUSTOM'" link type="primary" @click="resetParts">{{ t("generate.rule.resetParts") }}</el-button></span>
@@ -222,7 +218,7 @@
 import { computed, h, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Bottom, Delete, QuestionFilled, Top } from "@element-plus/icons-vue";
+import { Bottom, Delete, Top } from "@element-plus/icons-vue";
 import { api } from "@/api";
 import { ApiError } from "@/api/http";
 import { BASES, CHARSETS } from "@/constants";
@@ -253,8 +249,6 @@ type SecKey = "PRE" | "SEQ" | "SUF";
  *  piQuota：本 PI 全部物料行还可生成的数量之和（各行订单数量 − 本单已生成），按它定流水位数的默认值 */
 const props = defineProps<{
   modelValue: boolean; pi: string; lines: OrderLine[]; options: any[]; rulePrefix?: RulePrefix; nextSeq?: number; piQuota?: number;
-  /** 本 PI 号段预留的预留起号（还没有预留为 null）：起始号的默认值 */
-  reserveStart?: number | null;
   prefixLocked?: Record<string, CustomRule>;
 }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void; (e: "saved"): void }>();
@@ -444,10 +438,8 @@ const lockTitle = computed(() =>
 const prefixUsed = computed(() => !!props.rulePrefix?.custom && built.value.spec.prefix === props.rulePrefix.prefix);
 /** 前缀已登记（本 PI 登记的前缀）：自动突破按前缀统一设置，在规则库改 */
 const growLocked = computed(() => !!props.rulePrefix?.registered && built.value.spec.prefix === props.rulePrefix.prefix);
-/** 本 PI 号段预留的预留起号（有预留时起始号默认为它，按预留号段生成；改大即平移） */
-const reserveStart = computed(() => (Number(props.reserveStart) > 0 ? Number(props.reserveStart) : 0));
-/** 起始号下限：有预留时为预留起号；没有时已用前缀为接续的下一个号，否则为 1 */
-const startMin = computed(() => reserveStart.value || (prefixUsed.value ? Math.max(Number(props.nextSeq) || 1, 1) : 1));
+/** 起始号下限：已用前缀为接续的下一个号，否则为 1 */
+const startMin = computed(() => (prefixUsed.value ? Math.max(Number(props.nextSeq) || 1, 1) : 1));
 /** 提交用的起始号：大于下限才提交（等于下限即接续 / 从 1 起，按未指定，请求体与原来相同） */
 const seqStart = () => {
   const s = built.value.spec.seq_start;
