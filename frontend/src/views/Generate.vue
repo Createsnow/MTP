@@ -226,17 +226,15 @@
             </el-table-column>
             <el-table-column :label="t('common.status')" :min-width="lineW.status">
               <template #default="{ row }">
-                <div v-if="row.quota && row.issues?.length" class="issue-tags">
-                  <!-- 缺附件项次 / 米数 / 产品单位合成一个「待填写」（输入框标红「必填」）；
-                       项次拦截：悬停列出挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行），由用户自己去处理 -->
-                  <el-tooltip v-for="i in shownIssues(row)" :key="i" placement="top" :disabled="i !== 'ATTACH_ORDER_BLOCKED' || !row.blockers?.length">
-                    <template #content>
-                      <div>{{ t("generate.blockerTitle") }}</div>
-                      <div v-for="b in row.blockers" :key="`${b.bill_no}#${b.seq}`">{{ blockerText(b) }}</div>
-                    </template>
-                    <el-tag size="small" type="danger" effect="plain">{{ issueText(i) }}</el-tag>
-                  </el-tooltip>
-                </div>
+                <!-- 只显示一个状态，按先后取第一个满足的：待填写 → 需先选规则 → 其他拦截原因 → 可生成 → 已生成 → 已分配（见 stateIssue）；
+                     项次拦截：悬停列出挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行），由用户自己去处理 -->
+                <el-tooltip v-if="stateIssue(row)" placement="top" :disabled="stateIssue(row) !== 'ATTACH_ORDER_BLOCKED' || !row.blockers?.length">
+                  <template #content>
+                    <div>{{ t("generate.blockerTitle") }}</div>
+                    <div v-for="b in row.blockers" :key="`${b.bill_no}#${b.seq}`">{{ blockerText(b) }}</div>
+                  </template>
+                  <el-tag size="small" type="danger" effect="plain">{{ issueText(stateIssue(row)!) }}</el-tag>
+                </el-tooltip>
                 <el-tag v-else size="small" :type="LINE_STATE_TAG[lineState(row)]" disable-transitions>{{ t(`generate.lineState.${lineState(row)}`) }}</el-tag>
               </template>
             </el-table-column>
@@ -389,10 +387,19 @@ const { nameOf } = useFactories();
 const store = useAuthStore();
 const { fmt: fmtTime } = useTime();
 const issueText = (c: string) => t(`generate.issue.${c}`);
-/** 缺附件项次、米数、产品单位（页面填写即可）：状态列合成一个「待填写」（FILL） */
-const FILL_ISSUES = new Set(["ATTACH_EMPTY", "LENGTH_EMPTY", "UNIT_EMPTY"]);
-/** 状态列显示的原因：待填写的几项合成一个 FILL，放在第一个待填写原因的位置，其余原因照列 */
-const shownIssues = (l: OrderLine): string[] => [...new Set((l.issues || []).map((i) => (FILL_ISSUES.has(i) ? "FILL" : i)))];
+/** 重新填写即可（缺附件项次、米数、产品单位，附件项次不是数字）：状态「待填写」（FILL） */
+const FILL_ISSUES = ["ATTACH_EMPTY", "LENGTH_EMPTY", "UNIT_EMPTY", "ATTACH_NOT_NUMERIC"];
+/** 重新选规则即可（没有规则、规则须换前缀、与本 PI 已用前缀不同）：状态「需先选规则」（NO_RULE） */
+const RULE_ISSUES = ["NO_RULE", "RULE_PREFIX", "RULE_PI_PREFIX"];
+/** 状态列的不能生成原因（只显示一个，按先后取第一个）：待填写 → 需先选规则 → 其他拦截原因（靠前项次未生成完、PI 变更冻结、
+ *  失去对应等，按后端给的先后）；没有额度或没有原因时为 null（按 lineState 显示可生成 / 已生成 / 已分配 / 无额度 / 失效）。 */
+function stateIssue(l: OrderLine): string | null {
+  const is = l.quota && !l.void ? l.issues || [] : [];
+  if (!is.length) return null;
+  if (is.some((i) => FILL_ISSUES.includes(i))) return "FILL";
+  if (is.some((i) => RULE_ISSUES.includes(i))) return "NO_RULE";
+  return is[0];
+}
 /** 挡路的物料行：PI、单据、行号、附件项次、原因 */
 const blockerText = (b: any) =>
   t("generate.blocker", { pi: b.pi_no, bill: b.bill_no, seq: b.seq, attach: b.attach || "—", reason: t(`generate.blockerReason.${b.reason}`) });
@@ -874,11 +881,11 @@ const lineW = computed(() => {
     generated: colWidth(t("generate.generated"), nums((l) => l.generated_qty)),
     allocated: colWidth(t("generate.allocated"), nums((l) => l.allocated_qty)),
     quota: colWidth(t("generate.quota"), nums((l) => l.quota)),
-    // 多个原因标签时上下排列（每个标签完整显示），列宽按最宽的一个
-    status: colWidth(t("common.status"), ls.map((l) =>
-      l.quota && l.issues?.length
-        ? Math.max(...shownIssues(l).map((i) => tagWidth(issueText(i))))
-        : tagWidth(t(`generate.lineState.${lineState(l)}`)))),
+    // 每行只显示一个状态标签
+    status: colWidth(t("common.status"), ls.map((l) => {
+      const i = stateIssue(l);
+      return tagWidth(i ? issueText(i) : t(`generate.lineState.${lineState(l)}`));
+    })),
     k3Status: colWidth(t("generate.void.column"), ls.map((l) => textWidth(k3StatusText(l)))),
     sn: Math.max(
       colWidth(t("generate.startSn"), ls.map((l) => textWidth(l.start_sn || "—", { mono: true }))),
@@ -1103,7 +1110,7 @@ onUnmounted(() => {
 /* 失效的物料行整行置灰（状态列为「失效」，不能勾选） */
 .lines :deep(tr.void td.el-table__cell) { background: var(--el-fill-color-light); color: var(--el-text-color-placeholder); }
 .toolbar { margin-bottom: 8px; }
-.issue-tags, .ops { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ops { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ops { justify-content: flex-end; gap: 2px 6px; }
 .ops :deep(.el-button + .el-button) { margin-left: 0; }
 .cell-input { display: block; }
