@@ -643,7 +643,7 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
             _check(line, reg, taken)
             out[pi].append(line)
         if reg is not None:
-            # 带自增数值的号段归本 PI 独占：项次只与本 PI 的物料行比（别的 PI 预显示了同一个值也不互相挡）
+            # 带识别码的号段归本 PI 独占：项次只与本 PI 的物料行比（别的 PI 预显示了同一个值也不互相挡）
             only = pi if res is not None and res.inc is not None else None
             _check_order(reg["prefix"], out[pi], set(keys), taken, only)
     return out
@@ -683,7 +683,7 @@ def _check(line: Line, reg: dict | None, taken: dict) -> None:
 
 def _prefix_ok(line: Line, memo: dict | None) -> bool:
     """前缀能否给本 PI 用（同一次判断里同一前缀、格式只查一次）；规则库版本首次归属时不算它自己。
-    带自增数值的规则按自增前缀判断（rules.inc_usable：防重只看前缀层、本 PI 的值没被别的 PI 先占）。"""
+    带识别码的规则按自增前缀判断（rules.inc_usable：防重只看前缀层、本 PI 的值没被别的 PI 先占）。"""
     if line.res.inc is not None:
         return rules.inc_usable(line.res, line.pi)
     spec = line.res.spec()
@@ -871,7 +871,7 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
             "issues": x.issues,
             # 自定义前缀被占用时给出前缀，确认生成时按前缀冲突提示
             "prefix": x.res.version["prefix"] if "RULE_PREFIX" in x.issues and x.res.ready else None,
-            # 带自增数值：取不到值 / 预显示的值被别的 PI 先占（确认生成时按自增前缀提示原因）
+            # 带识别码：取不到值 / 预显示的值被别的 PI 先占（确认生成时按自增前缀提示原因）
             "inc": x.res is not None
             and x.res.inc is not None
             and ("RULE_PREFIX" in x.issues or "RULE_PI_PREFIX" in x.issues),

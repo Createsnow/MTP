@@ -527,7 +527,7 @@
       "CLAIM": "Will be claimed by this PI",
       "NEW": "New version",
       "SHARE": "Shared prefix",
-      "INC": "Auto-increment",
+      "INC": "ID code",
       "PREFIX": "New prefix needed"
     },
     "rule": {
@@ -548,7 +548,7 @@
         "FIX": "Fixed on save",
         "SEQ": "Serial",
         "LINE": "Taken from the line",
-        "INC": "Auto-increment"
+        "INC": "ID code"
       },
       "sec": {
         "PRE": "Prefix",
@@ -610,7 +610,7 @@
         "SEQ": "Serial",
         "LEN": "Length",
         "UNIT": "Unit",
-        "INC": "Auto-increment"
+        "INC": "ID code"
       },
       "cut": {
         "ALL": "All",
@@ -629,8 +629,8 @@
         "NO_SEQ": "Add one serial",
         "PREFIX_EMPTY": "The prefix cannot be empty",
         "AFTER_SEQ": "Length and unit can only be in the suffix",
-        "INC_AFTER_SEQ": "Auto-increment can only be before the serial (after the prefix)",
-        "INC_RANGE": "Auto-increment accepts digits only: start and end are 0–{max}, start cannot exceed end",
+        "INC_AFTER_SEQ": "ID code can only be before the serial (after the prefix)",
+        "INC_RANGE": "ID code accepts digits only: start and end are 0–{max}, start cannot exceed end",
         "UNIT_AFTER_LEN": "Unit must come after length",
         "UNIT_GAP": "Without length, the unit must directly follow the serial",
         "DUPLICATE": "Serial, length and unit can each appear only once",
@@ -1140,7 +1140,7 @@
     "topSeq": "Max serial",
     "seqGrow": "Auto-extend when full",
     "seqGrowTip": "Set per prefix for all PIs using it; cannot be turned off once serials exceed the rule length",
-    "incTag": "Auto-increment {start}~{end} · customer {customer}",
+    "incTag": "ID code {start}~{end} · customer {customer}",
     "incSegment": "Segment prefix",
     "status": "Status",
     "unused": "Unused",

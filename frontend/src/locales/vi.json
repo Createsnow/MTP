@@ -527,7 +527,7 @@
       "CLAIM": "Sẽ thuộc PI này",
       "NEW": "Phiên bản mới",
       "SHARE": "Dùng chung tiền tố",
-      "INC": "Tự tăng",
+      "INC": "Mã nhận dạng",
       "PREFIX": "Cần tiền tố mới"
     },
     "rule": {
@@ -548,7 +548,7 @@
         "FIX": "Cố định khi lưu",
         "SEQ": "Tuần tự",
         "LINE": "Lấy theo dòng vật tư",
-        "INC": "Số tự tăng"
+        "INC": "Mã nhận dạng"
       },
       "sec": {
         "PRE": "Tiền tố",
@@ -610,7 +610,7 @@
         "SEQ": "Tuần tự",
         "LEN": "Chiều dài",
         "UNIT": "Đơn vị",
-        "INC": "Số tự tăng"
+        "INC": "Mã nhận dạng"
       },
       "cut": {
         "ALL": "Toàn bộ",
@@ -629,8 +629,8 @@
         "NO_SEQ": "Cần có một tuần tự",
         "PREFIX_EMPTY": "Tiền tố không được để trống",
         "AFTER_SEQ": "Chiều dài và đơn vị chỉ được nằm ở hậu tố",
-        "INC_AFTER_SEQ": "Số tự tăng chỉ được đặt trước tuần tự (sau tiền tố)",
-        "INC_RANGE": "Số tự tăng chỉ nhận chữ số: giá trị đầu, cuối từ 0–{max}, giá trị đầu không lớn hơn giá trị cuối",
+        "INC_AFTER_SEQ": "Mã nhận dạng chỉ được đặt trước tuần tự (sau tiền tố)",
+        "INC_RANGE": "Mã nhận dạng chỉ nhận chữ số: giá trị đầu, cuối từ 0–{max}, giá trị đầu không lớn hơn giá trị cuối",
         "UNIT_AFTER_LEN": "Đơn vị phải nằm sau chiều dài",
         "UNIT_GAP": "Khi không có chiều dài, đơn vị phải nằm ngay sau tuần tự",
         "DUPLICATE": "Tuần tự, chiều dài và đơn vị mỗi loại chỉ có một",
@@ -1140,7 +1140,7 @@
     "topSeq": "Số lớn nhất",
     "seqGrow": "Tự tăng chữ số khi hết",
     "seqGrowTip": "Thiết lập theo tiền tố cho mọi PI dùng nó; không thể tắt khi dãy số đã vượt số chữ số",
-    "incTag": "Tự tăng {start}~{end} · khách hàng {customer}",
+    "incTag": "Mã nhận dạng {start}~{end} · khách hàng {customer}",
     "incSegment": "Tiền tố dãy số",
     "status": "Trạng thái",
     "unused": "Chưa dùng",

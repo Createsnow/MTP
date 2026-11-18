@@ -1,4 +1,4 @@
-"""自增数值（中间件）：SN = 前缀 + 自增数值 + 流水 + …。前缀防重只看前缀层；前缀 + 自增值为一张 PI 独占的号段，
+"""识别码（中间件）：SN = 前缀 + 识别码 + 流水 + …。前缀防重只看前缀层；前缀 + 自增值为一张 PI 独占的号段，
 流水从 1 开始。同一客户编码下的 PI 依次取已用最大值 + 1（选规则只预显示，生成成功才占用），超出范围须改前缀；
 前缀锁定第一次生成的 PI 的客户；号全删掉、改选后值仍归本 PI；同一客户的新 PI 默认带出最近一次用的自增规则。"""
 
@@ -171,7 +171,7 @@ def test_inc_prefix_dedup_by_head_only(w, api, sql):
     _, p1, b1 = mk(w, ("M1", 2), org=org, customer=cust)
     ok(w.select(p1, [(b1, 1)], custom=inc(head, tail="-")))
     w.generate(p1)
-    assert sns(sql, p1)[0] == f"{head}0-0001", "自增数值与流水之间可放固定字符"
+    assert sns(sql, p1)[0] == f"{head}0-0001", "识别码与流水之间可放固定字符"
     for pre in (head, head + "1", head + "0-", head[:-1]):
         body = m(rule_code=uid("R"), rule_name="x", prefix=pre, base=10, seq_len=4)
         assert api.post("/api/rules", body, w.admin).code == "RULE_PREFIX_OVERLAP", pre
@@ -186,7 +186,7 @@ def test_inc_prefix_dedup_by_head_only(w, api, sql):
 
 
 def test_inc_rule_library_readonly_and_mes_fields(w, api, sql):
-    """规则库里带自增数值的规则只能改名称；规则库按前缀层归档，列出各 PI 的号段；推给 MES 的报文字段不变
+    """规则库里带识别码的规则只能改名称；规则库按前缀层归档，列出各 PI 的号段；推给 MES 的报文字段不变
     （serial 为纯流水，sn 为完整 SN）。"""
     org = w.org(uid("O")[:10])
     w.enable_mes(org, batch_size=50)

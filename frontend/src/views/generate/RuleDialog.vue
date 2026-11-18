@@ -27,7 +27,7 @@
           <span class="tags">
             <el-tag v-if="o.recommended" size="small" type="success">{{ t("generate.rule.recommended") }}</el-tag>
             <el-tag v-if="o.plan" size="small" :type="o.plan === 'PREFIX' ? 'warning' : 'info'">{{ t(`generate.plan.${o.plan}`) }}</el-tag>
-            <!-- 自增数值：本 PI 将用的号段前缀（只预显示）；取不到值时（已用完须改前缀等）标红 -->
+            <!-- 识别码：本 PI 将用的号段前缀（只预显示）；取不到值时（已用完须改前缀等）标红 -->
             <el-tag v-if="o.inc_error" size="small" type="danger">{{ incErrorText(o.inc_error) }}</el-tag>
             <el-tag v-else-if="o.inc?.prefix" size="small" type="success" class="sn-mono">{{ t("generate.rule.incWill", { prefix: o.inc.prefix }) }}</el-tag>
           </span>
@@ -36,7 +36,7 @@
       </div>
       <!-- 共用前缀（SHARE）时新前缀选填：不填共用该前缀，填了为本 PI 换前缀另出版本 -->
       <div v-if="picked?.inc_error" class="err mt">{{ incErrorText(picked.inc_error) }}</div>
-      <!-- 带自增数值的规则不在这里换前缀（在「自定义」里改前缀） -->
+      <!-- 带识别码的规则不在这里换前缀（在「自定义」里改前缀） -->
       <el-form v-if="!picked?.inc && (picked?.plan === 'PREFIX' || picked?.plan === 'SHARE')" label-width="120px" class="mt" @submit.prevent>
         <el-form-item :label="t('generate.rule.newPrefix')" :required="picked.plan === 'PREFIX'">
           <el-input v-model="newPrefix" maxlength="32" class="w200"
@@ -188,7 +188,7 @@
                   </span>
                 </template>
                 <template v-else-if="p.kind === 'INC'">
-                  <!-- 自增数值：只能填数字，范围 0–999；位数为结束值的位数，不足补 0。值由后台按客户编码下的 PI 依次取（只预显示） -->
+                  <!-- 识别码：只能填数字，范围 0–999；位数为结束值的位数，不足补 0。值由后台按客户编码下的 PI 依次取（只预显示） -->
                   <span class="fi">
                     {{ t("generate.rule.incRange") }}
                     <el-input-number v-model="p.start" :min="0" :max="INC_MAX" :step="1" step-strictly size="small" class="w100" />
@@ -259,7 +259,7 @@ type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
   base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number;
 };
-/** 自增数值的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因 */
+/** 识别码的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因 */
 type IncPreview = { text?: string | null; prefix?: string | null; error?: { code: string; message: string; params?: Record<string, unknown> } | null };
 type Seg = { text: string; cls: string };
 type Sample = { sn: string; segs: Seg[] | null };
@@ -301,12 +301,12 @@ const sample = reactive<{ min: Sample | null; max: Sample | null; brk: Sample | 
   min: null, max: null, brk: null, error: "",
 });
 const busy = ref("");
-/** 自增数值的预显示（随示例号一起从后台取） */
+/** 识别码的预显示（随示例号一起从后台取） */
 const incPreview = ref<IncPreview | null>(null);
-/** 自增数值取不到值的原因（已用完须改前缀、前缀已锁定别的客户等），按当前语言 */
+/** 识别码取不到值的原因（已用完须改前缀、前缀已锁定别的客户等），按当前语言 */
 const incErrorText = (e: IncPreview["error"]) => (e ? translateApiError({ code: e.code, params: e.params ?? {} }, e.message) : "");
 
-/** 组件取值用的上下文：PI、点选的第一个单据编号（lines 按点选顺序，行内按钮为本行）；自增数值取后台预显示的值 */
+/** 组件取值用的上下文：PI、点选的第一个单据编号（lines 按点选顺序，行内按钮为本行）；识别码取后台预显示的值 */
 const partCtx = computed(() => ({
   pi: props.pi,
   billNo: props.lines[0]?.bill_no ?? "",
@@ -570,7 +570,7 @@ async function previewCustom() {
     const r = await api.previewRule({
       // 示例从实际的第一个号起：填了起始号按它，已用前缀没填按接续的下一个号
       ...spec, seq_start: seqStart() ?? (startMin.value > 1 ? startMin.value : undefined), length: l?.length || undefined, unit: l?.unit || undefined,
-      // 带自增数值：按本 PI 将取的值出示例（后台按客户编码下的 PI 取，只预显示）
+      // 带识别码：按本 PI 将取的值出示例（后台按客户编码下的 PI 取，只预显示）
       ...(spec.inc_end != null ? { pi_no: props.pi } : {}),
     });
     incPreview.value = r.inc ?? null;
