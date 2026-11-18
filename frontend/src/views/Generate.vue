@@ -265,7 +265,7 @@
         <p v-if="!shownBills.length" class="muted no-lines">{{ t("common.empty") }}</p>
       </div>
 
-      <!-- 底部操作栏（三个页签相同）：左侧对勾选的行操作 —— 已选信息（恢复默认值：所选还没号的行手填的附件项次、米数、
+      <!-- 底部操作栏（三个页签相同；按钮名称固定，不带行数、枚数）：左侧对勾选的行操作 —— 已选信息（恢复默认值：所选还没号的行手填的附件项次、米数、
            产品单位改回金蝶值，没有可恢复的行时置灰；取消勾选用「全选」框或逐个取消）、选规则、删号（有勾选的已出号行时按所选行删，
            没有时按 SN 起止号）；右侧生成 —— 生成范围、
            流水来源（弹层：从最大号之后 / 指定起止号、空闲号段）、生成 N 枚（唯一主按钮） -->
@@ -275,7 +275,7 @@
             <template v-if="pickedRows.length">
               {{ t("generate.selInfo", { bills: pickedBills, lines: pickedRows.length }) }}
               <el-button link type="primary" :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">
-                {{ defaultRows.length ? t("generate.restoreDefaultN", { n: defaultRows.length }) : t("generate.restoreDefault") }}
+                {{ t("generate.restoreDefault") }}
               </el-button>
             </template>
             <template v-else>{{ t("generate.selNone") }}</template>
@@ -284,7 +284,7 @@
           <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
           <!-- 删号：有勾选的已出号行时按所选行删（弹窗里可改为按 SN 起止号），没有时直接按 SN 起止号 -->
           <el-button type="danger" plain :disabled="!!running" @click="deleteDlg?.open({ lines: deleteRows })">
-            {{ deleteRows.length ? t("generate.deleteBtnN", { n: deleteRows.length, qty: num(deleteQty) }) : t("generate.deleteMenu") }}
+            {{ t("generate.deleteMenu") }}
           </el-button>
           <span class="push" />
           <span class="scope">
@@ -1010,7 +1010,6 @@ async function cancelGen() {
 
 /** 底部「删号」的对象：所选物料行中挂着号的。 */
 const deleteRows = computed(() => pickedRows.value.filter((l) => l.generated_qty > 0));
-const deleteQty = computed(() => deleteRows.value.reduce((a, l) => a + l.generated_qty, 0));
 /** 已选物料行涉及的单据数（底部已选信息）。 */
 const pickedBills = computed(() => new Set(pickedRows.value.map((l) => l.bill_no)).size);
 
