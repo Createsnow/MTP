@@ -266,16 +266,16 @@
       </div>
 
       <!-- 底部操作栏（三个页签相同；按钮名称固定，不带行数、枚数）：左侧对勾选的行操作（不显示已选几单几行） —— 恢复默认值（所选还没号的行手填的附件项次、米数、
-           产品单位改回金蝶值，没有可恢复的行时置灰；取消勾选用「全选」框或逐个取消）、选规则、删号（有勾选的已出号行时按所选行删，
-           没有时按 SN 起止号）；右侧生成 —— 生成范围、
+           产品单位改回金蝶值，点了直接执行、不弹确认也不提示成功，没有可恢复的行时置灰；取消勾选用「全选」框或逐个取消）、选规则、
+           删号（所选行中有号时可点，按所选行删，弹窗里可改为按 SN 起止号；所选行都没号或未勾选时置灰）；右侧生成 —— 生成范围、
            流水来源（弹层：从最大号之后 / 指定起止号、空闲号段）、生成 N 枚（唯一主按钮） -->
       <template #footer>
         <div v-if="ctx" class="bar">
           <el-button :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">{{ t("generate.restoreDefault") }}</el-button>
           <!-- 选规则作用于整张 PI：有勾选时按所选行（起始号记在这些行上），没有勾选时按本 PI 全部有效物料行 -->
           <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
-          <!-- 删号：有勾选的已出号行时按所选行删（弹窗里可改为按 SN 起止号），没有时直接按 SN 起止号 -->
-          <el-button type="danger" plain :disabled="!!running" @click="deleteDlg?.open({ lines: deleteRows })">
+          <!-- 删号：所选行中有号时可点，按所选行删（弹窗里可改为按 SN 起止号）；所选行都没号或未勾选时置灰 -->
+          <el-button type="danger" plain :disabled="!!running || !deleteRows.length" @click="deleteDlg?.open({ lines: deleteRows })">
             {{ t("generate.deleteMenu") }}
           </el-button>
           <span class="push" />
@@ -1015,7 +1015,8 @@ async function afterDelete() {
 }
 
 // ---------------- 恢复默认值（底部第一个按钮，原「已选信息 · 清空」的位置）：所选还没有号的物料行，手填的附件项次、米数、产品单位删掉，
-// 改回金蝶值（金蝶为空的回到待填写）；规则登记在 PI 上，不在这里改（要换用「选规则」）。完成后保留勾选
+// 改回金蝶值（金蝶为空的回到待填写）；规则登记在 PI 上，不在这里改（要换用「选规则」）。点了直接执行，不弹确认、不提示成功
+// （出错照常报错），完成后保留勾选
 
 /** 物料行手填过附件项次 / 米数 / 产品单位（与金蝶值不同的页面填写）。 */
 const hasManual = (l: OrderLine) => l.attach_manual != null || l.length_manual != null || l.unit_manual != null;
@@ -1024,15 +1025,9 @@ const defaultRows = computed(() => pickedRows.value.filter((l) => !l.void && !l.
 
 async function restoreDefault(rows: OrderLine[]) {
   if (!ctx.value || !rows.length) return;
-  try {
-    await ElMessageBox.confirm(t("generate.restoreDefaultConfirm", { n: rows.length }), t("generate.restoreDefault"), { type: "warning" });
-  } catch {
-    return;
-  }
   busy.value = "default";
   try {
-    const r: any = await api.revokeConfig(ctx.value.pi_no, rows.map((l) => ({ bill_no: l.bill_no, seq: l.seq })));
-    ElMessage.success(t("generate.restoreDefaultDone", { n: r.revoked }));
+    await api.revokeConfig(ctx.value.pi_no, rows.map((l) => ({ bill_no: l.bill_no, seq: l.seq })));
     await reloadCtx();
   } finally {
     busy.value = "";

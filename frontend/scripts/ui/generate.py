@@ -221,8 +221,6 @@ M = {
 "generate.goAllocate": ("去分配", "Allocate", "Phân bổ"),
 "generate.deleteMenu": ("删号", "Delete SNs", "Xóa SN"),
 "generate.restoreDefault": ("恢复默认值", "Restore defaults", "Khôi phục mặc định"),
-"generate.restoreDefaultConfirm": ("将 {n} 个物料行手填的附件项次、米数、产品单位恢复为金蝶值（金蝶为空的回到待填写）；规则不变，要换规则用「选规则」。", "Restore the manually entered attachment item, length and unit of {n} material line(s) to the Kingdee values (lines with empty Kingdee values go back to to-fill). The rule is unchanged; use Pick rule to change it.", "Khôi phục hạng mục đính kèm, số mét và đơn vị đã nhập tay của {n} dòng vật tư về giá trị Kingdee (dòng có giá trị Kingdee trống quay về chờ nhập). Quy tắc không đổi; dùng Chọn quy tắc để đổi."),
-"generate.restoreDefaultDone": ("已恢复 {n} 个物料行的默认值", "Defaults restored for {n} line(s)", "Đã khôi phục mặc định cho {n} dòng"),
 "generate.deleteByLines": ("所选行（{n} 行）", "Selected lines ({n})", "Dòng đã chọn ({n})"),
 "generate.deleteBySn": ("按 SN 起止号", "By SN range", "Theo dải SN"),
 "generate.scopeLabel": ("生成范围：", "Scope: ", "Phạm vi: "),

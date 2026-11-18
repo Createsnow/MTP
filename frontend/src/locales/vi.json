@@ -758,8 +758,6 @@
     "goAllocate": "Phân bổ",
     "deleteMenu": "Xóa SN",
     "restoreDefault": "Khôi phục mặc định",
-    "restoreDefaultConfirm": "Khôi phục hạng mục đính kèm, số mét và đơn vị đã nhập tay của {n} dòng vật tư về giá trị Kingdee (dòng có giá trị Kingdee trống quay về chờ nhập). Quy tắc không đổi; dùng Chọn quy tắc để đổi.",
-    "restoreDefaultDone": "Đã khôi phục mặc định cho {n} dòng",
     "deleteByLines": "Dòng đã chọn ({n})",
     "deleteBySn": "Theo dải SN",
     "scopeLabel": "Phạm vi: ",

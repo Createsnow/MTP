@@ -758,8 +758,6 @@
     "goAllocate": "去分配",
     "deleteMenu": "删号",
     "restoreDefault": "恢复默认值",
-    "restoreDefaultConfirm": "将 {n} 个物料行手填的附件项次、米数、产品单位恢复为金蝶值（金蝶为空的回到待填写）；规则不变，要换规则用「选规则」。",
-    "restoreDefaultDone": "已恢复 {n} 个物料行的默认值",
     "deleteByLines": "所选行（{n} 行）",
     "deleteBySn": "按 SN 起止号",
     "scopeLabel": "生成范围：",
