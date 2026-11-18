@@ -762,8 +762,6 @@
     "restoreDefaultDone": "Defaults restored for {n} line(s)",
     "deleteByLines": "Selected lines ({n})",
     "deleteBySn": "By SN range",
-    "selNone": "Nothing selected",
-    "selInfo": "{bills} bill(s) · {lines} line(s) selected",
     "scopeLabel": "Scope: ",
     "scopeNone": "Nothing selected",
     "scopeLines": "{n} selected line(s)",

@@ -762,8 +762,6 @@
     "restoreDefaultDone": "Đã khôi phục mặc định cho {n} dòng",
     "deleteByLines": "Dòng đã chọn ({n})",
     "deleteBySn": "Theo dải SN",
-    "selNone": "Chưa chọn",
-    "selInfo": "Đã chọn {bills} chứng từ · {lines} dòng",
     "scopeLabel": "Phạm vi: ",
     "scopeNone": "Chưa chọn",
     "scopeLines": "{n} dòng đã chọn",

@@ -265,21 +265,13 @@
         <p v-if="!shownBills.length" class="muted no-lines">{{ t("common.empty") }}</p>
       </div>
 
-      <!-- 底部操作栏（三个页签相同；按钮名称固定，不带行数、枚数）：左侧对勾选的行操作 —— 已选信息（恢复默认值：所选还没号的行手填的附件项次、米数、
+      <!-- 底部操作栏（三个页签相同；按钮名称固定，不带行数、枚数）：左侧对勾选的行操作（不显示已选几单几行） —— 恢复默认值（所选还没号的行手填的附件项次、米数、
            产品单位改回金蝶值，没有可恢复的行时置灰；取消勾选用「全选」框或逐个取消）、选规则、删号（有勾选的已出号行时按所选行删，
            没有时按 SN 起止号）；右侧生成 —— 生成范围、
            流水来源（弹层：从最大号之后 / 指定起止号、空闲号段）、生成 N 枚（唯一主按钮） -->
       <template #footer>
         <div v-if="ctx" class="bar">
-          <span class="sel-info" :class="{ none: !pickedRows.length }">
-            <template v-if="pickedRows.length">
-              {{ t("generate.selInfo", { bills: pickedBills, lines: pickedRows.length }) }}
-              <el-button link type="primary" :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">
-                {{ t("generate.restoreDefault") }}
-              </el-button>
-            </template>
-            <template v-else>{{ t("generate.selNone") }}</template>
-          </span>
+          <el-button :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">{{ t("generate.restoreDefault") }}</el-button>
           <!-- 选规则作用于整张 PI：有勾选时按所选行（起始号记在这些行上），没有勾选时按本 PI 全部有效物料行 -->
           <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
           <!-- 删号：有勾选的已出号行时按所选行删（弹窗里可改为按 SN 起止号），没有时直接按 SN 起止号 -->
@@ -1010,8 +1002,6 @@ async function cancelGen() {
 
 /** 底部「删号」的对象：所选物料行中挂着号的。 */
 const deleteRows = computed(() => pickedRows.value.filter((l) => l.generated_qty > 0));
-/** 已选物料行涉及的单据数（底部已选信息）。 */
-const pickedBills = computed(() => new Set(pickedRows.value.map((l) => l.bill_no)).size);
 
 const deleteDlg = ref<InstanceType<typeof DeleteDialog> | null>(null);
 
@@ -1024,7 +1014,7 @@ async function afterDelete() {
   await reloadCtx();
 }
 
-// ---------------- 恢复默认值（底部已选信息里，原「清空」的位置）：所选还没有号的物料行，手填的附件项次、米数、产品单位删掉，
+// ---------------- 恢复默认值（底部第一个按钮，原「已选信息 · 清空」的位置）：所选还没有号的物料行，手填的附件项次、米数、产品单位删掉，
 // 改回金蝶值（金蝶为空的回到待填写）；规则登记在 PI 上，不在这里改（要换用「选规则」）。完成后保留勾选
 
 /** 物料行手填过附件项次 / 米数 / 产品单位（与金蝶值不同的页面填写）。 */
@@ -1139,9 +1129,6 @@ onUnmounted(() => {
 .chip.free { color: var(--el-color-warning-dark-2); background: var(--el-color-warning-light-9); border-color: var(--el-color-warning-light-5); }
 .bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; text-align: left; }
 .bar :deep(.el-button + .el-button) { margin-left: 0; }
-.sel-info { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 4px; white-space: nowrap;
-  color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-.sel-info.none { color: var(--app-muted); background: var(--el-fill-color); }
 .scope { font-size: 12px; line-height: 1.35; text-align: right; white-space: nowrap; color: var(--app-muted); }
 .scope b { color: var(--app-text); }
 .vsep { width: 1px; height: 22px; background: var(--el-border-color); }

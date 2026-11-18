@@ -762,8 +762,6 @@
     "restoreDefaultDone": "已恢复 {n} 个物料行的默认值",
     "deleteByLines": "所选行（{n} 行）",
     "deleteBySn": "按 SN 起止号",
-    "selNone": "未勾选",
-    "selInfo": "已选 {bills} 单 · {lines} 行",
     "scopeLabel": "生成范围：",
     "scopeNone": "未勾选",
     "scopeLines": "已选 {n} 行",

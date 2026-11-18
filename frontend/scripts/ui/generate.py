@@ -225,8 +225,6 @@ M = {
 "generate.restoreDefaultDone": ("已恢复 {n} 个物料行的默认值", "Defaults restored for {n} line(s)", "Đã khôi phục mặc định cho {n} dòng"),
 "generate.deleteByLines": ("所选行（{n} 行）", "Selected lines ({n})", "Dòng đã chọn ({n})"),
 "generate.deleteBySn": ("按 SN 起止号", "By SN range", "Theo dải SN"),
-"generate.selNone": ("未勾选", "Nothing selected", "Chưa chọn"),
-"generate.selInfo": ("已选 {bills} 单 · {lines} 行", "{bills} bill(s) · {lines} line(s) selected", "Đã chọn {bills} chứng từ · {lines} dòng"),
 "generate.scopeLabel": ("生成范围：", "Scope: ", "Phạm vi: "),
 "generate.scopeNone": ("未勾选", "Nothing selected", "Chưa chọn"),
 "generate.scopeLines": ("已选 {n} 行", "{n} selected line(s)", "{n} dòng đã chọn"),

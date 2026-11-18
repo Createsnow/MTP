@@ -126,7 +126,7 @@ def gen_deleted(cu: OperatorDep, pi: str | None = None) -> list:
 
 @router.post(
     "/revoke-config",
-    summary="恢复默认值（生成页底部已选信息里）：所选物料行中还没有号的，手填的附件项次、米数、产品单位删掉，改回金蝶值；"
+    summary="恢复默认值（生成页底部「恢复默认值」按钮）：所选物料行中还没有号的，手填的附件项次、米数、产品单位删掉，改回金蝶值；"
     "规则登记在 PI 上，不在这里改；有号的行跳过（有号的行先删号）",
 )
 def gen_revoke_config(body: RevokeConfigIn, cu: OperatorDep) -> dict:
