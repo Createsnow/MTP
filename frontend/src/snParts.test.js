@@ -242,3 +242,40 @@ test("seq grow (上限自动突破): default on, round-trip, text widens, max", 
   assert.equal(maxSeqOf(10, 4, true), 10 ** 12 - 1);
   assert.equal(maxSeqOf(36, 4, true), Number.MAX_SAFE_INTEGER);
 });
+
+test("自增数值：前缀层、自增、固定字符、流水换算；不带时请求体没有 inc_* 字段", () => {
+  const parts = [P("TEXT", { text: "ABC" }), P("INC", { start: 0, end: 9 }), P("SEP", { text: "-" }), P("SEQ", { len: 4 })];
+  const r = toSpec(parts, ctx);
+  assert.deepEqual(codes(r), []);
+  assert.equal(r.spec.prefix, "ABC");
+  assert.equal(r.spec.inc_start, 0);
+  assert.equal(r.spec.inc_end, 9);
+  assert.equal(r.spec.inc_tail, "-");
+  const plain = toSpec([P("TEXT", { text: "ABC" }), P("SEQ")], ctx).spec;
+  assert.equal("inc_end" in plain, false);
+  // 拆回：前缀 + 自增数值 + 固定字符 + 流水
+  const back = fromSpec({ ...r.spec }, [P("TEXT", { text: "ABC" })]);
+  assert.deepEqual(back.map((p) => p.kind), ["TEXT", "INC", "SEP", "SEQ"]);
+  assert.equal(toSpec(back, ctx).spec.inc_tail, "-");
+});
+
+test("自增数值：只能在流水之前、最多一个、范围 0–999、前缀不能为空；位数按结束值补 0", () => {
+  assert.ok(codes(toSpec([P("TEXT", { text: "A" }), P("SEQ"), P("INC")], ctx)).includes("INC_AFTER_SEQ"));
+  assert.ok(codes(toSpec([P("TEXT", { text: "A" }), P("INC"), P("INC"), P("SEQ")], ctx)).includes("DUPLICATE"));
+  assert.ok(codes(toSpec([P("TEXT", { text: "A" }), P("INC", { start: 5, end: 3 }), P("SEQ")], ctx)).includes("INC_RANGE"));
+  assert.ok(codes(toSpec([P("TEXT", { text: "A" }), P("INC", { start: 0, end: 1000 }), P("SEQ")], ctx)).includes("INC_RANGE"));
+  assert.ok(codes(toSpec([P("INC"), P("SEQ")], ctx)).includes("PREFIX_EMPTY"));
+  const two = P("INC", { start: 0, end: 99 });
+  assert.equal(partValue(two, ctx), "00");
+  assert.equal(partValue(two, { ...ctx, incText: "07" }), "07");
+  // 组件库添加：紧挨流水之前
+  const ps = [P("TEXT", { text: "A" }), P("SEQ"), P("LEN")];
+  assert.equal(addIndex(ps, "INC", "SUF", ctx), 1);
+  assert.equal(blockReason([...ps.slice(0, 1), P("INC"), ...ps.slice(1)], "INC", 1, ctx), "TAKEN");
+});
+
+test("自增数值：示例分段按后台预显示的值着色", () => {
+  const parts = [P("TEXT", { text: "ABC" }), P("INC", { start: 0, end: 9 }), P("SEQ", { len: 4 })];
+  const segs = sampleSegments(parts, { ...ctx, incText: "2" }, "ABC20001", "0001", "", "");
+  assert.deepEqual(segs, [{ text: "ABC", cls: "" }, { text: "2", cls: "INC" }, { text: "0001", cls: "SEQ" }]);
+});

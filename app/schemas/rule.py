@@ -42,6 +42,11 @@ class RulePreviewIn(RuleSpecIn):
     seq_start: int | None = None
     #: 上限自动突破（生成页自定义规则的开关）：示例另带规则位数的最大号与突破后的第一个号；不传 = 关闭
     seq_grow: bool | None = None
+    #: 自增数值（生成页自定义规则；inc_end 不传 = 不带）：prefix 为前缀层文本，示例按 pi 将取的值（只预显示）
+    pi_no: str | None = None
+    inc_start: int | None = None
+    inc_end: int | None = None
+    inc_tail: str | None = None
 
 
 class LineRef(In):
@@ -68,6 +73,12 @@ class CustomRuleIn(In):
     #: 流水上限自动突破：开启时流水用完位数后自动加位（4 位用到 9999 后接 5 位 10000，以此类推，最多 12 位）；
     #: 不传或 false = 关闭（原逻辑：用完报规则位数已用尽）。不是格式的一部分，记在物料行上
     seq_grow: bool | None = None
+    #: 自增数值（中间件，紧跟前缀、在流水之前；inc_end 不传 = 不带）：prefix 为前缀层文本（防重只看它），
+    #: 范围 inc_start~inc_end（0–999，位数为结束值的位数，不足补 0），inc_tail 为自增数值之后、流水之前的固定字符。
+    #: 同一客户的 PI 依次取已用最大值 + 1，前缀 + 自增值为本 PI 独占的号段，流水从 1 开始
+    inc_start: int | None = None
+    inc_end: int | None = None
+    inc_tail: str | None = None
 
 
 class LineSelectIn(In):

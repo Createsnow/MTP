@@ -27,12 +27,17 @@
           <span class="tags">
             <el-tag v-if="o.recommended" size="small" type="success">{{ t("generate.rule.recommended") }}</el-tag>
             <el-tag v-if="o.plan" size="small" :type="o.plan === 'PREFIX' ? 'warning' : 'info'">{{ t(`generate.plan.${o.plan}`) }}</el-tag>
+            <!-- 自增数值：本 PI 将用的号段前缀（只预显示）；取不到值时（已用完须改前缀等）标红 -->
+            <el-tag v-if="o.inc_error" size="small" type="danger">{{ incErrorText(o.inc_error) }}</el-tag>
+            <el-tag v-else-if="o.inc?.prefix" size="small" type="success" class="sn-mono">{{ t("generate.rule.incWill", { prefix: o.inc.prefix }) }}</el-tag>
           </span>
         </div>
         <div v-if="!filtered.length" class="empty">{{ t("common.empty") }}</div>
       </div>
       <!-- 共用前缀（SHARE）时新前缀选填：不填共用该前缀，填了为本 PI 换前缀另出版本 -->
-      <el-form v-if="picked?.plan === 'PREFIX' || picked?.plan === 'SHARE'" label-width="120px" class="mt" @submit.prevent>
+      <div v-if="picked?.inc_error" class="err mt">{{ incErrorText(picked.inc_error) }}</div>
+      <!-- 带自增数值的规则不在这里换前缀（在「自定义」里改前缀） -->
+      <el-form v-if="!picked?.inc && (picked?.plan === 'PREFIX' || picked?.plan === 'SHARE')" label-width="120px" class="mt" @submit.prevent>
         <el-form-item :label="t('generate.rule.newPrefix')" :required="picked.plan === 'PREFIX'">
           <el-input v-model="newPrefix" maxlength="32" class="w200"
             :placeholder="picked.plan === 'SHARE' ? picked.current_prefix ?? '' : ''" />
@@ -117,7 +122,11 @@
             <div v-for="{ p, i } in sec.rows" :key="p.id" class="row" :class="{ hot: p.id === hot, 'is-seq': p.kind === 'SEQ' }"
               @mouseenter="hot = p.id" @mouseleave="hot = null">
               <span class="no">{{ i + 1 }}</span>
-              <span class="kt" :class="`c-${chipType(p.kind)}`">{{ t(`generate.rule.part.${p.kind}`) }}</span>
+              <span class="kt" :class="`c-${chipType(p.kind)}`">{{ t(`generate.rule.part.${p.kind}`) }}
+                <el-tooltip v-if="p.kind === 'INC'" placement="top" :content="t('generate.rule.incTip')">
+                  <el-icon class="q"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
               <span class="set">
                 <template v-if="p.kind === 'TEXT'">
                   <el-input v-model="p.text" :maxlength="TEXT_MAX" size="small" class="w180 mono-in" :placeholder="t('generate.rule.text')" />
@@ -178,6 +187,16 @@
                       @update:model-value="(v: any) => (p.start = Number(v) > startMin ? Number(v) : null)" />
                   </span>
                 </template>
+                <template v-else-if="p.kind === 'INC'">
+                  <!-- 自增数值：只能填数字，范围 0–999；位数为结束值的位数，不足补 0。值由后台按客户编码下的 PI 依次取（只预显示） -->
+                  <span class="fi">
+                    {{ t("generate.rule.incRange") }}
+                    <el-input-number v-model="p.start" :min="0" :max="INC_MAX" :step="1" step-strictly size="small" class="w100" />
+                    ~
+                    <el-input-number v-model="p.end" :min="0" :max="INC_MAX" :step="1" step-strictly size="small" class="w100" />
+                  </span>
+                  <span v-if="incPreview?.prefix && !incPreview.error" class="fi sn-mono">{{ t("generate.rule.incWill", { prefix: incPreview.prefix }) }}</span>
+                </template>
                 <template v-else-if="p.kind === 'LEN'">
                   <span class="fi">
                     {{ t("generate.rule.lengthPad") }}
@@ -218,14 +237,14 @@
 import { computed, h, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Bottom, Delete, Top } from "@element-plus/icons-vue";
+import { Bottom, Delete, QuestionFilled, Top } from "@element-plus/icons-vue";
 import { api } from "@/api";
 import { ApiError } from "@/api/http";
 import { BASES, CHARSETS } from "@/constants";
 import { useTime } from "@/composables/useTime";
 import { translateApiError } from "@/i18n";
 import {
-  CUTS, DATE_FMTS, PAD_MAX, PREFIX_MAX, SEP_MAX, SEPS, SEQ_LEN_MAX, TEMPLATES, TEXT_MAX,
+  CUTS, DATE_FMTS, INC_MAX, PAD_MAX, PREFIX_MAX, SEP_MAX, SEPS, SEQ_LEN_MAX, TEMPLATES, TEXT_MAX,
   SEQ_LEN_DEFAULT, addIndex, blockReason, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue, partsSig, sampleSegments,
   seqLenFor, seqNeed, seqText as seqTextOf, textPart, todayIn, toSpec,
 } from "@/snParts.js";
@@ -238,8 +257,10 @@ type RulePrefix = { prefix: string; custom: CustomRule | null; seq_grow?: boolea
 /** SN 组成的一个组件（见 snParts.js） */
 type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
-  base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number;
+  base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number;
 };
+/** 自增数值的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因 */
+type IncPreview = { text?: string | null; prefix?: string | null; error?: { code: string; message: string; params?: Record<string, unknown> } | null };
 type Seg = { text: string; cls: string };
 type Sample = { sn: string; segs: Seg[] | null };
 /** 三段：前缀（流水之前）/ 流水 / 后缀（流水之后，含米数、单位） */
@@ -261,9 +282,10 @@ const TPL_KEYS = Object.keys(TEMPLATES) as (keyof typeof TEMPLATES)[];
 const GROUPS = [
   { key: "FIX", kinds: ["TEXT", "SEP"] },
   { key: "DOC", kinds: ["PI", "BILL", "DATE"] },
+  { key: "AUTO", kinds: ["INC"] },
   { key: "LINE", kinds: ["LEN", "UNIT"] },
 ];
-const LEGEND = ["FIX", "SEQ", "LINE"];
+const LEGEND = ["FIX", "INC", "SEQ", "LINE"];
 
 const mode = ref<"LIBRARY" | "CUSTOM">("LIBRARY");
 const kw = ref("");
@@ -279,9 +301,17 @@ const sample = reactive<{ min: Sample | null; max: Sample | null; brk: Sample | 
   min: null, max: null, brk: null, error: "",
 });
 const busy = ref("");
+/** 自增数值的预显示（随示例号一起从后台取） */
+const incPreview = ref<IncPreview | null>(null);
+/** 自增数值取不到值的原因（已用完须改前缀、前缀已锁定别的客户等），按当前语言 */
+const incErrorText = (e: IncPreview["error"]) => (e ? translateApiError({ code: e.code, params: e.params ?? {} }, e.message) : "");
 
-/** 组件取值用的上下文：PI、点选的第一个单据编号（lines 按点选顺序，行内按钮为本行） */
-const partCtx = computed(() => ({ pi: props.pi, billNo: props.lines[0]?.bill_no ?? "" }));
+/** 组件取值用的上下文：PI、点选的第一个单据编号（lines 按点选顺序，行内按钮为本行）；自增数值取后台预显示的值 */
+const partCtx = computed(() => ({
+  pi: props.pi,
+  billNo: props.lines[0]?.bill_no ?? "",
+  incText: incPreview.value?.text ?? undefined,
+}));
 /** 组件换算成的自定义规则字段与校验错误 */
 const built = computed(() => toSpec(parts.value, partCtx.value));
 const errorText = computed(() => {
@@ -317,7 +347,8 @@ function chipValue(p: Part) {
   if (p.kind === "LEN") return p.pad ? (l?.length ?? "").padStart(p.pad, "0") : l?.length ?? "";
   return l?.unit ?? "";
 }
-const chipType = (k: string) => (k === "SEQ" ? "SEQ" : k === "LEN" || k === "UNIT" ? "LINE" : k === "SEP" ? "SEP" : "FIX");
+const chipType = (k: string) =>
+  k === "SEQ" ? "SEQ" : k === "LEN" || k === "UNIT" ? "LINE" : k === "SEP" ? "SEP" : k === "INC" ? "INC" : "FIX";
 
 /** 流水的位置；没有流水时（不应出现）全部算前缀 */
 const seqAt = computed(() => {
@@ -448,7 +479,9 @@ const seqStart = () => {
 const anyGenerated = computed(() => props.lines.some((l) => l.generated_qty > 0));
 const canSave = computed(() => {
   if (!props.lines.length) return false;
-  if (mode.value === "LIBRARY") return !!picked.value && (picked.value.plan !== "PREFIX" || !!newPrefix.value.trim());
+  if (mode.value === "LIBRARY") {
+    return !!picked.value && !picked.value.inc_error && (picked.value.plan !== "PREFIX" || !!newPrefix.value.trim());
+  }
   return !built.value.errors.length && !!built.value.spec.prefix && !sample.error;
 });
 
@@ -461,6 +494,7 @@ function onOpen() {
   sample.min = null;
   sample.max = null;
   sample.brk = null;
+  incPreview.value = null;
   const cur = props.lines.length === 1 ? props.lines[0].rule : null;
   const base = props.rulePrefix?.custom ?? (cur?.mode === "CUSTOM" ? cur.custom : null);
   // 起始号带出所选物料行已存的：新前缀的自定义规则，或沿用本 PI 已用前缀时另记的（还没生成过）
@@ -536,7 +570,11 @@ async function previewCustom() {
     const r = await api.previewRule({
       // 示例从实际的第一个号起：填了起始号按它，已用前缀没填按接续的下一个号
       ...spec, seq_start: seqStart() ?? (startMin.value > 1 ? startMin.value : undefined), length: l?.length || undefined, unit: l?.unit || undefined,
+      // 带自增数值：按本 PI 将取的值出示例（后台按客户编码下的 PI 取，只预显示）
+      ...(spec.inc_end != null ? { pi_no: props.pi } : {}),
     });
+    incPreview.value = r.inc ?? null;
+    if (r.inc?.error) sample.error = incErrorText(r.inc.error);
     const list: any[] = r.samples ?? [];
     const len = spec.length_pad ? String(r.sample_length ?? "").padStart(spec.length_pad, "0") : String(r.sample_length ?? "");
     const toSample = (x: any): Sample | null =>
@@ -583,6 +621,7 @@ async function save() {
     // 一个 PI 只有一个规则：后台按整张 PI 保存，返回作用的物料行数
     const r: any = await api.selectLineRule(body);
     ElMessage.success(t("generate.rule.savedPi", { n: r?.lines ?? props.lines.length }));
+    if (r?.rule?.inc?.prefix) ElMessage.info(t("generate.rule.savedInc", { prefix: r.rule.inc.prefix }));
     emit("saved");
     emit("update:modelValue", false);
   } finally {
@@ -609,6 +648,7 @@ async function save() {
 .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--el-border-color-darker); background: var(--el-fill-color); }
 .sw.c-SEQ { background: var(--el-color-primary-light-9); border-color: var(--el-color-primary); }
 .sw.c-LINE { background: var(--el-color-warning-light-9); border-color: var(--el-color-warning); }
+.sw.c-INC { background: var(--el-color-success-light-9); border-color: var(--el-color-success); }
 /* 规则库 */
 .rule-list { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; max-height: 360px; overflow: auto; }
 .rule-list .it { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--el-border-color-lighter); outline: none; }
@@ -643,6 +683,7 @@ async function save() {
 .bs .v { font-size: 22px; line-height: 1.3; padding: 0 2px; border-radius: 3px; border-bottom: 3px solid transparent; white-space: nowrap; }
 .bs.c-SEQ .v { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .bs.c-LINE .v { color: var(--el-color-warning-dark-2); background: var(--el-color-warning-light-9); }
+.bs.c-INC .v { color: var(--el-color-success-dark-2); background: var(--el-color-success-light-9); }
 .bs.hot .v { border-bottom-color: var(--el-color-primary); background: var(--el-color-primary-light-8); }
 .bs.hot .n { color: var(--el-color-primary); font-weight: 700; }
 .sample { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
@@ -650,6 +691,7 @@ async function save() {
 .sample .sn { font-size: 14px; word-break: break-all; }
 .sample .s-SEQ { color: var(--el-color-primary); background: var(--el-color-primary-light-9); border-radius: 2px; }
 .sample .s-LINE { color: var(--el-color-warning-dark-2); background: var(--el-color-warning-light-9); border-radius: 2px; }
+.sample .s-INC { color: var(--el-color-success-dark-2); background: var(--el-color-success-light-9); border-radius: 2px; }
 /* 组件库 + 组件清单 */
 .cols { display: flex; gap: 14px; align-items: flex-start; }
 .lib { width: 160px; flex: none; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -683,6 +725,8 @@ async function save() {
 .kt { font-size: 12px; line-height: 1.4; padding: 1px 8px; border-radius: 3px; justify-self: start; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; border: 1px solid var(--el-border-color-lighter); background: var(--el-fill-color-light); color: var(--el-text-color-regular); }
 .kt.c-SEQ { background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); }
 .kt.c-LINE { background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); border-color: var(--el-color-warning-light-5); }
+.kt.c-INC { background: var(--el-color-success-light-9); color: var(--el-color-success-dark-2); border-color: var(--el-color-success-light-5); }
+.kt .q { margin-left: 2px; vertical-align: -2px; cursor: help; }
 .set { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 12px; color: var(--el-text-color-regular); min-width: 0; }
 .set .fi { display: inline-flex; align-items: center; gap: 6px; }
 .set .grow { padding: 0 8px; height: 24px; border-radius: 12px; background: var(--el-fill-color-light); }

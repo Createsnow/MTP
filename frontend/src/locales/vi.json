@@ -527,6 +527,7 @@
       "CLAIM": "Sẽ thuộc PI này",
       "NEW": "Phiên bản mới",
       "SHARE": "Dùng chung tiền tố",
+      "INC": "Tự tăng",
       "PREFIX": "Cần tiền tố mới"
     },
     "rule": {
@@ -546,7 +547,8 @@
       "legend": {
         "FIX": "Cố định khi lưu",
         "SEQ": "Tuần tự",
-        "LINE": "Lấy theo dòng vật tư"
+        "LINE": "Lấy theo dòng vật tư",
+        "INC": "Số tự tăng"
       },
       "sec": {
         "PRE": "Tiền tố",
@@ -564,7 +566,8 @@
       "group": {
         "FIX": "Ký tự cố định",
         "DOC": "Từ chứng từ · ngày",
-        "LINE": "Lấy theo dòng vật tư"
+        "LINE": "Lấy theo dòng vật tư",
+        "AUTO": "Tự tăng theo khách hàng"
       },
       "toSuf": "→ hậu tố",
       "col": {
@@ -606,7 +609,8 @@
         "DATE": "Ngày",
         "SEQ": "Tuần tự",
         "LEN": "Chiều dài",
-        "UNIT": "Đơn vị"
+        "UNIT": "Đơn vị",
+        "INC": "Số tự tăng"
       },
       "cut": {
         "ALL": "Toàn bộ",
@@ -625,6 +629,8 @@
         "NO_SEQ": "Cần có một tuần tự",
         "PREFIX_EMPTY": "Tiền tố không được để trống",
         "AFTER_SEQ": "Chiều dài và đơn vị chỉ được nằm ở hậu tố",
+        "INC_AFTER_SEQ": "Số tự tăng chỉ được đặt trước tuần tự (sau tiền tố)",
+        "INC_RANGE": "Số tự tăng chỉ nhận chữ số: giá trị đầu, cuối từ 0–{max}, giá trị đầu không lớn hơn giá trị cuối",
         "UNIT_AFTER_LEN": "Đơn vị phải nằm sau chiều dài",
         "UNIT_GAP": "Khi không có chiều dài, đơn vị phải nằm ngay sau tuần tự",
         "DUPLICATE": "Tuần tự, chiều dài và đơn vị mỗi loại chỉ có một",
@@ -633,6 +639,10 @@
       },
       "changeConfirm": "Một số dòng đã có SN. Đổi quy tắc?",
       "seqGrowPrefix": "Thiết lập theo tiền tố: lần chọn đầu tiên quyết định, sau đó sửa trong thư viện quy tắc",
+      "incTip": "Tự tăng theo số PI thuộc mã khách hàng hiện tại; có thể đặt phạm vi, vượt phạm vi thì bắt buộc phải đổi tiền tố!",
+      "incRange": "Phạm vi",
+      "incWill": "PI này sẽ dùng {prefix}",
+      "savedInc": "PI này sẽ dùng tiền tố {prefix} (chiếm dụng khi tạo thành công)",
       "seqGrowLocked": "Tiền tố của PI đã đăng ký; hãy sửa tự mở rộng trong thư viện quy tắc",
       "savedPi": "Đã lưu: {n} dòng của PI này dùng quy tắc này"
     },
@@ -1130,6 +1140,8 @@
     "topSeq": "Số lớn nhất",
     "seqGrow": "Tự tăng chữ số khi hết",
     "seqGrowTip": "Thiết lập theo tiền tố cho mọi PI dùng nó; không thể tắt khi dãy số đã vượt số chữ số",
+    "incTag": "Tự tăng {start}~{end} · khách hàng {customer}",
+    "incSegment": "Tiền tố dãy số",
     "status": "Trạng thái",
     "unused": "Chưa dùng",
     "detail": "Chi tiết",

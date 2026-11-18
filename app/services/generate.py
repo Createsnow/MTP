@@ -643,7 +643,9 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
             _check(line, reg, taken)
             out[pi].append(line)
         if reg is not None:
-            _check_order(reg["prefix"], out[pi], set(keys), taken)
+            # 带自增数值的号段归本 PI 独占：项次只与本 PI 的物料行比（别的 PI 预显示了同一个值也不互相挡）
+            only = pi if res is not None and res.inc is not None else None
+            _check_order(reg["prefix"], out[pi], set(keys), taken, only)
     return out
 
 
@@ -657,7 +659,9 @@ def _check(line: Line, reg: dict | None, taken: dict) -> None:
         line.issues.append("NO_RULE")
     elif not line.res.ready:
         line.issues.append("RULE_PREFIX")
-    elif line.res.plan in (rules.PLAN_NEW, rules.PLAN_CLAIM, rules.PLAN_SHARE) and not _prefix_ok(line, taken):
+    elif line.res.plan in (rules.PLAN_NEW, rules.PLAN_CLAIM, rules.PLAN_SHARE, rules.PLAN_INC) and not _prefix_ok(
+        line, taken
+    ):
         # 自定义规则选定后（或规则库版本首次归属本 PI、共用别的 PI 的前缀前）前缀被尚未归属的版本占用、
         # 与别的前缀一个是另一个的开头，或已按别的进制 / 位数用了这个前缀：须改前缀，免得生成时才失败
         line.issues.append("RULE_PREFIX")
@@ -678,7 +682,10 @@ def _check(line: Line, reg: dict | None, taken: dict) -> None:
 
 
 def _prefix_ok(line: Line, memo: dict | None) -> bool:
-    """前缀能否给本 PI 用（同一次判断里同一前缀、格式只查一次）；规则库版本首次归属时不算它自己。"""
+    """前缀能否给本 PI 用（同一次判断里同一前缀、格式只查一次）；规则库版本首次归属时不算它自己。
+    带自增数值的规则按自增前缀判断（rules.inc_usable：防重只看前缀层、本 PI 的值没被别的 PI 先占）。"""
+    if line.res.inc is not None:
+        return rules.inc_usable(line.res, line.pi)
     spec = line.res.spec()
     own = line.res.version["id"] if line.res.plan == rules.PLAN_CLAIM else None
     k = (spec.prefix, spec.base, spec.seq_len, spec.charset, line.pi, own)
@@ -713,12 +720,12 @@ def attach_order(attach: str) -> tuple:
 BLOCKER_LIST_MAX = 20
 
 
-def _prefix_order_state(prefix: str, memo: dict) -> tuple[set[Decimal], list[dict]]:
+def _prefix_order_state(prefix: str, memo: dict, only_pi: str | None = None) -> tuple[set[Decimal], list[dict]]:
     """前缀的项次状态：(已开始的项次, 候选挡路行)。
     - 已开始的项次：这个前缀下现存的号（本系统生成的）的附件项次；号全删掉的项次回到没开始。
     - 候选挡路行：登记了这个前缀的全部 PI 的物料行中还有额度的；失效的物料行、冻结或暂停交付单据的行、
       删过号的行（删号后重新生成接在最大号之后）不挡。项次为空或不是数字的 key 为 None（挡全部没开始的项次）。"""
-    mk = ("order", prefix)
+    mk = ("order", prefix, only_pi)
     if mk in memo:
         return memo[mk]
     started = {
@@ -733,8 +740,10 @@ def _prefix_order_state(prefix: str, memo: dict) -> tuple[set[Decimal], list[dic
     }
     snap = db.all(
         "SELECT m.* FROM sn_prd_mo m JOIN sn_pi_rule r ON r.pi_no = m.pi WHERE r.prefix = %s "
-        "ORDER BY m.pi, m.bill_no, m.seq",
+        + ("" if only_pi is None else "AND m.pi = %s ")
+        + "ORDER BY m.pi, m.bill_no, m.seq",
         prefix,
+        *([] if only_pi is None else [only_pi]),
     )
     cands: list[dict] = []
     if snap:
@@ -783,14 +792,16 @@ def _prefix_order_state(prefix: str, memo: dict) -> tuple[set[Decimal], list[dic
     return memo[mk]
 
 
-def _check_order(prefix: str, ls: list[Line], run: set[tuple[str, int]], memo: dict) -> None:
+def _check_order(
+    prefix: str, ls: list[Line], run: set[tuple[str, int]], memo: dict, only_pi: str | None = None
+) -> None:
     """项次拦截：同一前缀下，一行的项次已开始（有现存的号）时不拦，接在最大号之后生成；还没开始时，
     只要登记了这个前缀的 PI 里还有更小项次（或项次为空、不是数字）的行有额度，就拦住（ATTACH_ORDER_BLOCKED）。
     run 为这次一起生成的行：彼此不挡（同一次生成里小项次排在前）。"""
     todo = [x for x in ls if x.quota > 0 and attach_key(x.attach) is not None]
     if not todo:
         return
-    started, cands = _prefix_order_state(prefix, memo)
+    started, cands = _prefix_order_state(prefix, memo, only_pi)
     others = [b for b in cands if (b["bill_no"], b["seq"]) not in run]
     if not others:
         return
@@ -860,6 +871,10 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
             "issues": x.issues,
             # 自定义前缀被占用时给出前缀，确认生成时按前缀冲突提示
             "prefix": x.res.version["prefix"] if "RULE_PREFIX" in x.issues and x.res.ready else None,
+            # 带自增数值：取不到值 / 预显示的值被别的 PI 先占（确认生成时按自增前缀提示原因）
+            "inc": x.res is not None
+            and x.res.inc is not None
+            and ("RULE_PREFIX" in x.issues or "RULE_PI_PREFIX" in x.issues),
             # 项次拦截：挡住本行的物料行（最多 BLOCKER_LIST_MAX 行）
             "blockers": x.blockers,
         }
@@ -1100,10 +1115,9 @@ def generate(cu: CurrentUser, token: str | None) -> dict:
         # 确认生成时再查一次前缀能否用：自定义前缀在预演后被别的规则占用（尚未归属的版本，或别的 PI 按别的进制 /
         # 位数用了）时报前缀冲突 / 格式锁定（页面弹窗提示）
         for i in fresh["issues"]:
-            if i.get("prefix"):
+            if i.get("prefix") or i.get("inc"):
                 ln = _load_lines(pi, [(i["bill_no"], i["seq"])])
-                spec = ln[0].res.spec() if ln and ln[0].res is not None and ln[0].res.ready else None
-                rules.check_prefix(i["prefix"], spec=spec, pi=pi)
+                rules.check_line_prefix(ln[0].res if ln else None, i.get("prefix"), pi, prefix_of(pi))
         if fresh["issues"] or not _same_plan(stored, fresh):
             raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
         batch = util.next_id("G") + util.token_hex()[:4]
@@ -1468,7 +1482,7 @@ def _segs_text(x: dict) -> str:
 def _resolved_of(pi: str, x: dict) -> rules.Resolved:
     """生成事务内重新解析该行规则，须与预演时一致。"""
     if x["rule_plan"] == rules.PLAN_NEW:
-        return rules._custom_resolved(rules.SRC_LINE, x["custom"])
+        return rules._custom_resolved(rules.SRC_LINE, x["custom"], pi)
     rule = db.one("SELECT * FROM sn_rule WHERE id = %s FOR UPDATE", x["rule_id"])
     if rule is None:
         raise biz(ErrorCode.GEN_PREVIEW_CHANGED)

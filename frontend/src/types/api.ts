@@ -114,6 +114,12 @@ export interface CustomRule {
   seq_start?: number | null;
   /** 流水上限自动突破（选填，不传按关闭）：开启时流水用完位数后自动加位（4 位 9999 之后接 5 位 10000） */
   seq_grow?: boolean;
+  /** 自增数值（中间件，紧跟前缀、在流水之前；不带时没有这几项）：范围、它与流水之间的固定字符；
+   *  inc_value 为本 PI 将取 / 已有的值（只回显，见 rules.pi_prefix） */
+  inc_start?: number;
+  inc_end?: number;
+  inc_tail?: string;
+  inc_value?: number | null;
 }
 
 export interface BillState {

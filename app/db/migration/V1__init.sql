@@ -102,13 +102,21 @@ CREATE TABLE sn_rule_version (
   used         TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '生成过号（含之后撤销的）：再改格式必须另出一版',
   claimed_pi   VARCHAR(64) NULL COMMENT '归属 PI：首次用它生成的 PI，或换前缀另出时的 PI',
   derived_from BIGINT      NULL COMMENT '由哪一版换前缀而来',
+  inc_head     VARCHAR(64) NULL COMMENT '自增数值：前缀层文本（防重前缀，如 ABC）；NULL = 不带自增数值。prefix = inc_head + 补 0 的自增值 + inc_tail',
+  inc_tail     VARCHAR(64) NOT NULL DEFAULT '' COMMENT '自增数值之后、流水之前的固定字符（中间件）',
+  inc_start    INT         NULL COMMENT '自增范围起始值',
+  inc_end      INT         NULL COMMENT '自增范围结束值（最大 999；位数 = 结束值的位数，不足补 0；同一自增前缀下位数锁定）',
+  inc_value    INT         NULL COMMENT '本版本取到的自增值（归属 PI；同一自增前缀下一个值只归一张 PI）',
+  inc_customer VARCHAR(64) NULL COMMENT '自增前缀锁定的客户编码（第一次生成时定下）',
   created_by   VARCHAR(32) NULL,
   created_at   DATETIME    NOT NULL,
   updated_at   DATETIME    NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY ux_rule_version (rule_id, version),
   KEY ix_rule_prefix (prefix) COMMENT '前缀不全局唯一：一个前缀只归属一张 PI，可有多个版本（应用层校验，见 rules.check_prefix）',
-  KEY ix_rule_version_pi (claimed_pi)
+  KEY ix_rule_version_pi (claimed_pi),
+  KEY ix_rule_inc (inc_head, inc_value),
+  KEY ix_rule_inc_customer (inc_customer)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='SN 规则版本';
 
 -- PI 规则登记：一个 PI 一个规则前缀，选规则时登记（本 PI 全部物料行、之后同步进来的单据都用它）。

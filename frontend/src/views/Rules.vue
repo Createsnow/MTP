@@ -33,6 +33,8 @@
               <span class="sep">·</span><span>{{ t("rules.ruleCountVal", { n: g.rules.length }) }}</span>
               <span class="sep">·</span><span>{{ t("rules.piCountVal", { n: groupPis(g).length }) }}</span>
             </div>
+            <!-- 自增前缀：范围与锁定的客户（各 PI 一个号段：前缀 + 自增值） -->
+            <div v-if="g.inc" class="pitem-inc">{{ incTagText(g.inc) }}</div>
             <div class="pitem-org">{{ orgText(g) }}</div>
           </div>
           <el-empty v-if="!loading && !shown.length" :image-size="72" :description="t('common.empty')" />
@@ -49,10 +51,14 @@
               <span class="sn-mono big">{{ cur.prefix }}</span>
               <el-tag effect="plain">{{ t("rules.seqFormatVal", { base: cur.base, n: cur.seq_len }) }}</el-tag>
               <el-tag :type="cur.used ? 'success' : 'info'" effect="light">{{ cur.used ? t("rules.used") : t("rules.unused") }}</el-tag>
+              <el-tooltip v-if="cur.inc" placement="bottom" :content="t('generate.rule.incTip')">
+                <el-tag type="success" effect="plain">{{ incTagText(cur.inc) }}</el-tag>
+              </el-tooltip>
               <span class="muted">{{ orgText(cur) }}</span>
             </div>
-            <!-- 流水上限自动突破：按前缀统一设置（作用于这个前缀下的全部 PI）；已突破后不能关闭 -->
-            <el-tooltip placement="bottom" :content="t('rules.seqGrowTip')">
+            <!-- 流水上限自动突破：按前缀统一设置（作用于这个前缀下的全部 PI）；已突破后不能关闭。
+                 自增前缀下各 PI 的号段各自设置（选规则时定下），这里不显示 -->
+            <el-tooltip v-if="!cur.inc" placement="bottom" :content="t('rules.seqGrowTip')">
               <span class="grow">
                 {{ t("rules.seqGrow") }}
                 <el-switch :model-value="cur.seq_grow !== false" :loading="growSaving" @change="(v: any) => setGrow(!!v)" />
@@ -126,6 +132,10 @@
           </div>
           <el-table v-loading="detail.usageLoading" :data="detail.usage" size="small" :empty-text="detail.usageError || t('common.empty')">
             <el-table-column label="PI" min-width="130"><template #default="{ row }"><span class="sn-mono">{{ row.pi_no }}</span></template></el-table-column>
+            <!-- 自增前缀：本 PI 的号段（前缀 + 自增值） -->
+            <el-table-column v-if="cur.inc" :label="t('rules.incSegment')" min-width="110">
+              <template #default="{ row }"><span class="sn-mono">{{ row.seq_prefix || "—" }}</span></template>
+            </el-table-column>
             <el-table-column :label="t('rules.usageRules')" min-width="120" show-overflow-tooltip><template #default="{ row }">{{ row.rules.join("、") }}</template></el-table-column>
             <el-table-column :label="t('rules.usageRange')" min-width="220">
               <template #default="{ row }">
@@ -280,6 +290,11 @@ watch([piFilter, usedFilter], () => (page.value = 1));
 watch(() => shown.value.length, (n) => (page.value = Math.min(page.value, Math.max(1, Math.ceil(n / pageSize)))));
 /** 生产组织：前缀下各规则的所属组织，没有的为「全局」。 */
 const orgText = (g: any) => g.factories.map((f: string | null) => (f ? factoryName(f) : t("rules.ownerGlobal"))).join("、");
+/** 自增前缀：「自增 0~9 · 客户 0832」（范围按位数补 0） */
+const incTagText = (inc: any) => {
+  const pad = (v: number) => String(v).padStart(Number(inc.width) || 1, "0");
+  return t("rules.incTag", { start: pad(inc.start), end: pad(inc.end), customer: inc.customer || "—" });
+};
 /** 右侧所选前缀：按前缀记住，重新加载后仍选中；不在当前筛选结果里时改选第一项。 */
 const curPrefix = ref("");
 const cur = computed(() => shown.value.find((g) => g.prefix === curPrefix.value) ?? null);
@@ -508,6 +523,7 @@ onMounted(load);
 .pitem-meta { margin-top: 4px; font-size: 12px; color: var(--app-text); }
 .pitem-meta .sep { margin: 0 5px; color: var(--app-muted); }
 .pitem-org { margin-top: 2px; font-size: 12px; color: var(--app-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitem-inc { margin-top: 2px; font-size: 12px; color: var(--el-color-success-dark-2); }
 .side-pager { justify-content: center; margin-top: 0; }
 .main { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .mhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid var(--app-line); }

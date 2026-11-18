@@ -6,23 +6,29 @@
  * - TEXT 固定文本 / SEP 分隔符 / PI / BILL 单据编号 / DATE 日期：保存时取值，成为固定字符；
  * - SEQ 流水（进制、位数、起始号、上限自动突破）：必须且只有一个；上限自动突破默认开启（流水用完位数后自动加位，
  *   保存时为 seq_grow，后台按位数另出版本；关闭时保持原逻辑：位数按订单数量定、用完报规则位数已用尽）；
- * - LEN 米数（补 0 位数）、UNIT 单位：各最多一个，生成时取物料行的值。
+ * - LEN 米数（补 0 位数）、UNIT 单位：各最多一个，生成时取物料行的值；
+ * - INC 自增数值（中间件，范围 start~end，0–999，位数为结束值的位数、不足补 0）：最多一个，只能在流水之前。
+ *   它之前的组件为前缀层（prefix，防重只看它），它与流水之间的固定字符为 inc_tail；值由后台按客户编码下的 PI
+ *   依次取（已用最大值 + 1，只预显示，生成时才占用），前缀 + 自增值为本 PI 独占的号段，流水从 1 开始。
+ *   不带自增数值时请求体与原来相同（没有 inc_* 字段）。
  *
  * 按位置换算（后台编码：前缀 + 流水 + 米数前分隔符 + 米数 + 米数后分隔符 + 单位 + 后缀）：
  * 流水之前 → prefix；流水与米数之间 → sep_before；米数与单位之间 → sep_after；最后一个米数 / 单位 / 流水之后 → suffix。
  * 所以米数、单位须在流水之后、单位在米数之后；不带米数时流水与单位之间不能有组件。
  *
  * @typedef {{ id: number, kind: string, text?: string, cut?: "ALL"|"LAST"|"FIRST", n?: number, fmt?: string,
- *   date?: string, base?: number, len?: number, start?: number|null, grow?: boolean, pad?: number }} Part
- * @typedef {{ pi?: string, billNo?: string }} PartCtx
+ *   date?: string, base?: number, len?: number, start?: number|null, grow?: boolean, pad?: number, end?: number }} Part
+ * @typedef {{ pi?: string, billNo?: string, incText?: string }} PartCtx
  * @typedef {{ prefix: string, base: number, seq_len: number, with_length: boolean, length_pad: number,
  *   sep_before: string, sep_after: string, with_unit: boolean, suffix: string, seq_start: number|null,
- *   seq_grow: boolean }} CustomSpec
+ *   seq_grow: boolean, inc_start?: number, inc_end?: number, inc_tail?: string }} CustomSpec
  */
 
-export const KINDS = ["TEXT", "SEP", "PI", "BILL", "DATE", "SEQ", "LEN", "UNIT"];
+export const KINDS = ["TEXT", "SEP", "PI", "BILL", "DATE", "INC", "SEQ", "LEN", "UNIT"];
 /** 只能有一个的组件 */
-export const SINGLE = ["SEQ", "LEN", "UNIT"];
+export const SINGLE = ["SEQ", "LEN", "UNIT", "INC"];
+/** 自增数值的结束值上限（最多 3 位，后台 rules.INC_MAX） */
+export const INC_MAX = 999;
 /** 分隔符选项（不含空格：前缀、后缀首尾的空格后台会去掉） */
 export const SEPS = ["-", "_", ".", "/"];
 export const DATE_FMTS = ["YY", "YYMM", "YYMMDD", "YYYYMMDD", "YYWW", "YYYYWW"];
@@ -94,6 +100,7 @@ export function newPart(kind, today = "") {
     case "SEQ": return withId({ kind, base: 10, len: 4, start: null, grow: true });
     case "LEN": return withId({ kind, pad: 0 });
     case "UNIT": return withId({ kind });
+    case "INC": return withId({ kind, start: 0, end: 9 });
     default: throw new Error(`unknown part ${kind}`);
   }
 }
@@ -146,13 +153,19 @@ export function defaultParts() {
   return [newPart("BILL"), newPart("SEQ")];
 }
 
-/** 保存时就定值的组件取值（SEQ / LEN / UNIT 返回 null）。 */
+/** 自增数值的位数（结束值的位数）。 */
+export const incWidth = (p) => String(Math.max(Number(p?.end) || 0, 0)).length;
+/** 自增值文本：左侧补 0 到结束值的位数。 */
+export const incText = (p, v) => String(Math.max(Number(v) || 0, 0)).padStart(incWidth(p), "0");
+
+/** 保存时就定值的组件取值（SEQ / LEN / UNIT 返回 null）；INC 为后台预显示的值（ctx.incText），没有时为起始值。 */
 export function partValue(p, ctx = {}) {
   switch (p.kind) {
     case "TEXT": case "SEP": return p.text || "";
     case "PI": return cutText(ctx.pi, p.cut, p.n);
     case "BILL": return cutText(ctx.billNo, p.cut, p.n);
     case "DATE": return formatDate(p.fmt, p.date);
+    case "INC": return ctx.incText ?? incText(p, p.start);
     default: return null;
   }
 }
@@ -178,7 +191,9 @@ export function fromSpec(spec, head) {
   const seq = withId({
     kind: "SEQ", base: Number(s.base) || 10, len: Number(s.seq_len) || 4, start: s.seq_start ?? null, grow: s.seq_grow ?? true,
   });
-  const out = [...head, seq];
+  // 自增数值：前缀层（head）之后、流水之前，后面接它与流水之间的固定字符
+  const inc = s.inc_end != null ? [withId({ kind: "INC", start: Number(s.inc_start) || 0, end: Number(s.inc_end) }), ...textParts(s.inc_tail)] : [];
+  const out = [...head, ...inc, seq];
   if (s.with_length) {
     out.push(...textParts(s.sep_before), withId({ kind: "LEN", pad: Number(s.length_pad) || 0 }), ...textParts(s.sep_after));
   }
@@ -204,6 +219,16 @@ export function toSpec(parts, ctx = {}) {
   const before = iSeq >= 0 ? parts.slice(0, iSeq) : parts;
   const after = iSeq >= 0 ? parts.slice(iSeq + 1) : [];
   if (iSeq >= 0 && before.some((p) => p.kind === "LEN" || p.kind === "UNIT")) errors.push({ code: "AFTER_SEQ" });
+  // 自增数值：只能在流水之前；之前的为前缀层（防重），之后到流水为 inc_tail
+  const iInc = before.findIndex((p) => p.kind === "INC");
+  const incPart = iInc >= 0 ? before[iInc] : null;
+  if (after.some((p) => p.kind === "INC")) errors.push({ code: "INC_AFTER_SEQ" });
+  if (incPart) {
+    const st = Number(incPart.start), en = Number(incPart.end);
+    if (!Number.isInteger(st) || !Number.isInteger(en) || st < 0 || en > INC_MAX || st > en) errors.push({ code: "INC_RANGE", max: INC_MAX });
+  }
+  const head = incPart ? before.slice(0, iInc) : before;
+  const incTail = incPart ? join(before.slice(iInc + 1)).trim() : "";
   const iLen = after.findIndex((p) => p.kind === "LEN");
   const iUnit = after.findIndex((p) => p.kind === "UNIT");
   let sepBefore = "";
@@ -224,9 +249,11 @@ export function toSpec(parts, ctx = {}) {
   } else {
     suffix = join(after);
   }
-  const prefix = join(before).trim();
+  const prefix = join(head).trim();
   if (iSeq >= 0 && !prefix) errors.push({ code: "PREFIX_EMPTY" });
-  if (prefix.length > PREFIX_MAX) errors.push({ code: "PREFIX_TOO_LONG", max: PREFIX_MAX });
+  // 前缀总长：带自增数值时为「前缀 + 自增值 + 固定字符」（本 PI 号段的完整前缀）
+  const fullLen = prefix.length + (incPart ? incWidth(incPart) + incTail.length : 0);
+  if (fullLen > PREFIX_MAX) errors.push({ code: "PREFIX_TOO_LONG", max: PREFIX_MAX });
   if (sepBefore.trim().length > SEP_MAX || sepAfter.trim().length > SEP_MAX) errors.push({ code: "SEP_TOO_LONG", max: SEP_MAX });
   const lenPart = parts.find((p) => p.kind === "LEN");
   const start = Number(seq.start);
@@ -243,6 +270,7 @@ export function toSpec(parts, ctx = {}) {
     seq_start: Number.isSafeInteger(start) && start > 0 ? start : null,
     seq_grow: seq.grow !== false,
   };
+  if (incPart) Object.assign(spec, { inc_start: Number(incPart.start) || 0, inc_end: Number(incPart.end), inc_tail: incTail });
   return { spec, errors };
 }
 
@@ -276,9 +304,14 @@ export function newErrors(parts, cand, ctx = {}) {
   return [...new Set(toSpec(cand, ctx).errors.map((e) => e.code).filter((c) => !cur.has(c)))];
 }
 
-/** 「+ 组件」（不指定位置）时的位置：流水放在米数 / 单位之前，米数放在单位之前，单位不带米数时放最后、放不下则紧跟流水，其余放最后。 */
+/** 「+ 组件」（不指定位置）时的位置：流水放在米数 / 单位之前，米数放在单位之前，单位不带米数时放最后、放不下则紧跟流水，
+ *  自增数值紧挨流水之前（前缀之后），其余放最后。 */
 export function autoIndex(parts, kind, ctx = {}) {
   const end = parts.length;
+  if (kind === "INC") {
+    const s = parts.findIndex((p) => p.kind === "SEQ");
+    return s >= 0 ? s : end;
+  }
   if (kind === "SEQ" || kind === "LEN") {
     const i = parts.findIndex((p) => (kind === "SEQ" ? p.kind === "LEN" || p.kind === "UNIT" : p.kind === "UNIT"));
     if (i >= 0) return i;
@@ -328,13 +361,14 @@ export function partsSig(parts) {
 
 /**
  * 示例号分段（按组件着色）：seqText 为流水文本，length / unit 为示例米数（已补 0）/ 单位。
- * cls：SEQ 为流水，LINE 为米数 / 单位，其余为空。拼起来与 sn 不一致时返回 null（调用方原样显示 sn）。
+ * cls：SEQ 为流水，LINE 为米数 / 单位，INC 为自增数值，其余为空。拼起来与 sn 不一致时返回 null（调用方原样显示 sn）。
  */
 export function sampleSegments(parts, ctx, sn, seqText, length, unit) {
   const segs = parts.map((p) => {
     if (p.kind === "SEQ") return { text: seqText, cls: "SEQ" };
     if (p.kind === "LEN") return { text: length, cls: "LINE" };
     if (p.kind === "UNIT") return { text: unit, cls: "LINE" };
+    if (p.kind === "INC") return { text: partValue(p, ctx) ?? "", cls: "INC" };
     return { text: partValue(p, ctx) ?? "", cls: "" };
   });
   return segs.map((s) => s.text).join("") === sn ? segs.filter((s) => s.text) : null;

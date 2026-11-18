@@ -20,6 +20,12 @@
 流水上限自动突破按前缀统一设置（sn_prefix_counter.seq_grow，默认开启）：第一张 PI 选这个前缀时按这次的选择定下，
 之后在规则库改（set_prefix_grow），已突破过规则位数后不能关闭。开启时流水用完规则位数后自动加位（最多 12 位），
 每个位数各是一个版本（突破版本：derived_from 为原版本且前缀相同，归属本 PI，不改规则的当前版本）。
+
+自增数值（中间件，见 Inc）：SN = 前缀 + 自增数值（+ 固定字符）+ 流水 + 米数 / 单位等 + 后缀。前缀防重只看前缀层
+（inc_head，如 ABC）；前缀 + 自增值（如 ABC2）是一张 PI 独占的号段：版本的 prefix 存完整的 ABC2，排号、号池、删号、
+自动突破、推送都按它走原逻辑，流水从 1 开始。同一前缀锁定第一次生成的 PI 的客户与自增位数；同一客户的 PI 依次取
+已用最大值 + 1（选规则时只预显示，生成成功才占用；本 PI 已有的值删光号、改选后仍归它），超出范围须改前缀。
+一个前缀一条规则：第一张 PI 生成时存入规则库（当前版本即它的配置），之后各 PI 的版本另出在这条规则下（不改当前版本）。
 """
 
 from __future__ import annotations
@@ -27,7 +33,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from app.core import encoding as codec
 from app.core import utils as util
@@ -59,6 +65,8 @@ PLAN_CLAIM = "CLAIM"
 PLAN_NEW = "NEW"
 PLAN_SHARE = "SHARE"
 PLAN_PREFIX = "PREFIX"
+#: 带自增数值的规则库规则，本 PI 还没有自己的值：生成时在这条规则下为本 PI 另出「前缀 + 自增值」的版本（见 Inc）
+PLAN_INC = "INC"
 
 RULE_FIELDS = (
     "id",
@@ -90,10 +98,65 @@ VERSION_FIELDS = (
     "used",
     "claimed_pi",
     "derived_from",
+    "inc_head",
+    "inc_tail",
+    "inc_start",
+    "inc_end",
+    "inc_value",
+    "inc_customer",
     "created_by",
     "created_at",
     "updated_at",
 )
+
+#: 自增数值结束值上限（最多 3 位）
+INC_MAX = 999
+
+
+@dataclass(frozen=True)
+class Inc:
+    """自增数值（中间件）：head 为前缀层文本（防重前缀），tail 为自增数值之后、流水之前的固定字符；
+    范围 start~end，位数为 end 的位数，不足左补 0（0~99 为 00~99）。"""
+
+    head: str
+    tail: str
+    start: int
+    end: int
+
+    @property
+    def width(self) -> int:
+        return len(str(self.end))
+
+    def text(self, value: int) -> str:
+        return str(value).zfill(self.width)
+
+    def prefix(self, value: int) -> str:
+        """本 PI 号段的完整前缀（版本 prefix、排号、号池都按它）。"""
+        return self.head + self.text(value) + self.tail
+
+    def fields(self) -> dict:
+        return {"inc_start": self.start, "inc_end": self.end, "inc_tail": self.tail}
+
+
+def inc_of(v: dict | None) -> Inc | None:
+    """版本行的自增数值；不带为 None。"""
+    if v is None or v.get("inc_head") is None:
+        return None
+    return Inc(v["inc_head"], v.get("inc_tail") or "", int(v["inc_start"]), int(v["inc_end"]))
+
+
+def _inc_of_custom(c: dict, head: str) -> Inc | None:
+    """自定义规则参数里的自增数值（inc_end 不为空即带）：只能是数字，0 <= 起始值 <= 结束值 <= 999。"""
+    if c.get("inc_end") is None:
+        return None
+    try:
+        start = 0 if c.get("inc_start") is None else int(c["inc_start"])
+        end = int(c["inc_end"])
+    except (TypeError, ValueError):
+        raise biz(ErrorCode.RULE_INC_RANGE_INVALID) from None
+    if not 0 <= start <= end <= INC_MAX:
+        raise biz(ErrorCode.RULE_INC_RANGE_INVALID)
+    return Inc(head, util.trim(c.get("inc_tail")), start, end)
 
 
 def rule_json(r: dict | None) -> dict | None:
@@ -123,9 +186,13 @@ def spec_of(v: dict) -> codec.Spec:
     )
 
 
-def format_text(s: codec.Spec) -> str:
-    """格式说明：HX + 6 位 10 进制流水 + - + 米数（补足 5 位）+ M + 单位 + A。"""
-    parts = [s.prefix, f"{s.seq_len} 位 {s.base} 进制流水"]
+def format_text(s: codec.Spec, inc: Inc | None = None) -> str:
+    """格式说明：HX + 6 位 10 进制流水 + - + 米数（补足 5 位）+ M + 单位 + A。
+    带自增数值（inc）时前缀写成 HX + 自增数值（0~9）（+ 固定字符）。"""
+    head = [s.prefix] if inc is None else [inc.head, f"自增数值（{inc.text(inc.start)}~{inc.text(inc.end)}）"]
+    if inc is not None and inc.tail:
+        head.append(inc.tail)
+    parts = [*head, f"{s.seq_len} 位 {s.base} 进制流水"]
     if s.with_length:
         if s.sep_before:
             parts.append(s.sep_before)
@@ -227,6 +294,10 @@ def check_prefix(
 def _prefix_rules(
     prefix: str, spec: codec.Spec | None, pi: str | None, exclude_version: int | None, lock: bool
 ) -> None:
+    # 普通前缀不能与自增前缀（前缀层文本）相同或一个是另一个的开头：自增前缀下的全部号段（ABC0、ABC1…）都归它
+    inc = _overlapping_inc(prefix)
+    if inc is not None:
+        raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=prefix, other=inc["inc_head"], pi=inc["claimed_pi"] or "-")
     every = db.all("SELECT * FROM sn_rule_version WHERE prefix = %s" + (" FOR UPDATE" if lock else ""), prefix)
     by_id = {v["id"]: v for v in every}
     for v in every:
@@ -258,6 +329,149 @@ def _overlapping(prefix: str) -> list[dict]:
         prefix,
         *heads,
     )
+
+
+def _heads(text: str) -> list[str]:
+    """text 的各个真前缀（开头部分）。"""
+    return [text[:k] for k in range(1, len(text))]
+
+
+def _overlapping_inc(prefix: str, other_than: str | None = None) -> dict | None:
+    """与 prefix 相同或一个是另一个开头的自增前缀（inc_head；other_than 为自己的，不算）；最多一行。"""
+    heads = _heads(prefix)
+    sql = (
+        "SELECT inc_head, claimed_pi FROM sn_rule_version WHERE inc_head IS NOT NULL"
+        + ("" if other_than is None else " AND inc_head <> %s")
+        + " AND (inc_head LIKE %s"
+        + (f" OR inc_head IN ({marks(len(heads))})" if heads else "")
+        + ") ORDER BY id LIMIT 1"
+    )
+    args = ([] if other_than is None else [other_than]) + [util.like_prefix(prefix), *heads]
+    return db.one(sql, *args)
+
+
+def _customer(pi: str) -> str | None:
+    """PI 的客户编码（单据编号最小的那张单据的；一张 PI 只有一个客户编码）。"""
+    from app.services import orders
+
+    return orders.customer_of_pi(pi)
+
+
+def inc_pick(pi: str, inc: Inc, customer: str | None) -> int:
+    """本 PI 在自增前缀 inc.head 下用的自增值：本 PI 已有的（号全删掉、改选过也还是它的）；没有时为已用最大值 + 1
+    （不小于起始值）。前缀已锁定别的客户（RULE_INC_CUSTOMER）、已按别的位数用了（RULE_INC_WIDTH）、
+    超出范围（RULE_INC_EXHAUSTED，须改前缀）时报错。"""
+    rows = db.all(
+        "SELECT claimed_pi, inc_value, inc_end, inc_customer FROM sn_rule_version "
+        "WHERE inc_head = %s AND inc_value IS NOT NULL",
+        inc.head,
+    )
+    own = next((int(r["inc_value"]) for r in rows if r["claimed_pi"] == pi), None)
+    if own is not None:
+        return own
+    if not customer:
+        raise biz(ErrorCode.RULE_INC_NO_CUSTOMER, pi=pi)
+    other = next((r["inc_customer"] for r in rows if r["inc_customer"] != customer), None)
+    if other is not None:
+        raise biz(ErrorCode.RULE_INC_CUSTOMER, prefix=inc.head, customer=other)
+    width = next((len(str(r["inc_end"])) for r in rows if len(str(r["inc_end"])) != inc.width), None)
+    if width is not None:
+        raise biz(ErrorCode.RULE_INC_WIDTH, prefix=inc.head, width=width)
+    value = max([inc.start] + [int(r["inc_value"]) + 1 for r in rows])
+    if value > inc.end:
+        raise biz(ErrorCode.RULE_INC_EXHAUSTED, prefix=inc.head, start=inc.text(inc.start), end=inc.text(inc.end))
+    return value
+
+
+def _inc_guard(inc: Inc, value: int, spec: codec.Spec, pi: str) -> None:
+    """自增前缀的防重（只看前缀层 inc.head）：
+    - 普通前缀与 head 相同或一个是另一个的开头、别的自增前缀与 head 一个是另一个的开头：RULE_PREFIX_OVERLAP；
+    - 这个自增值已归别的 PI：RULE_INC_TAKEN（选规则后被别的 PI 先生成占走）；
+    - 本 PI 的号段（完整前缀）已按别的进制 / 位数 / 字符表用过（号全删掉后仍锁定）：RULE_PREFIX_FORMAT_LOCKED。
+    同一 head 下各值之间不互相校验：自增位数锁定、紧跟前缀，值不同的号在这一位上一定不同。"""
+    head = inc.head
+    heads = _heads(head)
+    plain = db.one(
+        "SELECT prefix, claimed_pi FROM sn_rule_version WHERE inc_head IS NULL AND (prefix LIKE %s"
+        + (f" OR prefix IN ({marks(len(heads))})" if heads else "")
+        + ") ORDER BY id LIMIT 1",
+        util.like_prefix(head),
+        *heads,
+    )
+    if plain is not None:
+        raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=head, other=plain["prefix"], pi=plain["claimed_pi"] or "-")
+    other = _overlapping_inc(head, other_than=head)
+    if other is not None:
+        raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=head, other=other["inc_head"], pi=other["claimed_pi"] or "-")
+    taken = db.one(
+        "SELECT claimed_pi FROM sn_rule_version WHERE inc_head = %s AND inc_value = %s AND claimed_pi <> %s LIMIT 1",
+        head,
+        value,
+        pi,
+    )
+    if taken is not None:
+        raise biz(ErrorCode.RULE_INC_TAKEN, prefix=head, value=inc.text(value), pi=taken["claimed_pi"])
+    for v in db.all("SELECT * FROM sn_rule_version WHERE prefix = %s AND claimed_pi = %s", spec.prefix, pi):
+        b = base_of(v)
+        if not same_seq_format(spec_of(b), spec):
+            raise biz(ErrorCode.RULE_PREFIX_FORMAT_LOCKED, prefix=spec.prefix, base=b["base"], seq_len=b["seq_len"])
+
+
+def _inc_verify(inc: Inc, value: int, spec: codec.Spec, pi: str, customer: str | None) -> None:
+    """本 PI 能否用自增值 value（完整前缀 spec.prefix）：防重、客户、位数、范围都过，且仍是本 PI 该取的值。"""
+    _inc_guard(inc, value, spec, pi)
+    got = inc_pick(pi, inc, customer)
+    if got != value:
+        raise biz(ErrorCode.RULE_INC_TAKEN, prefix=inc.head, value=inc.text(value), pi="-")
+
+
+def _inc_lock_key(head: str) -> str:
+    """自增前缀锁（与前缀锁同一组命名锁，键另加标记，不与真实前缀相同）。"""
+    return "\x01INC\x01" + head
+
+
+def check_inc(inc: Inc, value: int, spec: codec.Spec, pi: str, customer: str | None, gen: bool = False) -> None:
+    """在事务内校验并占住自增前缀（拿自增前缀锁，锁到事务结束：同一自增前缀的取值、生成串行）。
+    gen（生成事务内）：按本事务所见与最新已提交的数据各判断一次（本事务的快照可能早于别的 PI 的生成提交）。"""
+    locks.hold_prefixes([_inc_lock_key(inc.head)])
+    _inc_verify(inc, value, spec, pi, customer)
+    if gen:
+        with db.new_tx():
+            _inc_verify(inc, value, spec, pi, customer)
+
+
+def inc_usable(res: Resolved, pi: str) -> bool:
+    """check_inc 的判断版（不加锁、不抛错）：带自增数值的规则本 PI 现在能否用（生成页逐行判断）。"""
+    if res.inc is None or res.version is None:
+        return False
+    try:
+        _inc_verify(res.inc, int(res.version["inc_value"]), res.spec(), pi, res.version.get("inc_customer"))
+    except BizError:
+        return False
+    return True
+
+
+def check_line_prefix(res: Resolved | None, prefix: str | None, pi: str, registered: str | None = None) -> None:
+    """确认生成时前缀不能用的具体原因（页面弹窗提示）：带自增数值的规则按自增前缀判断（取不到值时为当时的原因；
+    选规则时预显示的值（登记的前缀 registered）已被别的 PI 先生成占走时报 RULE_INC_TAKEN），其余按 check_prefix。"""
+    if res is not None and res.fail is not None:
+        raise res.fail
+    if res is not None and res.inc is not None and res.version is not None:
+        inc = res.inc
+        if registered and registered != res.version["prefix"] and registered.startswith(inc.head):
+            who = db.scalar(
+                "SELECT claimed_pi FROM sn_rule_version WHERE prefix = %s AND claimed_pi <> %s LIMIT 1", registered, pi
+            )
+            raise biz(
+                ErrorCode.RULE_INC_TAKEN,
+                prefix=inc.head,
+                value=registered[len(inc.head) : len(inc.head) + inc.width],
+                pi=who or "-",
+            )
+        check_inc(inc, int(res.version["inc_value"]), res.spec(), pi, res.version.get("inc_customer"))
+        return
+    if prefix:
+        check_prefix(prefix, spec=res.spec() if res is not None and res.ready else None, pi=pi)
 
 
 def prefix_usable(prefix: str, spec: codec.Spec, pi: str, exclude_version: int | None = None) -> bool:
@@ -334,7 +548,19 @@ def grow_version(cu: CurrentUser, pi: str, base: dict, width: int) -> dict:
     if err is not None:
         raise biz(err)
     n = _next_version(base["rule_id"])
-    vid = _insert_version(cu, base["rule_id"], n, spec, util.now(), used=True, claimed_pi=pi, derived_from=base["id"])
+    vid = _insert_version(
+        cu,
+        base["rule_id"],
+        n,
+        spec,
+        util.now(),
+        used=True,
+        claimed_pi=pi,
+        derived_from=base["id"],
+        inc=inc_of(base),
+        inc_value=base.get("inc_value"),
+        inc_customer=base.get("inc_customer"),
+    )
     code = db.scalar("SELECT rule_code FROM sn_rule WHERE id = %s", base["rule_id"])
     audit.record(
         cu,
@@ -371,7 +597,24 @@ def pi_prefix(pi: str) -> dict:
       prefix 为 PI 第一张单据（单据编号最小）编码后 7 位，只在取不到点选的单据时兜底。"""
     row = pi_rule(pi)
     res = _registered(pi, row)
+    if res is not None and res.inc is not None:
+        # 已登记带自增数值的规则：前缀为前缀层文本，custom 另带自增范围与本 PI 的值（取不到时 inc_error 为原因）
+        assert row is not None
+        v = None if res.version is None else (res.version if res.plan in (PLAN_NEW, PLAN_INC) else base_of(res.version))
+        if v is not None:
+            custom = _custom_dict(spec_of(v), res.inc)
+        elif res.custom is not None:
+            custom = dict(res.custom)
+        else:
+            # 规则库规则取不到值（已用完等）：按规则当前版本（第一张 PI 的配置）带出
+            t = current_version(res.rule) if res.rule is not None else None
+            custom = {} if t is None else _custom_dict(spec_of(t), res.inc)
+        return _inc_prefix_info(res.inc, custom, v, res.fail, prefix_grow(row["prefix"]), True)
     if row is None or res is None or res.version is None:
+        # 还没登记：本 PI 的客户用过带自增数值的规则时，默认带出最近一次生成用的那条（下一个自增值）
+        d = _customer_inc_default(pi)
+        if d is not None:
+            return d
         first = db.scalar("SELECT MIN(bill_no) FROM sn_prd_mo WHERE pi = %s", pi) or ""
         p = first[-7:]
         return {"prefix": p, "custom": None, "seq_grow": prefix_grow(p) if p else True, "registered": False}
@@ -382,6 +625,47 @@ def pi_prefix(pi: str) -> dict:
         "seq_grow": prefix_grow(row["prefix"]),
         "registered": True,
     }
+
+
+def _inc_prefix_info(
+    inc: Inc, custom: dict, v: dict | None, fail: BizError | None, grow: bool, registered: bool
+) -> dict:
+    """pi_prefix 的带自增数值版：prefix 为前缀层文本（页面组件拆回为「前缀 + 自增数值 + 固定字符」），
+    inc_value 为本 PI 的值（只预显示），取不到时 inc_error 为原因（已用完须改前缀等）。"""
+    value = None if v is None else v.get("inc_value")
+    return {
+        "prefix": inc.head,
+        "custom": {**custom, "inc_value": value},
+        "seq_grow": grow,
+        "registered": registered,
+        "inc": _inc_json(inc, value),
+        "inc_error": _err_json(fail),
+    }
+
+
+def _customer_inc_default(pi: str) -> dict | None:
+    """本 PI 的客户最近一次生成用的带自增数值的规则：同一客户的新 PI 默认带出它的配置（取下一个自增值）；
+    没有为 None。"""
+    customer = _customer(pi)
+    if not customer:
+        return None
+    last = db.one(
+        "SELECT * FROM sn_rule_version WHERE inc_customer = %s AND inc_head IS NOT NULL ORDER BY id DESC LIMIT 1",
+        customer,
+    )
+    if last is None:
+        return None
+    v = base_of(last)
+    inc = inc_of(v)
+    assert inc is not None
+    spec = spec_of(v)
+    fail = None
+    try:
+        value = inc_pick(pi, inc, customer)
+    except BizError as e:
+        value, fail = None, e
+    draft = None if value is None else {**v, "inc_value": value}
+    return _inc_prefix_info(inc, _custom_dict(spec, inc), draft, fail, True, False)
 
 
 def pi_prefix_locked(pi: str) -> dict[str, dict]:
@@ -395,6 +679,10 @@ def pi_prefix_locked(pi: str) -> dict[str, dict]:
         pi,
     ):
         out[v["prefix"]] = _custom_dict(spec_of(v))
+        inc = inc_of(v)
+        if inc is not None:
+            # 带自增数值：页面组成里的前缀是前缀层文本，按它也能找到本 PI 号段锁定的格式
+            out[inc.head] = _custom_dict(spec_of(v), inc)
     return out
 
 
@@ -415,12 +703,37 @@ SAMPLE_UNIT = "M"
 
 
 def preview(
-    s: SpecIn, length: str | None = None, unit: str | None = None, seq_start: int | None = None, grow: bool = False
+    s: SpecIn,
+    length: str | None = None,
+    unit: str | None = None,
+    seq_start: int | None = None,
+    grow: bool = False,
+    inc_in: dict | None = None,
+    pi_in: str | None = None,
 ) -> dict:
     """编辑时的示例号：前 5 个和最大号（米数、单位用示例值）、最大流水（规则位数的）。seq_start：从这个流水起
     （自定义规则的起始号），不填从 1 起。grow（上限自动突破）：起始号可超过规则位数（按突破后的位数），
-    最大号之后另带突破后的第一个号（最大流水 + 1）。"""
+    最大号之后另带突破后的第一个号（最大流水 + 1）。
+    inc_in（自增数值：inc_start、inc_end、inc_tail；s.prefix 为前缀层文本）：示例按 pi_in 将取的值（只预显示，
+    不占用）；取不到值（已用完须改前缀、前缀已锁定别的客户等）时 inc_error 为原因，示例按起始值。"""
     spec = normalize(s)
+    inc = None if inc_in is None else _inc_of_custom(inc_in, spec.prefix)
+    inc_out = None
+    if inc is not None:
+        pi = util.trim(pi_in)
+        fail = None
+        value = inc.start
+        try:
+            if not pi:
+                raise biz(ErrorCode.PI_REQUIRED)
+            value = inc_pick(pi, inc, _customer(pi))
+        except BizError as e:
+            fail = e
+        spec = replace(spec, prefix=inc.prefix(value))
+        err = codec.validate(spec)
+        if err is not None:
+            raise biz(err)
+        inc_out = {**(_inc_json(inc, None if fail else value) or {}), "error": _err_json(fail)}
     sample_len = codec.clean_length(length) or SAMPLE_LENGTH
     sample_unit = util.trim(unit) or SAMPLE_UNIT
     mx = codec.max_seq(spec)
@@ -443,10 +756,11 @@ def preview(
     ]
     return {
         "max_seq": mx,
-        "format": format_text(spec),
+        "format": format_text(spec, inc),
         "sample_length": sample_len,
         "sample_unit": sample_unit,
         "samples": samples,
+        "inc": inc_out,
     }
 
 
@@ -635,11 +949,11 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
             except BizError:
                 continue
             if res.version is not None and res.version["claimed_pi"] != p:
-                will.setdefault(res.version["prefix"], set()).add(p)
-        for prefix in dict.fromkeys(v["prefix"] for v in base):
-            on = [v for v in base if v["prefix"] == prefix]
+                will.setdefault(_group_key(res.version), set()).add(p)
+        for prefix in dict.fromkeys(_group_key(v) for v in base):
+            on = [v for v in base if _group_key(v) == prefix]
             shown = max(on, key=lambda v: v["id"])
-            claimed = {v["claimed_pi"] for v in vs if v["prefix"] == prefix and v["claimed_pi"]}
+            claimed = {v["claimed_pi"] for v in vs if _group_key(v) == prefix and v["claimed_pi"]}
             g = groups.setdefault(
                 prefix,
                 {
@@ -654,16 +968,31 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
                     "factories": set(),
                     "spec": spec_of(shown),
                     "last_at": shown["created_at"],
+                    "inc": None,
                 },
             )
+            inc = inc_of(shown)
+            if inc is not None:
+                # 自增前缀：组上为前缀层文本、范围、锁定的客户与各 PI 的值（每张 PI 一个号段）
+                g["inc"] = {
+                    **(_inc_json(inc, None) or {}),
+                    "customer": shown["inc_customer"],
+                    "values": sorted(
+                        {
+                            (int(v["inc_value"]), v["claimed_pi"], v["prefix"])
+                            for v in on
+                            if v["claimed_pi"] and v["inc_value"] is not None
+                        }
+                    ),
+                }
             g["rules"].append(
                 {
                     "rule": rule_json(r),
                     "version": version_json(shown),
                     "current": version_json(cur),
                     # 规则的当前版本已换到别的前缀时为 False（编辑按当前版本）
-                    "is_current_prefix": cur is not None and cur["prefix"] == prefix,
-                    "used": any(v["used"] for v in vs if v["prefix"] == prefix),
+                    "is_current_prefix": cur is not None and _group_key(cur) == prefix,
+                    "used": any(v["used"] for v in vs if _group_key(v) == prefix),
                     "rule_used": any(v["used"] for v in vs),
                     "pis": sorted(claimed),
                     "selected_pis": sorted(will.get(prefix, set()) - claimed),
@@ -719,9 +1048,25 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
                 "top_text": _seq_text_of(top, spec),
                 # 流水上限自动突破（按前缀；前缀还没登记时默认开启）
                 "seq_grow": True if c is None else bool(c["seq_grow"]),
+                # 自增前缀：{head, start, end, width, customer, values: [{value, text, pi_no, prefix}]}；
+                # 各 PI 的号段各自排号（最大号、自动突破按各号段），组上不给 top_seq
+                "inc": None
+                if g["inc"] is None
+                else {
+                    **g["inc"],
+                    "values": [
+                        {"value": v, "text": str(v).zfill(g["inc"]["width"]), "pi_no": p, "prefix": x}
+                        for v, p, x in g["inc"]["values"]
+                    ],
+                },
             }
         )
     return res
+
+
+def _group_key(v: dict) -> str:
+    """规则库按前缀归档的组：带自增数值的版本按前缀层文本（ABC0、ABC1… 都在 ABC 下），其余按前缀。"""
+    return v["inc_head"] if v.get("inc_head") is not None else v["prefix"]
 
 
 def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> dict:
@@ -729,14 +1074,20 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
     含已转出的）、PI 自己生成的最大号与前缀最大号。前缀须有授权范围内能看到的规则。"""
     prefix = util.trim(prefix_in)
     vsql, args = _visible_sql(facs)
+    # 自增前缀（前缀层文本）：组内是各 PI 的号段（ABC0、ABC1…），按 inc_head 取
+    col = (
+        "inc_head"
+        if prefix and db.exists("SELECT EXISTS(SELECT 1 FROM sn_rule_version WHERE inc_head = %s)", prefix)
+        else "prefix"
+    )
     vs = db.all(
-        "SELECT v.* FROM sn_rule_version v JOIN sn_rule r ON r.id = v.rule_id WHERE v.prefix = %s" + vsql,
+        f"SELECT v.* FROM sn_rule_version v JOIN sn_rule r ON r.id = v.rule_id WHERE v.{col} = %s" + vsql,
         prefix,
         *args,
     )
     if not prefix or not vs:
         raise biz(ErrorCode.RULE_NOT_FOUND)
-    every = db.all("SELECT * FROM sn_rule_version WHERE prefix = %s ORDER BY id", prefix)
+    every = db.all(f"SELECT * FROM sn_rule_version WHERE {col} = %s ORDER BY id", prefix)
     base = next((v for v in _base_versions(every)), every[0])
     spec = spec_of(base)
     codes = {
@@ -767,9 +1118,13 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         for p in pis:
             u = used.get(p)
             lo, hi, n = (int(u["lo"]), int(u["hi"]), int(u["n"])) if u else (0, 0, 0)
+            mine = next((v for v in every if v["claimed_pi"] == p), None)
             out.append(
                 {
                     "pi_no": p,
+                    # 自增前缀：本 PI 的号段（完整前缀）与自增值
+                    "seq_prefix": None if mine is None else mine["prefix"],
+                    "inc_value": None if mine is None else mine.get("inc_value"),
                     "rules": sorted({codes.get(v["rule_id"], "") for v in every if v["claimed_pi"] == p}),
                     "min_seq": lo,
                     "max_seq": hi,
@@ -792,6 +1147,7 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         "top_seq": prefix_last(prefix),
         "top_text": _seq_text_of(prefix_last(prefix), spec),
         "seq_grow": prefix_grow(prefix),
+        "inc": _inc_json(inc_of(base), None) if col == "inc_head" else None,
     }
 
 
@@ -827,11 +1183,16 @@ def _insert_version(
     used=False,
     claimed_pi=None,
     derived_from=None,
+    inc: Inc | None = None,
+    inc_value: int | None = None,
+    inc_customer: str | None = None,
 ) -> int:
+    """inc：带自增数值的版本（spec.prefix 为完整的「前缀 + 自增值 + 固定字符」，inc_value 为取到的值）。"""
     return db.insert(
         "INSERT INTO sn_rule_version(rule_id, version, prefix, suffix, base, seq_len, charset, with_length, "
-        "length_pad, length_sep_before, length_sep_after, with_unit, used, claimed_pi, derived_from, created_by, "
-        "created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "length_pad, length_sep_before, length_sep_after, with_unit, used, claimed_pi, derived_from, inc_head, "
+        "inc_tail, inc_start, inc_end, inc_value, inc_customer, created_by, created_at, updated_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         rule_id,
         version,
         spec.prefix,
@@ -847,6 +1208,12 @@ def _insert_version(
         1 if used else 0,
         claimed_pi,
         derived_from,
+        None if inc is None else inc.head,
+        "" if inc is None else inc.tail,
+        None if inc is None else inc.start,
+        None if inc is None else inc.end,
+        None if inc is None else inc_value,
+        None if inc is None else inc_customer,
         cu.emp_no,
         now,
         now,
@@ -862,6 +1229,9 @@ def _insert_rule(
     note: str = "",
     claimed_pi: str | None = None,
     factory: str | None = None,
+    inc: Inc | None = None,
+    inc_value: int | None = None,
+    inc_customer: str | None = None,
 ) -> int:
     now = util.now()
     rid = db.insert(
@@ -877,7 +1247,18 @@ def _insert_rule(
         cu.emp_no,
         now,
     )
-    _insert_version(cu, rid, 1, spec, now, used=claimed_pi is not None, claimed_pi=claimed_pi)
+    _insert_version(
+        cu,
+        rid,
+        1,
+        spec,
+        now,
+        used=claimed_pi is not None,
+        claimed_pi=claimed_pi,
+        inc=inc,
+        inc_value=inc_value,
+        inc_customer=inc_customer,
+    )
     audit.record(
         cu,
         audit.entry(audit.RULE_CREATE)
@@ -951,6 +1332,11 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
         action = "UNCHANGED"
         version = r["current_version"]
         now = util.now()
+        if spec != before and db.exists(
+            "SELECT EXISTS(SELECT 1 FROM sn_rule_version WHERE rule_id = %s AND inc_head IS NOT NULL)", r["id"]
+        ):
+            # 带自增数值的规则：规则库只展示，编码格式在生成页「选规则」里改（改前缀即另一条规则）
+            raise biz(ErrorCode.RULE_INC_READONLY, rule_code=r["rule_code"])
         if spec != before:
             if cur["used"]:
                 # 生成过号：另出一版。沿用同一前缀（只改米数、单位、后缀）时仍归属原 PI，流水部分须相同；
@@ -1071,6 +1457,10 @@ class Resolved:
     seq_start: int | None = None
     #: 流水上限自动突破（按前缀，见 sn_prefix_counter.seq_grow）；不参与 key（同格式共用同一版）
     seq_grow: bool = False
+    #: 带自增数值：version 的 prefix 为本 PI 的完整前缀，inc_value / inc_customer 为取到的值、PI 的客户
+    inc: Inc | None = None
+    #: 带自增数值但本 PI 取不到值（已用完、前缀已锁定别的客户、位数不同）：version 为 None，fail 为原因
+    fail: BizError | None = field(default=None, compare=False)
 
     @property
     def ready(self) -> bool:
@@ -1098,6 +1488,8 @@ def _resolve_in(rule: dict, vs: list[dict], pi: str, source: str) -> Resolved:
     t = _current_of(rule, vs)
     if t is None:
         raise biz(ErrorCode.RULE_VERSION_NOT_FOUND)
+    if t.get("inc_head") is not None:
+        return _resolve_inc(rule, vs, t, pi, source)
     # 为本 PI 另出的版本：换前缀另出的（前缀不同）或共用前缀另出的（前缀、位数都相同）；
     # 同前缀、位数不同的是上限自动突破另出的版本，不算
     own = next(
@@ -1118,6 +1510,47 @@ def _resolve_in(rule: dict, vs: list[dict], pi: str, source: str) -> Resolved:
     if t["claimed_pi"] is None:
         return Resolved(source, MODE_LIBRARY, PLAN_CLAIM, rule, t)
     return Resolved(source, MODE_LIBRARY, PLAN_SHARE, rule, t, other_pi=t["claimed_pi"])
+
+
+def _own_inc(vs: list[dict], pi: str) -> dict | None:
+    """本 PI 在带自增数值的规则下自己的版本（最新的，不算上限自动突破另出的）；号全删掉、改选过也还是它的。"""
+    by_id = {v["id"]: v for v in vs}
+    return next(
+        (
+            v
+            for v in vs
+            if v["claimed_pi"] == pi
+            and v.get("inc_head") is not None
+            and not is_grow_version(v, by_id.get(v["derived_from"]))
+        ),
+        None,
+    )
+
+
+def _resolve_inc(rule: dict, vs: list[dict], t: dict, pi: str, source: str) -> Resolved:
+    """带自增数值的规则（当前版本 t 为第一张 PI 的配置）：本 PI 已有自己的值时用自己的版本；否则按 t 的配置取
+    下一个自增值（PLAN_INC，只预显示，生成时才另出版本、占用）。取不到值时 version 为 None、fail 为原因。"""
+    own = _own_inc(vs, pi)
+    if own is not None:
+        return Resolved(source, MODE_LIBRARY, PLAN_USE, rule, own, inc=inc_of(own))
+    inc = inc_of(t)
+    assert inc is not None
+    customer = _customer(pi)
+    try:
+        value = inc_pick(pi, inc, customer)
+    except BizError as e:
+        return Resolved(source, MODE_LIBRARY, PLAN_INC, rule, None, inc=inc, fail=e)
+    draft = {
+        **t,
+        "id": None,
+        "prefix": inc.prefix(value),
+        "used": 0,
+        "claimed_pi": None,
+        "derived_from": t["id"],
+        "inc_value": value,
+        "inc_customer": customer,
+    }
+    return Resolved(source, MODE_LIBRARY, PLAN_INC, rule, draft, inc=inc)
 
 
 def _custom_spec(c: dict) -> codec.Spec:
@@ -1147,10 +1580,46 @@ def check_seq_start(seq_start: int | None, spec: codec.Spec, grow: bool = False)
     return int(seq_start)
 
 
-def _custom_resolved(source: str, c: dict) -> Resolved:
+def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
+    """自定义规则参数 → 本 PI 将用的规则。带自增数值（c 里 inc_end 不为空，prefix 为前缀层文本）时按 pi 取值：
+    version 的 prefix 为完整的「前缀 + 自增值 + 固定字符」；取不到值时 version 为 None、fail 为原因。"""
     spec = _custom_spec(c)
     grow = bool(c.get("seq_grow"))
     start = check_seq_start(c.get("seq_start"), spec, grow)
+    inc = _inc_of_custom(c, spec.prefix)
+    custom = _custom_dict(spec, inc)
+    extra: dict = {}
+    if inc is not None:
+        customer = _customer(pi) if pi else None
+        try:
+            if not pi:
+                raise biz(ErrorCode.PI_REQUIRED)
+            value = inc_pick(pi, inc, customer)
+        except BizError as e:
+            return Resolved(
+                source,
+                MODE_CUSTOM,
+                PLAN_NEW,
+                None,
+                None,
+                custom=custom,
+                seq_start=start,
+                seq_grow=grow,
+                inc=inc,
+                fail=e,
+            )
+        spec = replace(spec, prefix=inc.prefix(value))
+        err = codec.validate(spec)
+        if err is not None:
+            raise biz(err)
+        extra = {
+            "inc_head": inc.head,
+            "inc_tail": inc.tail,
+            "inc_start": inc.start,
+            "inc_end": inc.end,
+            "inc_value": value,
+            "inc_customer": customer,
+        }
     draft = {
         "id": None,
         "rule_id": None,
@@ -1168,15 +1637,16 @@ def _custom_resolved(source: str, c: dict) -> Resolved:
         "used": 0,
         "claimed_pi": None,
         "derived_from": None,
+        **extra,
     }
-    return Resolved(
-        source, MODE_CUSTOM, PLAN_NEW, None, draft, custom=_custom_dict(spec), seq_start=start, seq_grow=grow
-    )
+    return Resolved(source, MODE_CUSTOM, PLAN_NEW, None, draft, custom=custom, seq_start=start, seq_grow=grow, inc=inc)
 
 
-def _custom_dict(spec: codec.Spec) -> dict:
-    return {
-        "prefix": spec.prefix,
+def _custom_dict(spec: codec.Spec, inc: Inc | None = None) -> dict:
+    """自定义规则参数（生成页「选规则」组件按它拆回）。带自增数值时 prefix 为前缀层文本，另带 inc_start、inc_end、
+    inc_tail（不带时与原来相同，没有这几项）。"""
+    out = {
+        "prefix": spec.prefix if inc is None else inc.head,
         "base": spec.base,
         "seq_len": spec.seq_len,
         "with_length": spec.with_length,
@@ -1186,6 +1656,9 @@ def _custom_dict(spec: codec.Spec) -> dict:
         "with_unit": spec.with_unit,
         "suffix": spec.suffix,
     }
+    if inc is not None:
+        out.update(inc.fields())
+    return out
 
 
 # ================================================================== PI 规则登记、规则前缀
@@ -1279,7 +1752,7 @@ def _registered(pi: str, row: dict | None) -> Resolved | None:
     if row is None:
         return None
     if row["rule_id"] is None:
-        res = _custom_resolved(SRC_PI, json.loads(row["custom_json"] or "{}"))
+        res = _custom_resolved(SRC_PI, json.loads(row["custom_json"] or "{}"), pi)
     else:
         r = db.one("SELECT * FROM sn_rule WHERE id = %s", row["rule_id"])
         if r is None:
@@ -1287,6 +1760,26 @@ def _registered(pi: str, row: dict | None) -> Resolved | None:
         res = resolve(r, pi, SRC_PI)
     start = None if row["seq_start"] is None else int(row["seq_start"])
     return replace(res, seq_start=start, seq_grow=prefix_grow(row["prefix"]))
+
+
+def _inc_json(inc: Inc | None, value: int | None) -> dict | None:
+    if inc is None:
+        return None
+    return {
+        "head": inc.head,
+        "tail": inc.tail,
+        "start": inc.start,
+        "end": inc.end,
+        "width": inc.width,
+        "value": value,
+        "text": None if value is None else inc.text(int(value)),
+        "prefix": None if value is None else inc.prefix(int(value)),
+    }
+
+
+def _err_json(e: BizError | None) -> dict | None:
+    """页面按 code + params 渲染（同接口错误体）。"""
+    return None if e is None else {"code": e.code, "message": e.message, "params": e.params}
 
 
 def pi_default(pi: str) -> Resolved | None:
@@ -1314,6 +1807,9 @@ def info(res: Resolved | None, length: str | None = None, start_seq: int = 1, un
         "format": None,
         "first_sn": None,
         "max_seq": None,
+        # 自增数值：前缀层文本、范围、本 PI 的值（只预显示的也给出）；取不到值时 inc_error 为原因
+        "inc": _inc_json(res.inc, None if res.version is None else res.version.get("inc_value")),
+        "inc_error": _err_json(res.fail),
     }
     if res.version is not None:
         s = res.spec()
@@ -1375,8 +1871,15 @@ def _derive(cu: CurrentUser, rule: dict, pi: str, new_prefix: str | None) -> dic
 
 
 def _resolve_for_select(cu: CurrentUser, rule: dict, pi: str, source: str, new_prefix: str | None) -> Resolved:
-    """规则已归属别的 PI 时：填了新前缀则为本 PI 换前缀另出版本；不填则共用前缀（生成时另出同前缀的版本）。"""
+    """规则已归属别的 PI 时：填了新前缀则为本 PI 换前缀另出版本；不填则共用前缀（生成时另出同前缀的版本）。
+    带自增数值的规则：本 PI 没有自己的值时取下一个值（只预显示，生成时才另出版本），前缀防重按前缀层文本。"""
     res = resolve(rule, pi, source)
+    if res.inc is not None:
+        _check_inc_pre(rule, res, new_prefix)
+        if res.plan == PLAN_INC:
+            v = res.version
+            check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"])
+        return res
     if res.plan in (PLAN_SHARE, PLAN_PREFIX):
         if util.blank(new_prefix):
             if res.plan == PLAN_PREFIX:
@@ -1392,6 +1895,17 @@ def _resolve_for_select(cu: CurrentUser, rule: dict, pi: str, source: str, new_p
         _derive(cu, rule, pi, new_prefix)
         res = resolve(rule, pi, source)
     return res
+
+
+def _check_inc_pre(rule: dict, pre: Resolved, new_prefix: str | None) -> None:
+    """带自增数值的规则库规则：取不到值时报原因（已用完、前缀已锁定别的客户等，须改前缀）；新前缀在「自定义」里改
+    （改前缀即另一条规则，自增值从起始值开始）。"""
+    if pre.inc is None:
+        return
+    if not util.blank(new_prefix):
+        raise biz(ErrorCode.RULE_INC_PREFIX_CUSTOM, rule_code=rule["rule_code"])
+    if pre.fail is not None:
+        raise pre.fail
 
 
 def _line_keys(pi: str, lines: list[dict] | None) -> list[tuple[str, int, dict]]:
@@ -1521,13 +2035,25 @@ def select_for_lines(
         cu.check_write(*{line["org_code"] for _, _, line in keys})
         grow = None
         if custom is not None:
-            res = _custom_resolved(SRC_LINE, custom)
+            res = _custom_resolved(SRC_LINE, custom, pi)
             grow = custom.get("seq_grow")
             grow = None if grow is None else bool(grow)
+            if res.fail is not None:
+                raise res.fail
             _check_locked(pi, res.version["prefix"])
-            own = own_version(pi, res.spec()) or same_format_rule(cu, pi, res.spec())
             start = res.seq_start
-            if own is not None:
+            if res.inc is not None:
+                # 带自增数值：只预显示本 PI 的值（生成时才占用，见 realize）；前缀防重按前缀层文本
+                v = res.version
+                check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"])
+                own = None
+            else:
+                own = own_version(pi, res.spec()) or same_format_rule(cu, pi, res.spec())
+            if res.inc is not None:
+                rid, cj = None, dict(res.custom)
+                got = res.inc.text(int(res.version["inc_value"]))
+                label = f"custom {format_text(res.spec())} inc={res.inc.head}[{got}]"
+            elif own is not None:
                 # 前缀、格式与本 PI 已有的版本或规则库里的规则完全相同：登记为那条规则
                 _adopt(cu, own.rule, pi, {line["org_code"] for line in _pi_lines(pi)})
                 if own.plan == PLAN_SHARE:
@@ -1546,6 +2072,7 @@ def select_for_lines(
             rule = get_rule(rule_id)
             check_visible(cu, rule)
             pre = resolve(rule, pi, SRC_LINE)
+            _check_inc_pre(rule, pre, new_prefix)
             target = (
                 util.trim(new_prefix)
                 if pre.plan in (PLAN_SHARE, PLAN_PREFIX) and not util.blank(new_prefix)
@@ -1578,6 +2105,7 @@ def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None, new_prefix:
         rule = get_rule(rule_id)
         check_visible(cu, rule)
         pre = resolve(rule, pi, SRC_PI)
+        _check_inc_pre(rule, pre, new_prefix)
         target = (
             util.trim(new_prefix)
             if pre.plan in (PLAN_SHARE, PLAN_PREFIX) and not util.blank(new_prefix)
@@ -1624,6 +2152,8 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
             or (r["category_scope"] == CUSTOMER and customer and r["category_value"] == customer)
         )
         t = _current_of(r, vs)
+        # 带自增数值的规则锁定客户：本 PI 的客户正是它时推荐
+        recommended = recommended or bool(t is not None and customer and t.get("inc_customer") == customer)
         item = {
             "rule_id": r["id"],
             "rule_code": r["rule_code"],
@@ -1632,7 +2162,7 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
             "category_value": r["category_value"],
             "factory_code": r["factory_code"],
             "recommended": bool(recommended),
-            "format": None if t is None else format_text(spec_of(t)),
+            "format": None if t is None else format_text(spec_of(t), inc_of(t)),
             # 本 PI 用这条规则时的版本号（共用前缀、须换前缀时为另出前的当前版本）
             "version": (res.version["version"] if res is not None and res.version is not None else None)
             or (None if t is None else t["version"]),
@@ -1640,6 +2170,12 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
             "used_pis": len({v["claimed_pi"] for v in vs if v["claimed_pi"] is not None}),
             "plan": None if res is None else res.plan,
             "other_pi": None if res is None else res.other_pi,
+            # 带自增数值：本 PI 用它时的值与完整前缀（只预显示）；取不到值时 inc_error 为原因（已用完须改前缀等）
+            "inc": _inc_json(
+                inc_of(t) if res is None or res.inc is None else res.inc,
+                None if res is None or res.version is None else res.version.get("inc_value"),
+            ),
+            "inc_error": None if res is None else _err_json(res.fail),
         }
         out.append(item)
     out.sort(key=lambda x: (not x["recommended"], x["rule_code"]))
@@ -1670,7 +2206,12 @@ def _bind_rule(pi: str, rule_id: int) -> None:
 def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
     """生成事务内：把本次要用的版本落库、标记已使用并归属本 PI，返回版本行。
     自定义规则（PLAN_NEW）这时才存入规则库（生成失败或取消不留规则），PI 登记改记为这条规则。
-    与预演时的判断不一致（期间被别的 PI 先用、前缀被占用）时报预演已失效。"""
+    与预演时的判断不一致（期间被别的 PI 先用、前缀被占用）时报预演已失效。
+    带自增数值的规则：这时才占用本 PI 的自增值（见 _realize_inc）。"""
+    if res.fail is not None:
+        raise res.fail
+    if res.inc is not None and res.plan in (PLAN_NEW, PLAN_INC):
+        return _realize_inc(cu, pi, res, lines)
     if res.plan == PLAN_NEW:
         spec = res.spec()
         err = codec.validate(spec)
@@ -1714,6 +2255,82 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
     ):
         raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
     return db.one("SELECT * FROM sn_rule_version WHERE id = %s", res.version["id"])
+
+
+def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
+    """生成事务内：占用本 PI 的自增值，落库为本 PI 的版本（前缀为完整的「前缀 + 自增值 + 固定字符」）。
+    先拿自增前缀锁，按最新已提交的数据再确认这个值（期间被别的 PI 先生成占走时报 RULE_INC_TAKEN）。
+    一个前缀一条规则：这个自增前缀已有规则时，在它下面为本 PI 另出版本（不改当前版本，当前版本即第一张 PI 的配置）；
+    还没有时（第一张 PI，自定义规则）存入规则库（编码 PI-PI号-n），当前版本即本 PI 的版本。PI 登记改记为这条规则。"""
+    from app.services import orders
+
+    inc = res.inc
+    assert inc is not None and res.version is not None
+    spec = res.spec()
+    err = codec.validate(spec)
+    if err is not None:
+        raise biz(err)
+    value = int(res.version["inc_value"])
+    customer = res.version.get("inc_customer")
+    check_inc(inc, value, spec, pi, customer, gen=True)
+    orgs = {r["org_code"] for r in _pi_lines(pi)} | (orders.bill_orgs(no for no, _ in lines) - {"-"})
+    fam = db.one("SELECT rule_id FROM sn_rule_version WHERE inc_head = %s ORDER BY id LIMIT 1", inc.head)
+    if fam is None:
+        code, name = _custom_names(pi)
+        owner = next(iter(orgs)) if len(orgs) == 1 else None
+        rid = _insert_rule(
+            cu,
+            code,
+            name,
+            spec,
+            (PI, pi),
+            f" (自定义规则，生成成功后存入规则库；自增前缀 {inc.head} 取 {inc.text(value)}，锁定客户 {customer})",
+            claimed_pi=pi,
+            factory=owner,
+            inc=inc,
+            inc_value=value,
+            inc_customer=customer,
+        )
+        _bind_rule(pi, rid)
+        return db.one("SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = 1", rid)
+    rule = db.one("SELECT * FROM sn_rule WHERE id = %s FOR UPDATE", fam["rule_id"])
+    # 本 PI 在这个前缀下已有完全同格式的版本（号全删掉后重选）：沿用，不另出
+    for v in db.all(
+        "SELECT * FROM sn_rule_version WHERE rule_id = %s AND claimed_pi = %s AND inc_head = %s ORDER BY id DESC",
+        rule["id"],
+        pi,
+        inc.head,
+    ):
+        if spec_of(v) == spec and base_of(v)["id"] == v["id"]:
+            _bind_rule(pi, rule["id"])
+            return v
+    t = current_version(rule)
+    n = _next_version(rule["id"])
+    vid = _insert_version(
+        cu,
+        rule["id"],
+        n,
+        spec,
+        util.now(),
+        used=True,
+        claimed_pi=pi,
+        derived_from=None if t is None else t["id"],
+        inc=inc,
+        inc_value=value,
+        inc_customer=customer,
+    )
+    # 同一客户的各 PI 共用这条规则：别的生产组织的 PI 也用到时改为全局规则（各组织都能看到、选用）
+    if rule["factory_code"] is not None and not orgs <= {rule["factory_code"]}:
+        db.exec("UPDATE sn_rule SET factory_code = NULL WHERE id = %s", rule["id"])
+    audit.record(
+        cu,
+        audit.entry(audit.RULE_PREFIX_VERSION)
+        .pi(pi)
+        .customer(customer)
+        .info(f"{rule['rule_code']} v{n} {describe(spec)} (自增前缀 {inc.head} 取 {inc.text(value)}，归属 {pi})"),
+    )
+    _bind_rule(pi, rule["id"])
+    return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)
 
 
 def share_version(cu: CurrentUser, pi: str, rule: dict, t: dict) -> dict:
