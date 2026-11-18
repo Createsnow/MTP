@@ -227,8 +227,9 @@
             <el-table-column :label="t('common.status')" :min-width="lineW.status">
               <template #default="{ row }">
                 <div v-if="row.quota && row.issues?.length" class="issue-tags">
-                  <!-- 项次拦截：悬停列出挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行），由用户自己去处理 -->
-                  <el-tooltip v-for="i in row.issues" :key="i" placement="top" :disabled="i !== 'ATTACH_ORDER_BLOCKED' || !row.blockers?.length">
+                  <!-- 缺附件项次 / 米数 / 产品单位合成一个「待填写」（输入框标红「必填」）；
+                       项次拦截：悬停列出挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行），由用户自己去处理 -->
+                  <el-tooltip v-for="i in shownIssues(row)" :key="i" placement="top" :disabled="i !== 'ATTACH_ORDER_BLOCKED' || !row.blockers?.length">
                     <template #content>
                       <div>{{ t("generate.blockerTitle") }}</div>
                       <div v-for="b in row.blockers" :key="`${b.bill_no}#${b.seq}`">{{ blockerText(b) }}</div>
@@ -388,6 +389,10 @@ const { nameOf } = useFactories();
 const store = useAuthStore();
 const { fmt: fmtTime } = useTime();
 const issueText = (c: string) => t(`generate.issue.${c}`);
+/** 缺附件项次、米数、产品单位（页面填写即可）：状态列合成一个「待填写」（FILL） */
+const FILL_ISSUES = new Set(["ATTACH_EMPTY", "LENGTH_EMPTY", "UNIT_EMPTY"]);
+/** 状态列显示的原因：待填写的几项合成一个 FILL，放在第一个待填写原因的位置，其余原因照列 */
+const shownIssues = (l: OrderLine): string[] => [...new Set((l.issues || []).map((i) => (FILL_ISSUES.has(i) ? "FILL" : i)))];
 /** 挡路的物料行：PI、单据、行号、附件项次、原因 */
 const blockerText = (b: any) =>
   t("generate.blocker", { pi: b.pi_no, bill: b.bill_no, seq: b.seq, attach: b.attach || "—", reason: t(`generate.blockerReason.${b.reason}`) });
@@ -872,7 +877,7 @@ const lineW = computed(() => {
     // 多个原因标签时上下排列（每个标签完整显示），列宽按最宽的一个
     status: colWidth(t("common.status"), ls.map((l) =>
       l.quota && l.issues?.length
-        ? Math.max(...l.issues.map((i) => tagWidth(issueText(i))))
+        ? Math.max(...shownIssues(l).map((i) => tagWidth(issueText(i))))
         : tagWidth(t(`generate.lineState.${lineState(l)}`)))),
     k3Status: colWidth(t("generate.void.column"), ls.map((l) => textWidth(k3StatusText(l)))),
     sn: Math.max(

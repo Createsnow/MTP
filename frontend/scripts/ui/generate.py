@@ -166,6 +166,7 @@ M = {
 "generate.rule.savedPi": ("已保存：本 PI {n} 个物料行同用此规则", "Saved: {n} lines of this PI use this rule", "Đã lưu: {n} dòng của PI này dùng quy tắc này"),
 "generate.issue.LENGTH_EMPTY": ("米数待填写", "Length to fill", "Chiều dài chờ điền"),
 "generate.issue.UNIT_EMPTY": ("产品单位待填写", "Unit to fill", "Đơn vị chờ điền"),
+"generate.issue.FILL": ("待填写", "To fill", "Chờ điền"),
 "generate.issue.ATTACH_EMPTY": ("附件项次待填写", "Attachment item to fill", "Hạng mục đính kèm chờ điền"),
 "generate.issue.QUOTA_EMPTY": ("没有可生成额度", "No quota left", "Không còn hạn mức"),
 "generate.unitChinese": ("产品单位不能含中文，请填写如 M、m、L", "The unit cannot contain Chinese characters; enter e.g. M, m, L", "Đơn vị không được có chữ Trung Quốc; hãy nhập ví dụ M, m, L"),

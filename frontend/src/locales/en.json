@@ -690,6 +690,7 @@
       "ATTACH_NOT_NUMERIC": "Attachment item must be numeric",
       "LENGTH_EMPTY": "Length to fill",
       "UNIT_EMPTY": "Unit to fill",
+      "FILL": "To fill",
       "ATTACH_EMPTY": "Attachment item to fill",
       "QUOTA_EMPTY": "No quota left"
     },

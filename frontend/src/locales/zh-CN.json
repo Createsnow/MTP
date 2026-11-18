@@ -690,6 +690,7 @@
       "ATTACH_NOT_NUMERIC": "附件项次须为数字",
       "LENGTH_EMPTY": "米数待填写",
       "UNIT_EMPTY": "产品单位待填写",
+      "FILL": "待填写",
       "ATTACH_EMPTY": "附件项次待填写",
       "QUOTA_EMPTY": "没有可生成额度"
     },

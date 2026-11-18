@@ -690,6 +690,7 @@
       "ATTACH_NOT_NUMERIC": "Hạng mục đính kèm phải là số",
       "LENGTH_EMPTY": "Chiều dài chờ điền",
       "UNIT_EMPTY": "Đơn vị chờ điền",
+      "FILL": "Chờ điền",
       "ATTACH_EMPTY": "Hạng mục đính kèm chờ điền",
       "QUOTA_EMPTY": "Không còn hạn mức"
     },
