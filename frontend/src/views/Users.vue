@@ -8,17 +8,17 @@
     <div class="surface fill">
       <el-tabs v-model="tab" @tab-change="onTab">
         <el-tab-pane name="page" :label="t('users.tabAll')" />
-        <el-tab-pane name="mes" :label="t('users.tabMes')" />
+        <el-tab-pane v-if="store.isSuperAdmin" name="mes" :label="t('users.tabMes')" />
       </el-tabs>
       <div class="toolbar">
         <el-input v-model="f.q" :placeholder="t('users.search')" clearable prefix-icon="Search" @keyup.enter="load(1)" @clear="load(1)" />
         <el-select v-if="tab === 'page'" v-model="f.role" clearable :placeholder="t('users.role')" @change="load(1)">
-          <el-option v-for="r in ROLE_CODES" :key="r" :value="r" :label="roleLabel(r)" />
+          <el-option v-for="r in roleCodes" :key="r" :value="r" :label="roleLabel(r)" />
         </el-select>
         <el-select v-model="f.status" clearable :placeholder="t('common.status')" @change="load(1)">
           <el-option value="ACTIVE" :label="t('users.active')" /><el-option value="DISABLED" :label="t('users.disabled')" />
         </el-select>
-        <FactorySelect v-model="f.factory_code" clearable @update:model-value="load(1)" />
+        <FactorySelect v-model="f.factory_code" clearable scoped @update:model-value="load(1)" />
       </div>
       <!-- 不出上下滚动条：每页条数按高度算（useFitRows，定高行 .fit-table），表格与页面都不上下滑动；
            各列宽按表头与本页内容量出（colW），单元格单行完整显示、不截断，总宽超出时表格左右滑动（操作列固定在右侧）；
@@ -93,7 +93,7 @@
         <template v-else>
           <el-form-item :label="t('users.role')" required>
             <el-radio-group v-model="form.role" :disabled="!!editing?.super_admin">
-              <el-radio-button v-for="r in editing?.super_admin ? ['admin'] : ROLE_CODES" :key="r" :value="r">{{ roleLabel(r) }}</el-radio-button>
+              <el-radio-button v-for="r in editing?.super_admin ? ['admin'] : roleCodes" :key="r" :value="r">{{ roleLabel(r) }}</el-radio-button>
             </el-radio-group>
             <div class="muted hint">{{ t(`users.roleHint.${form.role}`) }}</div>
           </el-form-item>
@@ -101,10 +101,10 @@
             <div class="query-factories">
               <el-select v-model="form.factory_codes" multiple filterable clearable collapse-tags collapse-tags-tooltip
                 :max-collapse-tags="3" :placeholder="t('users.allFactoriesOption')">
-                <el-option v-for="x in factories" :key="x.factory_code" :value="x.factory_code" :disabled="!x.enabled && !form.factory_codes.includes(x.factory_code)"
+                <el-option v-for="x in grantable" :key="x.factory_code" :value="x.factory_code" :disabled="!x.enabled && !form.factory_codes.includes(x.factory_code)"
                   :label="`${x.factory_name}（${x.factory_code}）${x.enabled ? '' : t('common.disabledSuffix')}`" />
               </el-select>
-              <el-button link type="primary" @click="form.factory_codes = enabledFactories.map((x) => x.factory_code)">{{ t("users.selectAll") }}</el-button>
+              <el-button link type="primary" @click="form.factory_codes = grantable.filter((x) => x.enabled).map((x) => x.factory_code)">{{ t("users.selectAll") }}</el-button>
             </div>
           </el-form-item>
           <el-form-item v-if="!editing" :label="t('users.initPwd')" required>
@@ -174,9 +174,12 @@ useFitRows(box, (n) => {
 });
 
 const isMes = computed(() => form.role === "mes");
-/** 普通操作员、审计员：授权一个或多个生产组织（至少一个）。 */
-const isScoped = computed(() => form.role === "operator" || form.role === "auditor");
-const enabledFactories = computed(() => factories.value.filter((x) => x.enabled));
+/** 可选角色：系统管理员可建管理员、普通操作员、审计员；管理员只能建普通操作员、审计员。 */
+const roleCodes = computed(() => (store.isSuperAdmin ? ["manager", ...ROLE_CODES] : ROLE_CODES));
+/** 管理员、普通操作员、审计员：授权一个或多个生产组织（至少一个）。 */
+const isScoped = computed(() => ["manager", "operator", "auditor"].includes(form.role));
+/** 可授权的生产组织：系统管理员 = 全部；管理员 = 自己的授权组织（与后端校验一致）。 */
+const grantable = computed(() => (store.isSuperAdmin ? factories.value : factories.value.filter((x) => store.scopeFactories.includes(x.factory_code))));
 /** MES 接口账户绑一个金蝶启用的生产组织（不要求已开启「对接 MES」，可先建账户联调）；已绑的被禁用后仍保留。 */
 const mesFactories = computed(() => factories.value.filter((x) => x.enabled || x.factory_code === form.factory_code));
 const dialogTitle = computed(() => {
@@ -229,7 +232,7 @@ function openEdit(row: any) {
   editing.value = row;
   Object.assign(form, {
     emp_no: row.emp_no, name: row.name, role: row.role, factory_code: row.factory_code || "",
-    factory_codes: row.role === "operator" || row.role === "auditor" ? [...(row.factory_codes || [])] : [],
+    factory_codes: ["manager", "operator", "auditor"].includes(row.role) ? [...(row.factory_codes || [])] : [],
     password: "", ip_whitelist: row.ip_whitelist || "",
   });
   dialog.value = true;
@@ -245,7 +248,7 @@ async function save() {
     return;
   }
   saving.value = true;
-  // MES 接口账户绑一个组织；普通操作员、审计员授权一个或多个（至少一个）；系统管理员不绑
+  // MES 接口账户绑一个组织；管理员、普通操作员、审计员授权一个或多个（至少一个）；系统管理员不绑
   const binding = {
     factory_code: isMes.value ? form.factory_code || null : null,
     factory_codes: isScoped.value ? form.factory_codes : [],

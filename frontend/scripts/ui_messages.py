@@ -18,6 +18,7 @@ M = {
 "app.superAdmin": ("系统管理员", "System admin", "Quản trị hệ thống"),
 "app.scope": ("数据范围", "Data scope", "Phạm vi dữ liệu"),
 "app.roleShort.admin": ("系统管理员", "System admin", "Quản trị hệ thống"),
+"app.roleShort.manager": ("管理员", "Manager", "Quản lý"),
 "app.roleShort.operator": ("普通操作员", "Operator", "Nhân viên vận hành"),
 "app.roleShort.auditor": ("审计员", "Auditor", "Kiểm toán viên"),
 "app.scopeTip.hq": ("系统管理员：可查看、操作全部生产组织的数据",
@@ -174,6 +175,7 @@ M = {
 "leaveState.DELETED": ("已删除", "Deleted", "Đã xóa"),
 # ---------------- roles / scope / transfer ----------------
 "roles.admin": ("系统管理员", "System administrator", "Quản trị hệ thống"),
+"roles.manager": ("管理员", "Manager", "Quản lý"),
 "roles.operator": ("普通操作员", "Operator", "Nhân viên vận hành"),
 "roles.auditor": ("审计员", "Auditor", "Kiểm toán viên"),
 "roles.mes": ("MES 接口账户", "MES interface account", "Tài khoản giao diện MES"),

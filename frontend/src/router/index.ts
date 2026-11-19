@@ -1,17 +1,24 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 
-/** 系统管理员（唯一）、普通操作员、审计员。 */
+/** 系统管理员（唯一）、管理员、普通操作员、审计员。管理员 = 普通操作员 + 操作日志 + 账户管理（限授权组织）。 */
 const ADMIN = ["admin"];
-const OPS = ["admin", "operator"];
-const AUDIT = ["admin", "auditor"];
-const ALL = ["admin", "operator", "auditor"];
+const OPS = ["admin", "manager", "operator"];
+const AUDIT = ["admin", "manager", "auditor"];
+const ALL = ["admin", "manager", "operator", "auditor"];
+/** 账户管理：系统管理员账户 + 管理员（userManage 再按 store.canManageUsers 校验）。 */
+const USER_MANAGE = ["admin", "manager"];
+
+/** 菜单项对当前账户可见：角色在内，且满足 superAdmin（只系统管理员账户）/ userManage（能管理账户）。 */
+export function menuAllowed(m: { roles?: string[]; superAdmin?: boolean; userManage?: boolean }, store: { role: string; isSuperAdmin: boolean; canManageUsers: boolean }) {
+  return !!m.roles?.includes(store.role) && (!m.superAdmin || store.isSuperAdmin) && (!m.userManage || store.canManageUsers);
+}
 
 /**
  * 菜单按业务模块分组（工单、SN、箱号、托号、日志、账户、组织）；soon = 建设中的占位页（菜单标「建设中」）。
  * 新模块在这里加一组，页面放 views/<模块>/；已有页面的路径不变（页面间链接、书签照常可用）。
  */
-export type MenuItem = { path: string; title: string; icon: string; roles: string[]; superAdmin?: boolean; soon?: boolean };
+export type MenuItem = { path: string; title: string; icon: string; roles: string[]; superAdmin?: boolean; userManage?: boolean; soon?: boolean };
 export type MenuGroup = { group: string; icon?: string; items: MenuItem[] };
 
 export const MENU: MenuGroup[] = [
@@ -44,7 +51,7 @@ export const MENU: MenuGroup[] = [
     { path: "/audit", title: "nav.audit", icon: "Notebook", roles: AUDIT },
   ] },
   { group: "nav.groupAccount", icon: "User", items: [
-    { path: "/users", title: "nav.users", icon: "User", roles: ADMIN, superAdmin: true },
+    { path: "/users", title: "nav.users", icon: "User", roles: USER_MANAGE, userManage: true },
     { path: "/user-groups", title: "nav.userGroups", icon: "UserFilled", roles: ADMIN, superAdmin: true },
   ] },
   { group: "nav.groupOrg", icon: "OfficeBuilding", items: [
@@ -74,7 +81,7 @@ const views: Record<string, () => Promise<unknown>> = {
 const children = MENU.flatMap((g) => g.items.map((m) => ({ ...m, group: g.group }))).map((m) => ({
   path: m.path === "/" ? "" : m.path.slice(1),
   component: views[m.path] ?? placeholder,
-  meta: { roles: m.roles, title: m.title, group: m.group, superAdmin: !!m.superAdmin, soon: !!m.soon },
+  meta: { roles: m.roles, title: m.title, group: m.group, superAdmin: !!m.superAdmin, userManage: !!m.userManage, soon: !!m.soon },
 }));
 
 const router = createRouter({
@@ -96,6 +103,7 @@ router.beforeEach((to) => {
   const roles = to.meta.roles as string[] | undefined;
   if (roles && !roles.includes(store.role)) return { path: "/" };
   if (to.meta.superAdmin && !store.isSuperAdmin) return { path: "/" };
+  if (to.meta.userManage && !store.canManageUsers) return { path: "/" };
   return true;
 });
 

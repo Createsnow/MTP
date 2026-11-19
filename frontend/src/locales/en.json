@@ -15,6 +15,7 @@
     "scope": "Data scope",
     "roleShort": {
       "admin": "System admin",
+      "manager": "Manager",
       "operator": "Operator",
       "auditor": "Auditor"
     },
@@ -198,6 +199,7 @@
   },
   "roles": {
     "admin": "System administrator",
+    "manager": "Manager",
     "operator": "Operator",
     "auditor": "Auditor",
     "mes": "MES interface account"
@@ -916,7 +918,7 @@
   },
   "groups": {
     "title": "User groups",
-    "desc": "Permissions by functional module: each user belongs to one user group (the account's role), which decides the modules it can use; operators and auditors are further limited to their authorized production orgs. Set roles and orgs on the “Users” page.",
+    "desc": "Permissions by functional module: each user belongs to one user group (the account's role), which decides the modules it can use; managers, operators and auditors are further limited to their authorized production orgs. Set roles and orgs on the “Users” page.",
     "toUsers": "Go to users",
     "accounts": "{n} active accounts",
     "matrix": "Module permissions",
@@ -1425,7 +1427,7 @@
   },
   "users": {
     "title": "Users",
-    "desc": "Only the system administrator can create, edit, disable and enable accounts and reset passwords; accounts are disabled, never deleted. MES interface accounts cannot sign in to pages; they send employee No. + secret directly on every MES API call.",
+    "desc": "The system administrator can create, edit, disable and enable every account and reset passwords; managers can only manage operators and auditors within their authorized production orgs; accounts are disabled, never deleted. Only the system administrator manages MES interface accounts; they cannot sign in to pages and send employee No. + secret directly on every MES API call.",
     "tabAll": "Accounts",
     "tabMes": "MES interface accounts",
     "create": "New account",
@@ -1438,6 +1440,7 @@
     "role": "Role",
     "roleHint": {
       "admin": "The only system administrator: every production org, every function (including configuration and account management)",
+      "manager": "Authorized for one or more production orgs: every operator function + operation log + managing operator and auditor accounts within those orgs (create, edit, disable, enable, reset password)",
       "operator": "Authorized for one or more production orgs: production orders, SN generation, allocation, rule library (global rules are use-only), transfers, delivery handling, SN export and query",
       "auditor": "Read-only; authorized for one or more production orgs: SN query and export, operation log",
       "mes": "Can only call the MES pull, receipt and read-only APIs of its org"

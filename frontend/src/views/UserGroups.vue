@@ -49,7 +49,7 @@ import { MENU } from "@/router";
 import { roleLabel } from "@/constants";
 import PageHead from "@/components/PageHead.vue";
 
-const GROUPS = ["admin", "operator", "auditor", "mes"];
+const GROUPS = ["admin", "manager", "operator", "auditor", "mes"];
 
 const { t } = useI18n();
 const router = useRouter();

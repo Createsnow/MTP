@@ -35,7 +35,7 @@ export const CHARSETS: Record<number, string> = {
   36: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
 };
 export const BASES = Object.keys(CHARSETS).map(Number);
-/** 可新建的页面账户角色（系统管理员只有一个，不能新建）。 */
+/** 可新建的页面账户角色（系统管理员只有一个，不能新建；管理员只有系统管理员能建，见 Users.vue）。 */
 export const ROLE_CODES = ["operator", "auditor"];
 export const AUDIT_ACTIONS = [
   "SN_GENERATE", "SN_GEN_CANCEL", "SN_REVOKE", "SN_IMPORT", "SN_IMPORT_DELETE", "SN_ALLOCATE", "SN_BATCH_CREATE", "SN_PUSH", "SN_PUSH_RESUME", "SN_PULL",

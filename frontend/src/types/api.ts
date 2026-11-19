@@ -17,7 +17,7 @@ export interface UserView {
   id: number;
   emp_no: string;
   name: string;
-  /** admin 系统管理员 / operator 普通操作员 / auditor 审计员 / mes */
+  /** admin 系统管理员 / manager 管理员 / operator 普通操作员 / auditor 审计员 / mes */
   role: string;
   factory_code: string | null;
   factory_name: string | null;

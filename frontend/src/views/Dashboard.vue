@@ -149,7 +149,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useTime } from "@/composables/useTime";
 import { BATCH_RESULT_TYPE, batchResultLabel, batchSourceLabel, batchTypeLabel, statusLabel } from "@/constants";
 import { tzLabel } from "@/utils/time";
-import { MENU } from "@/router";
+import { MENU, menuAllowed } from "@/router";
 import PageHead from "@/components/PageHead.vue";
 
 const { t } = useI18n();
@@ -199,7 +199,7 @@ function todayLabel(k: string) {
 
 const shortcuts = computed(() =>
   MENU.flatMap((g) => g.items)
-    .filter((m) => m.path !== "/" && m.roles.includes(store.role) && (!("superAdmin" in m) || store.isSuperAdmin))
+    .filter((m) => m.path !== "/" && menuAllowed(m, store))
     .slice(0, 6),
 );
 

@@ -119,7 +119,7 @@ import { useTabsStore } from "@/stores/tabs";
 import { HOME } from "@/tabList.js";
 import TabBar from "./TabBar.vue";
 import { LOCALES, type Locale } from "@/i18n";
-import { MENU } from "@/router";
+import { MENU, menuAllowed } from "@/router";
 import { useTime } from "@/composables/useTime";
 
 const { t, locale } = useI18n();
@@ -130,7 +130,7 @@ const collapsed = ref(false);
 const { tz } = useTime();
 
 const menus = computed(() =>
-  MENU.map((g) => ({ ...g, items: g.items.filter((m) => m.roles.includes(store.role) && (!m.superAdmin || store.isSuperAdmin)) })).filter((g) => g.items.length),
+  MENU.map((g) => ({ ...g, items: g.items.filter((m) => menuAllowed(m, store)) })).filter((g) => g.items.length),
 );
 const activePath = computed(() => route.path);
 /** 初始展开：当前页所在的组和 SN 管理（日常作业都在这组）。 */
@@ -142,8 +142,8 @@ const tabs = useTabsStore();
 
 /** 当前账户能打开的菜单页（F5 恢复页签时过滤；与路由守卫同一规则）。 */
 function allowed(path: string) {
-  const m = router.resolve(path).meta as { title?: string; roles?: string[]; superAdmin?: boolean };
-  return !!m.title && !!m.roles?.includes(store.role) && (!m.superAdmin || store.isSuperAdmin);
+  const m = router.resolve(path).meta as { title?: string; roles?: string[]; superAdmin?: boolean; userManage?: boolean };
+  return !!m.title && menuAllowed(m, store);
 }
 tabs.restore(store.profile?.id, allowed);
 
@@ -185,7 +185,7 @@ watch([() => tabs.tabs.map((x) => pageName(x.path)).join("|"), () => route.path]
   for (const name of wrappers.keys()) if (!names.includes(name)) wrappers.delete(name);
 }, { immediate: true, flush: "post" });
 
-/** 数据范围：系统管理员 = 全部生产组织；普通操作员 = 授权组织；审计员 = 授权组织（只读）。角色与范围分开展示。 */
+/** 数据范围：系统管理员 = 全部生产组织；管理员、普通操作员 = 授权组织；审计员 = 授权组织（只读）。角色与范围分开展示。 */
 const scope = computed(() => {
   const factory = store.scopeNames;
   if (store.isAdmin) return { kind: "hq", icon: "OfficeBuilding", label: t("app.allFactories"), tip: t("app.scopeTip.hq"), readonly: false };
