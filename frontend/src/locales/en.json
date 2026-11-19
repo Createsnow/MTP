@@ -535,6 +535,11 @@
       "custom": "Custom",
       "recommended": "Recommended",
       "fromRule": "From rule {code}",
+      "incCustomers": "Customers",
+      "incAfterGen": "Takes effect after this PI generates",
+      "incPick": "Use a released segment",
+      "incPickNext": "Next value",
+      "incImpactTitle": "After this PI generates, these PIs will be affected",
       "pickedFill": "Filled from rule {code}; edit it here",
       "outcome": {
         "USE": "Will use rule {code}",
@@ -1145,8 +1150,24 @@
     "topSeq": "Max serial",
     "seqGrow": "Auto-extend when full",
     "seqGrowTip": "Set per prefix for all PIs using it; cannot be turned off once serials exceed the rule length",
-    "incTag": "ID code {start}~{end} · customer {customer}",
+    "incTag": "ID code {start}~{end} · customers {customer}",
     "incSegment": "Segment prefix",
+    "incStatus": "Segment status",
+    "incStatusOf": {
+      "USED": "In use",
+      "REMOVED": "Customer removed",
+      "RELEASED": "Released"
+    },
+    "incCustomersEdit": "Customers",
+    "incCustomersTitle": "ID code customers: {prefix}",
+    "incCustomersPh": "Choose from customers of synced orders",
+    "incCustomersHint": "PIs of these customers share one ID code sequence; saving takes effect at once. Removing a customer: PIs with SNs on their segment keep it, segments with all SNs deleted are released, PIs not yet generated lose their rule",
+    "incImpactTitle": "These PIs will be affected",
+    "incImpact": {
+      "KEEP": "has SNs on its segment, kept",
+      "RELEASE": "all SNs deleted, segment released",
+      "UNBIND": "rule unbound"
+    },
     "status": "Status",
     "unused": "Unused",
     "detail": "Details",

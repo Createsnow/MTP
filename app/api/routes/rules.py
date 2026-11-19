@@ -5,6 +5,7 @@ from fastapi import APIRouter
 
 from app.api.deps import OperatorDep
 from app.schemas.rule import (
+    IncCustomersIn,
     LineSelectIn,
     PiBindIn,
     PrefixGrowIn,
@@ -73,6 +74,19 @@ def rule_update(id: int, body: RuleUpdateIn, cu: OperatorDep) -> dict:
     return rules.update(cu, id, body.rule_name, _spec(body), body.category_scope, body.category_value)
 
 
+@router.put(
+    "/{id:int}/inc-customers",
+    summary="识别码适用客户（规则库页面，保存即生效）：删除的客户下号已全删掉的号段释放、还没生成的 PI 解除登记",
+)
+def rule_inc_customers(id: int, body: IncCustomersIn, cu: OperatorDep) -> dict:
+    return rules.set_inc_customers(cu, id, body.customers)
+
+
+@router.post("/{id:int}/inc-customers/impact", summary="改识别码适用客户前查看影响：受影响的 PI 与处理")
+def rule_inc_customers_impact(id: int, body: IncCustomersIn, cu: OperatorDep) -> dict:
+    return rules.inc_customers_impact(cu, id, body.customers, body.pi_no)
+
+
 @router.delete(
     "/{id:int}", summary="删除：只能删从没生成过号、也没指定给任何 PI 的规则；普通操作员只能删授权组织的规则"
 )
@@ -87,7 +101,13 @@ def rule_delete(id: int, cu: OperatorDep) -> dict:
 def rule_preview(body: RulePreviewIn, cu: OperatorDep) -> dict:
     inc = None
     if body.inc_end is not None:
-        inc = {"inc_start": body.inc_start, "inc_end": body.inc_end, "inc_tail": body.inc_tail}
+        inc = {
+            "inc_start": body.inc_start,
+            "inc_end": body.inc_end,
+            "inc_tail": body.inc_tail,
+            "inc_customers": body.inc_customers,
+            "inc_pick": body.inc_pick,
+        }
     return rules.preview(_spec(body), body.length, body.unit, body.seq_start, bool(body.seq_grow), inc, body.pi_no)
 
 

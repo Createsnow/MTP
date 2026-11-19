@@ -193,6 +193,22 @@
                     <el-input-number v-model="p.end" :min="0" :max="INC_MAX" :step="1" step-strictly size="small" class="w100" />
                   </span>
                   <span v-if="incPreview?.prefix && !incPreview.error" class="fi sn-mono">{{ t("generate.rule.incWill", { prefix: incPreview.prefix }) }}</span>
+                  <!-- 适用客户：只能选已同步的订单客户，须含本 PI 的客户；前缀已有规则时这里的增删在本 PI 生成成功后才生效 -->
+                  <span class="fi">
+                    {{ t("generate.rule.incCustomers") }}
+                    <el-select v-model="incCustomers" multiple filterable remote :remote-method="searchCust" :loading="custSearching"
+                      size="small" class="w260" collapse-tags collapse-tags-tooltip :max-collapse-tags="3">
+                      <el-option v-for="c in custOptions" :key="c" :label="c" :value="c" :disabled="c === piCustomer" />
+                    </el-select>
+                    <el-tag v-if="custPending" size="small" type="warning" effect="plain">{{ t("generate.rule.incAfterGen") }}</el-tag>
+                  </span>
+                  <!-- 改选已释放的号段（原 PI 的客户已移出适用客户、号已全删掉）；不选为取下一个值 -->
+                  <span v-if="incFree.length || incPick != null" class="fi">
+                    {{ t("generate.rule.incPick") }}
+                    <el-select v-model="incPick" clearable size="small" class="w140" :placeholder="t('generate.rule.incPickNext')">
+                      <el-option v-for="f in incFree" :key="f.value" :label="f.prefix" :value="f.value" />
+                    </el-select>
+                  </span>
                 </template>
                 <template v-else-if="p.kind === 'LEN'">
                   <span class="fi">
@@ -256,8 +272,12 @@ type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
   base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number;
 };
-/** 识别码的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因 */
-type IncPreview = { text?: string | null; prefix?: string | null; error?: { code: string; message: string; params?: Record<string, unknown> } | null };
+/** 识别码的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因；
+ *  current 为已生效的适用客户（前缀还没有规则时为 null），free 为已释放、可以改选的号段 */
+type IncPreview = {
+  text?: string | null; prefix?: string | null; error?: { code: string; message: string; params?: Record<string, unknown> } | null;
+  current?: string[] | null; free?: { value: number; text: string; prefix: string; pi_no: string }[];
+};
 type Seg = { text: string; cls: string };
 type Sample = { sn: string; segs: Seg[] | null };
 /** 三段：前缀（流水之前）/ 流水 / 后缀（流水之后，含米数、单位） */
@@ -289,6 +309,33 @@ const kw = ref("");
 const picked = ref<any>(null);
 /** 从规则库点选、填进「自定义」的规则（选项，见 rules.options）；没点选为 null */
 const fromRule = ref<any>(null);
+/** 识别码适用客户（页面上的清单）与改选的已释放号段（值；null = 取下一个值） */
+const incCustomers = ref<string[]>([]);
+const incPick = ref<number | null>(null);
+/** 本 PI 的客户（适用客户须含它，不能删） */
+const piCustomer = computed(() => props.lines[0]?.customer_code ?? "");
+const custFound = ref<string[]>([]);
+const custSearching = ref(false);
+const custOptions = computed(() => Array.from(new Set([...incCustomers.value, ...custFound.value])));
+async function searchCust(q: string) {
+  custSearching.value = true;
+  try {
+    custFound.value = (await api.orderCustomers(q || undefined)) as string[];
+  } finally {
+    custSearching.value = false;
+  }
+}
+/** 本 PI 的客户不能删：删掉时补回 */
+watch(incCustomers, (v) => {
+  if (piCustomer.value && !v.includes(piCustomer.value)) incCustomers.value = [piCustomer.value, ...v];
+});
+const hasInc = computed(() => built.value.spec.inc_end != null);
+/** 已生效的适用客户（前缀已有规则时；见 preview 的 inc.current） */
+const incCurrent = computed(() => incPreview.value?.current ?? null);
+const sortedJoin = (xs?: string[] | null) => [...(xs ?? [])].sort().join(",");
+/** 与已生效的清单不同：本 PI 生成成功后才生效 */
+const custPending = computed(() => hasInc.value && !!incCurrent.value && sortedJoin(incCurrent.value) !== sortedJoin(incCustomers.value));
+const incFree = computed(() => incPreview.value?.free ?? []);
 const parts = ref<Part[]>([]);
 /** 组件库「添加到」：前缀 / 后缀 */
 const target = ref<"PRE" | "SUF">("PRE");
@@ -477,18 +524,23 @@ const seqStart = () => {
 const anyGenerated = computed(() => props.lines.some((l) => l.generated_qty > 0));
 /** 编码格式的比较项（流水上限自动突破按前缀，起始号只管下一次生成，都不算） */
 const CFG_KEYS = ["prefix", "base", "seq_len", "with_length", "length_pad", "sep_before", "sep_after", "with_unit", "suffix",
-  "inc_start", "inc_end", "inc_tail"] as const;
+  "inc_start", "inc_end", "inc_tail", "inc_customers", "inc_pick"] as const;
 const cfgOf = (c: any) => CFG_KEYS.map((k) => {
   const v = c?.[k];
   if (k === "with_length" || k === "with_unit") return !!v;
   if (k === "length_pad") return c?.with_length ? Number(v) || 0 : 0;
   if ((k === "sep_before" || k === "sep_after")) return c?.with_length ? v || "" : "";
-  if (k === "inc_start" || k === "inc_end") return v == null ? null : Number(v);
+  if (k === "inc_start" || k === "inc_end" || k === "inc_pick") return v == null ? null : Number(v);
+  if (k === "inc_customers") return c?.inc_end == null ? "" : sortedJoin(v);
   return v ?? "";
 });
+/** 页面上的完整配置（编码格式 + 识别码适用客户、改选的号段） */
+const fullSpec = computed(() => (hasInc.value
+  ? { ...built.value.spec, inc_customers: incCustomers.value, inc_pick: incPick.value }
+  : built.value.spec));
 const sameCfg = (a: any, b: any) => JSON.stringify(cfgOf(a)) === JSON.stringify(cfgOf(b));
 /** 点选的规则没改过（起始号也没填）：按规则库规则登记（rule_id），与原来在规则库页签选用相同 */
-const unchanged = computed(() => !!fromRule.value?.custom && sameCfg(built.value.spec, fromRule.value.custom) && !seqStart());
+const unchanged = computed(() => !!fromRule.value?.custom && sameCfg(fullSpec.value, fromRule.value.custom) && !seqStart());
 /** 前缀的规则（一个前缀一条规则；带识别码的按前缀层文本） */
 const ruleOfPrefix = computed(() => props.options.find((o) => o.prefix === built.value.spec.prefix) ?? null);
 /** 确定后的结果：USE 用这条规则 / ATTACH 归到前缀的规则下为本 PI 另出版本 / NEW 新前缀，生成后存为新规则 */
@@ -496,7 +548,7 @@ const outcome = computed(() => {
   if (mode.value !== "CUSTOM" || built.value.errors.length || !built.value.spec.prefix) return null;
   if (unchanged.value) return { kind: "USE", code: fromRule.value.rule_code };
   const r = ruleOfPrefix.value;
-  if (r && r.custom && sameCfg(built.value.spec, r.custom)) return { kind: "USE", code: r.rule_code };
+  if (r && r.custom && sameCfg(fullSpec.value, r.custom)) return { kind: "USE", code: r.rule_code };
   if (r) return { kind: "ATTACH", code: r.rule_code, prefix: built.value.spec.prefix };
   return { kind: "NEW", prefix: built.value.spec.prefix };
 });
@@ -524,6 +576,7 @@ function onOpen() {
   // 上限自动突破按前缀：本 PI 已登记时为前缀的开关，否则默认开启
   const grow = props.rulePrefix?.registered ? props.rulePrefix.seq_grow ?? true : own ? cur?.seq_grow ?? true : true;
   parts.value = base ? fromSpec({ ...base, seq_start: start, seq_grow: grow }, defaultHead()) : defaultParts(grow);
+  setIncState(base);
   target.value = "PRE";
   hot.value = null;
   mode.value = "CUSTOM";
@@ -537,14 +590,24 @@ function pick(o: any) {
   if (!o.custom) return;
   const prev = parts.value;
   const grow = props.rulePrefix?.registered && props.rulePrefix.prefix === o.prefix ? props.rulePrefix.seq_grow ?? true : true;
+  const prevInc = [incCustomers.value, incPick.value] as const;
   fromRule.value = o;
   parts.value = fromSpec({ ...o.custom, seq_start: null, seq_grow: grow }, [textPart(o.custom.prefix)]);
+  setIncState(o.custom);
   mode.value = "CUSTOM";
   schedule();
   undoable(t("generate.rule.pickedFill", { code: o.rule_code }), () => {
     parts.value = prev;
     fromRule.value = null;
+    [incCustomers.value, incPick.value] = [...prevInc];
   });
+}
+/** 识别码适用客户、改选号段按配置带出（没有时为本 PI 的客户） */
+function setIncState(c: any) {
+  const xs: string[] = c?.inc_customers ?? [];
+  incCustomers.value = xs.length ? [...xs] : piCustomer.value ? [piCustomer.value] : [];
+  incPick.value = c?.inc_pick ?? null;
+  custFound.value = [];
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -553,6 +616,7 @@ function schedule() {
   timer = setTimeout(previewCustom, 300);
 }
 watch(parts, () => mode.value === "CUSTOM" && schedule(), { deep: true });
+watch([incCustomers, incPick], () => mode.value === "CUSTOM" && hasInc.value && schedule());
 
 /** 改进制时：位数还是上一个进制按订单数量给的默认值（没手动改过）就跟着换成新进制的默认值；本 PI 已用的前缀格式锁定，不动 */
 const seqPart = computed(() => parts.value.find((p) => p.kind === "SEQ"));
@@ -602,7 +666,7 @@ async function previewCustom() {
       // 示例从实际的第一个号起：填了起始号按它，已用前缀没填按接续的下一个号
       ...spec, seq_start: seqStart() ?? (startMin.value > 1 ? startMin.value : undefined), length: l?.length || undefined, unit: l?.unit || undefined,
       // 带识别码：按本 PI 将取的值出示例（后台按客户编码下的 PI 取，只预显示）
-      ...(spec.inc_end != null ? { pi_no: props.pi } : {}),
+      ...(spec.inc_end != null ? { pi_no: props.pi, inc_customers: incCustomers.value, inc_pick: incPick.value } : {}),
     });
     incPreview.value = r.inc ?? null;
     if (r.inc?.error) sample.error = incErrorText(r.inc.error);
@@ -633,8 +697,27 @@ async function confirmChange() {
   }
 }
 
+/** 前缀已有规则、这次删了适用客户：先列出受影响的 PI（本 PI 生成成功后才执行），确认后才保存 */
+async function confirmCustRemoval() {
+  const cur = incCurrent.value;
+  const r = ruleOfPrefix.value;
+  if (unchanged.value || !hasInc.value || !cur || !r) return true;
+  if (!cur.some((c) => !incCustomers.value.includes(c))) return true;
+  const res: any = await api.incCustomersImpact(r.rule_id, { customers: incCustomers.value, pi_no: props.pi });
+  if (!res?.impact?.length) return true;
+  const text = res.impact
+    .map((x: any) => `${x.pi_no}（${x.customer}）：${x.actions.map((a: string) => t(`rules.incImpact.${a}`)).join("、")}`)
+    .join("\n");
+  try {
+    await ElMessageBox.confirm(text, t("generate.rule.incImpactTitle"), { type: "warning", customStyle: { whiteSpace: "pre-line" } });
+    return true;
+  } catch {
+    return false;
+  }
+}
 async function save() {
   if (!(await confirmChange())) return;
+  if (!(await confirmCustRemoval())) return;
   busy.value = "save";
   try {
     const body: Record<string, unknown> = { pi_no: props.pi, lines: refs() };
@@ -644,7 +727,7 @@ async function save() {
     } else {
       // 请求体：prefix、base、seq_len、with_length、length_pad、sep_before、sep_after、with_unit、suffix、seq_start，
       // 另带 seq_grow（上限自动突破，后台不传按关闭）
-      body.custom = { ...built.value.spec, seq_start: seqStart() };
+      body.custom = { ...fullSpec.value, seq_start: seqStart() };
     }
     // 一个 PI 只有一个规则：后台按整张 PI 保存，返回作用的物料行数
     const r: any = await api.selectLineRule(body);
@@ -667,6 +750,7 @@ async function save() {
 .tip { margin-left: -6px; color: var(--el-text-color-secondary); cursor: help; }
 .w180 { width: 180px; }
 .w200 { width: 200px; }
+.w260 { width: 260px; }
 .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .lb { font-size: 12px; color: var(--el-text-color-regular); }
 .muted { color: var(--app-muted); }

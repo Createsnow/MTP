@@ -535,6 +535,11 @@
       "custom": "Tùy chỉnh",
       "recommended": "Đề xuất",
       "fromRule": "Từ quy tắc {code}",
+      "incCustomers": "Khách hàng áp dụng",
+      "incAfterGen": "Có hiệu lực sau khi PI này tạo số",
+      "incPick": "Dùng dãy số đã giải phóng",
+      "incPickNext": "Giá trị kế tiếp",
+      "incImpactTitle": "Sau khi PI này tạo số, các PI sau sẽ bị ảnh hưởng",
       "pickedFill": "Đã điền theo quy tắc {code}, có thể sửa tại đây",
       "outcome": {
         "USE": "Sẽ dùng quy tắc {code}",
@@ -1147,6 +1152,22 @@
     "seqGrowTip": "Thiết lập theo tiền tố cho mọi PI dùng nó; không thể tắt khi dãy số đã vượt số chữ số",
     "incTag": "Mã nhận dạng {start}~{end} · khách hàng {customer}",
     "incSegment": "Tiền tố dãy số",
+    "incStatus": "Trạng thái dãy số",
+    "incStatusOf": {
+      "USED": "Đang dùng",
+      "REMOVED": "Khách hàng đã bỏ",
+      "RELEASED": "Đã giải phóng"
+    },
+    "incCustomersEdit": "Khách hàng áp dụng",
+    "incCustomersTitle": "Khách hàng áp dụng mã nhận dạng: {prefix}",
+    "incCustomersPh": "Chọn từ khách hàng của đơn hàng đã đồng bộ",
+    "incCustomersHint": "Các PI của nhóm khách hàng này dùng chung một dãy mã nhận dạng tăng dần; lưu là có hiệu lực. Khi bỏ khách hàng: PI còn số trên dãy giữ nguyên, dãy đã xóa hết số được giải phóng, PI chưa tạo số bị gỡ quy tắc",
+    "incImpactTitle": "Các PI sau sẽ bị ảnh hưởng",
+    "incImpact": {
+      "KEEP": "còn số trên dãy, giữ nguyên",
+      "RELEASE": "đã xóa hết số, giải phóng dãy",
+      "UNBIND": "gỡ quy tắc"
+    },
     "status": "Trạng thái",
     "unused": "Chưa dùng",
     "detail": "Chi tiết",

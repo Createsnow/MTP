@@ -142,11 +142,24 @@ class ErrorCode(Enum):
     # ---------- 识别码（前缀 + 自增值为一张 PI 独占的号段，见 rules.Inc） ----------
     RULE_INC_RANGE_INVALID = (400, "识别码只能填数字：起始值、结束值为 0–999，起始值不能大于结束值")
     RULE_INC_EXHAUSTED = (409, "前缀 {prefix} 的识别码（{start}~{end}）已用完，请更改前缀")
-    RULE_INC_CUSTOMER = (409, "前缀 {prefix} 的识别码已锁定客户 {customer}，前缀已被其他客户使用，请更改前缀")
+    RULE_INC_CUSTOMER = (
+        409,
+        "前缀 {prefix} 的识别码只允许客户 {customers} 使用，请更改前缀或在识别码组件中添加客户",
+    )
+    RULE_INC_CUSTOMERS_EMPTY = (400, "识别码适用客户不能为空")
+    RULE_INC_CUSTOMERS_TOO_MANY = (400, "识别码适用客户最多 {max} 个")
+    RULE_INC_CUSTOMER_UNKNOWN = (400, "客户 {customer} 不在已同步的订单里，不能加入识别码适用客户")
+    RULE_INC_CUSTOMER_SELF = (400, "识别码适用客户须包含本 PI 的客户 {customer}")
+    RULE_INC_CUSTOMER_SCOPE = (403, "客户 {customer} 不在您授权的生产组织的订单里，不能增删")
+    RULE_INC_PICK_INVALID = (409, "前缀 {prefix} 的识别码 {value} 不是已释放的号段，请重新选择")
+    RULE_NOT_INC = (400, "规则 {rule_code} 不带识别码，没有适用客户")
     RULE_INC_WIDTH = (409, "前缀 {prefix} 的识别码已按 {width} 位使用，识别码位数不能改，须更改前缀")
     RULE_INC_TAKEN = (409, "预演已失效：前缀 {prefix} 的识别码 {value} 已被 PI {pi} 占用，请重新选规则")
     RULE_INC_NO_CUSTOMER = (409, "PI {pi} 没有客户编码，不能使用识别码")
-    RULE_INC_READONLY = (409, "规则 {rule_code} 带识别码，规则库里只能改名称，编码格式请在生成页「选规则」中修改")
+    RULE_INC_READONLY = (
+        409,
+        "规则 {rule_code} 带识别码，规则库里只能改名称和适用客户，编码格式请在生成页「选规则」中修改",
+    )
     # ---------- 生成 ----------
     GEN_SCOPE_INVALID = (400, "生成范围须为同一张 PI 下的单据或物料行")
     GEN_NOT_GENERATABLE = (400, "所选范围不能生成：{detail}")

@@ -54,6 +54,8 @@
               <el-tooltip v-if="cur.inc" placement="bottom" :content="t('generate.rule.incTip')">
                 <el-tag type="success" effect="plain">{{ incTagText(cur.inc) }}</el-tag>
               </el-tooltip>
+              <!-- 识别码适用客户：规则库页面保存即生效（生成页识别码组件里改的，本 PI 生成成功才生效） -->
+              <el-button v-if="cur.inc" link type="primary" @click="openCust">{{ t("rules.incCustomersEdit") }}</el-button>
               <span class="muted">{{ orgText(cur) }}</span>
             </div>
             <!-- 流水上限自动突破：按前缀统一设置（作用于这个前缀下的全部 PI）；已突破后不能关闭。
@@ -135,6 +137,13 @@
             <!-- 自增前缀：本 PI 的号段（前缀 + 自增值） -->
             <el-table-column v-if="cur.inc" :label="t('rules.incSegment')" min-width="110">
               <template #default="{ row }"><span class="sn-mono">{{ row.seq_prefix || "—" }}</span></template>
+            </el-table-column>
+            <!-- 识别码号段状态：使用中 / 客户已移出（号段上还有号）/ 已释放（可给别的 PI 改选） -->
+            <el-table-column v-if="cur.inc" :label="t('rules.incStatus')" min-width="110">
+              <template #default="{ row }">
+                <el-tag v-if="incStatus(row)" size="small" effect="plain" :type="incStatus(row) === 'USED' ? 'success' : incStatus(row) === 'RELEASED' ? 'info' : 'warning'">
+                  {{ t(`rules.incStatusOf.${incStatus(row)}`) }}</el-tag>
+              </template>
             </el-table-column>
             <el-table-column :label="t('rules.usageRules')" min-width="120" show-overflow-tooltip><template #default="{ row }">{{ row.rules.join("、") }}</template></el-table-column>
             <el-table-column :label="t('rules.usageRange')" min-width="220">
@@ -229,6 +238,19 @@
         <el-button type="primary" :loading="saving" @click="save">{{ t("common.save") }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- 识别码适用客户：只能选已同步的订单客户；授权范围外的客户可见、不能增删（后端校验）；删除前列出受影响的 PI -->
+    <el-dialog v-model="cust.open" :title="t('rules.incCustomersTitle', { prefix: cur?.prefix ?? '' })" width="560px">
+      <el-select v-model="cust.list" multiple filterable remote :remote-method="searchCust" :loading="cust.searching"
+        class="full" :placeholder="t('rules.incCustomersPh')">
+        <el-option v-for="c in custOptions" :key="c" :label="c" :value="c" />
+      </el-select>
+      <div class="muted hint">{{ t("rules.incCustomersHint") }}</div>
+      <template #footer>
+        <el-button @click="cust.open = false">{{ t("common.cancel") }}</el-button>
+        <el-button type="primary" :loading="cust.saving" :disabled="!cust.list.length" @click="saveCust">{{ t("common.save") }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -292,9 +314,55 @@ watch(() => shown.value.length, (n) => (page.value = Math.min(page.value, Math.m
 /** 生产组织：前缀下各规则的所属组织，没有的为「全局」。 */
 const orgText = (g: any) => g.factories.map((f: string | null) => (f ? factoryName(f) : t("rules.ownerGlobal"))).join("、");
 /** 自增前缀：「自增 0~9 · 客户 0832」（范围按位数补 0） */
+/** 识别码号段状态（GET /rules/prefixes 的 inc.values，按 PI 与号段前缀对上） */
+const incStatus = (row: any): string =>
+  cur.value?.inc?.values?.find((v: any) => v.pi_no === row.pi_no && v.prefix === row.seq_prefix)?.status ?? "";
+/** 识别码适用客户弹窗 */
+const cust = reactive<{ open: boolean; list: string[]; saving: boolean; searching: boolean; found: string[] }>({
+  open: false, list: [], saving: false, searching: false, found: [],
+});
+const custOptions = computed(() => Array.from(new Set([...cust.list, ...cust.found])));
+async function searchCust(q: string) {
+  cust.searching = true;
+  try {
+    cust.found = (await api.orderCustomers(q || undefined)) as string[];
+  } finally {
+    cust.searching = false;
+  }
+}
+function openCust() {
+  cust.list = [...(cur.value?.inc?.customers ?? [])];
+  cust.found = [];
+  cust.open = true;
+  searchCust("");
+}
+/** 受影响的 PI（删除客户时）逐行写出：PI、客户、处理 */
+const impactText = (xs: any[]) =>
+  xs.map((x) => `${x.pi_no}（${x.customer}）：${x.actions.map((a: string) => t(`rules.incImpact.${a}`)).join("、")}`).join("\n");
+async function saveCust() {
+  const id = cur.value?.inc?.rule_id;
+  if (!id) return;
+  cust.saving = true;
+  try {
+    const r: any = await api.incCustomersImpact(id, { customers: cust.list });
+    if (r?.impact?.length) {
+      try {
+        await ElMessageBox.confirm(impactText(r.impact), t("rules.incImpactTitle"), { type: "warning", customStyle: { whiteSpace: "pre-line" } });
+      } catch {
+        return;
+      }
+    }
+    await api.setIncCustomers(id, { customers: cust.list });
+    ElMessage.success(t("common.saved"));
+    cust.open = false;
+    await load();
+  } finally {
+    cust.saving = false;
+  }
+}
 const incTagText = (inc: any) => {
   const pad = (v: number) => String(v).padStart(Number(inc.width) || 1, "0");
-  return t("rules.incTag", { start: pad(inc.start), end: pad(inc.end), customer: inc.customer || "—" });
+  return t("rules.incTag", { start: pad(inc.start), end: pad(inc.end), customer: (inc.customers ?? []).join("、") || "—" });
 };
 /** 右侧所选前缀：按前缀记住，重新加载后仍选中；不在当前筛选结果里时改选第一项。 */
 const curPrefix = ref("");
@@ -505,6 +573,7 @@ onMounted(load);
 .q:hover { color: var(--el-color-primary); }
 .mb { margin-bottom: 12px; }
 .hint { width: 100%; line-height: 1.5; margin-top: 2px; }
+.full { width: 100%; }
 .w160 { width: 160px; }
 .samples { display: flex; flex-wrap: wrap; gap: 6px 8px; }
 .max { color: var(--el-color-warning); }

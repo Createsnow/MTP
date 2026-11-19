@@ -206,7 +206,7 @@ def test_inc_rule_library_readonly_and_mes_fields(w, api, sql):
     assert ok(api.put(f"/api/rules/{rid}", same, w.admin))["action"] == "RENAMED"
     assert rule["rule_code"].startswith("PI-")
     g = next(x for x in ok(api.get(f"/api/rules/prefixes?q={head}", w.admin)).body if x["prefix"] == head)
-    assert g["inc"]["customer"] == cust
+    assert g["inc"]["customers"] == [cust]
     assert [(v["text"], v["pi_no"]) for v in g["inc"]["values"]] == [("0", p1), ("1", p2)]
     u = ok(api.get(f"/api/rules/prefixes/usage?prefix={head}", w.admin))
     assert {(x["pi_no"], x["seq_prefix"], x["qty"]) for x in u["pis"]} == {(p1, f"{head}0", 2), (p2, f"{head}1", 2)}

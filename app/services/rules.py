@@ -74,6 +74,7 @@ RULE_FIELDS = (
     "rule_code",
     "rule_name",
     "prefix",
+    "inc_customers",
     "category_scope",
     "category_value",
     "factory_code",
@@ -106,6 +107,7 @@ VERSION_FIELDS = (
     "inc_end",
     "inc_value",
     "inc_customer",
+    "inc_released",
     "created_by",
     "created_at",
     "updated_at",
@@ -379,38 +381,159 @@ def _customer(pi: str) -> str | None:
     return orders.customer_of_pi(pi)
 
 
-def inc_pick(pi: str, inc: Inc, customer: str | None) -> int:
-    """本 PI 在自增前缀 inc.head 下用的自增值：本 PI 已有的（号全删掉、改选过也还是它的）；没有时为已用最大值 + 1
-    （不小于起始值）。前缀已锁定别的客户（RULE_INC_CUSTOMER）、已按别的位数用了（RULE_INC_WIDTH）、
-    超出范围（RULE_INC_EXHAUSTED，须改前缀）时报错。"""
-    rows = db.all(
-        "SELECT claimed_pi, inc_value, inc_end, inc_customer FROM sn_rule_version "
-        "WHERE inc_head = %s AND inc_value IS NOT NULL",
-        inc.head,
-    )
-    own = next((int(r["inc_value"]) for r in rows if r["claimed_pi"] == pi), None)
-    if own is not None:
-        return own
+#: 识别码适用客户最多几个
+INC_CUSTOMERS_MAX = 30
+
+
+def cust_list(text: str | None) -> list[str]:
+    """sn_rule.inc_customers（,客户1,客户2,）→ 客户编码。"""
+    return [c for c in (text or "").split(",") if c]
+
+
+def cust_text(codes) -> str | None:
+    """客户编码 → sn_rule.inc_customers 的存法（首尾带逗号，去重、按编码排序）；空为 None。"""
+    xs = sorted({util.trim(c) for c in codes if util.trim(c)})
+    return "," + ",".join(xs) + "," if xs else None
+
+
+def _codes(xs) -> list[str]:
+    return sorted({util.trim(c) for c in (xs or []) if util.trim(c)})
+
+
+@dataclass(frozen=True)
+class IncScope:
+    """本 PI 判断能否用识别码前缀时的适用客户。
+    - current：前缀已生效的适用客户（sn_rule.inc_customers；前缀还没有规则时为 None）；
+    - allowed：判断本 PI 用的清单：已生效的叠加本 PI 待生效的增删（add / remove，本 PI 生成成功时才叠加到
+      最新的清单上）；
+      前缀还没有规则时为本 PI 定的清单（第一次生成时写进规则）；
+    - pick：本 PI 改选的已释放号段的识别码值（None = 取下一个值）。"""
+
+    allowed: tuple[str, ...]
+    current: tuple[str, ...] | None = None
+    add: tuple[str, ...] = ()
+    remove: tuple[str, ...] = ()
+    pick: int | None = None
+
+
+def inc_customers_of(head: str) -> tuple[str, ...] | None:
+    """识别码前缀已生效的适用客户；前缀还没有规则时 None。"""
+    r = rule_of_prefix(head)
+    return None if r is None else tuple(cust_list(r["inc_customers"]))
+
+
+def inc_scope(head: str, customer: str | None, c: dict | None = None) -> IncScope:
+    """本 PI 的适用客户判断范围。c：自定义规则参数（inc_customers 为页面上的清单，inc_base 为选规则时已生效的清单，
+    inc_pick 为改选的已释放号段）；不传（规则库规则）按已生效的清单。"""
+    current = inc_customers_of(head)
+    want = None if c is None or c.get("inc_customers") is None else tuple(_codes(c["inc_customers"]))
+    pick = None if c is None or c.get("inc_pick") is None else int(c["inc_pick"])
+    if current is None:
+        allowed = want if want is not None else ((customer,) if customer else ())
+        return IncScope(tuple(_codes(allowed)), None, pick=pick)
+    if want is None:
+        return IncScope(current, current, pick=pick)
+    base = set(current if c.get("inc_base") is None else _codes(c["inc_base"]))
+    add = tuple(sorted(set(want) - base))
+    remove = tuple(sorted(base - set(want)))
+    return IncScope(tuple(sorted((set(current) | set(add)) - set(remove))), current, add, remove, pick)
+
+
+def _scope_now(scope: IncScope, head: str) -> IncScope:
+    """按最新已生效的清单重算（期间别的 PI 生成、规则库改了清单）：本 PI 待生效的增删叠加到最新的清单上；
+    选规则时前缀还没有规则、之后别的 PI 先生成建了规则的，以先生成的那张的清单为准（不合并）。"""
+    latest = inc_customers_of(head)
+    if latest is None:
+        return scope
+    if scope.current is None:
+        return IncScope(latest, latest, pick=scope.pick)
+    return replace(scope, current=latest, allowed=tuple(sorted((set(latest) | set(scope.add)) - set(scope.remove))))
+
+
+def _inc_rows(head: str) -> list[dict]:
+    """识别码前缀下各 PI 的号段版本（含上限自动突破的、已释放的），按 id。"""
+    return db.all("SELECT * FROM sn_rule_version WHERE inc_head = %s AND inc_value IS NOT NULL ORDER BY id", head)
+
+
+def _live(prefix: str, memo: dict[str, bool] | None = None) -> bool:
+    """这个完整前缀（号段）上现在还有号（不论号已转到哪张 PI）。"""
+    if memo is not None and prefix in memo:
+        return memo[prefix]
+    hit = db.exists("SELECT EXISTS(SELECT 1 FROM sn_item WHERE seq_prefix = %s)", prefix)
+    if memo is not None:
+        memo[prefix] = hit
+    return hit
+
+
+def _released(r: dict, current: tuple[str, ...] | None, memo: dict[str, bool]) -> bool:
+    """号段是否已释放：已标记（inc_released）；或原属 PI 的客户已不在适用客户里、号段上已没有号（实时判断，
+    之后在别的 PI 选用它或这个客户被加回来时写入标记）。已释放的值仍计入已用最大值。"""
+    if r["inc_released"]:
+        return True
+    if current is None or (r["inc_customer"] or "") in current:
+        return False
+    return not _live(r["prefix"], memo)
+
+
+def inc_free(inc: Inc, current: tuple[str, ...] | None) -> list[dict]:
+    """已释放、可以改选的识别码号段：这个值的号段都已释放（原 PI 的客户已移出适用客户、号已全删掉）。"""
+    memo: dict[str, bool] = {}
+    by_value: dict[int, list[dict]] = {}
+    for r in _inc_rows(inc.head):
+        by_value.setdefault(int(r["inc_value"]), []).append(r)
+    out = []
+    for v, rs in sorted(by_value.items()):
+        if all(_released(r, current, memo) for r in rs):
+            out.append({"value": v, "text": inc.text(v), "prefix": inc.prefix(v), "pi_no": rs[-1]["claimed_pi"]})
+    return out
+
+
+def _names(xs) -> str:
+    return "、".join(xs) or "-"
+
+
+def inc_pick(pi: str, inc: Inc, customer: str | None, scope: IncScope | None = None) -> int:
+    """本 PI 在识别码前缀 inc.head 下用的识别码值（scope 不传按已生效的清单）：
+    - 本 PI 已有自己的值（未释放）：本 PI 的客户在已生效的适用客户里（号全删掉、改选过也还是它的），或本 PI 的
+      号段上现在还有号时用它；客户已移出、号已全删掉的不能再用（客户在本 PI 待加入的清单里时取新的值）。
+    - 没有时客户须在适用客户里（含本 PI 待加入的）：scope.pick 给出时为改选的已释放号段（须确实已释放），
+      否则为已用最大值 + 1（已释放的值也计入，不小于起始值）。
+    客户不在适用客户里（RULE_INC_CUSTOMER）、前缀已按别的位数用了（RULE_INC_WIDTH）、超出范围（RULE_INC_EXHAUSTED，
+    须改前缀）、改选的号段不是已释放的（RULE_INC_PICK_INVALID）时报错。"""
+    if scope is None:
+        scope = inc_scope(inc.head, customer)
+    rows = _inc_rows(inc.head)
+    memo: dict[str, bool] = {}
+    allowed = set(scope.allowed)
+    own = next((r for r in reversed(rows) if r["claimed_pi"] == pi and not r["inc_released"]), None)
+    if own is not None and (
+        (customer and (scope.current is None or customer in scope.current)) or _live(own["prefix"], memo)
+    ):
+        return int(own["inc_value"])
     if not customer:
         raise biz(ErrorCode.RULE_INC_NO_CUSTOMER, pi=pi)
-    other = next((r["inc_customer"] for r in rows if r["inc_customer"] != customer), None)
-    if other is not None:
-        raise biz(ErrorCode.RULE_INC_CUSTOMER, prefix=inc.head, customer=other)
+    if customer not in allowed:
+        raise biz(ErrorCode.RULE_INC_CUSTOMER, prefix=inc.head, customers=_names(sorted(allowed)))
     width = next((len(str(r["inc_end"])) for r in rows if len(str(r["inc_end"])) != inc.width), None)
     if width is not None:
         raise biz(ErrorCode.RULE_INC_WIDTH, prefix=inc.head, width=width)
+    if scope.pick is not None:
+        holders = [r for r in rows if int(r["inc_value"]) == scope.pick]
+        if not holders or not all(_released(r, scope.current, memo) for r in holders):
+            raise biz(ErrorCode.RULE_INC_PICK_INVALID, prefix=inc.head, value=inc.text(scope.pick))
+        return scope.pick
     value = max([inc.start] + [int(r["inc_value"]) + 1 for r in rows])
     if value > inc.end:
         raise biz(ErrorCode.RULE_INC_EXHAUSTED, prefix=inc.head, start=inc.text(inc.start), end=inc.text(inc.end))
     return value
 
 
-def _inc_guard(inc: Inc, value: int, spec: codec.Spec, pi: str) -> None:
-    """自增前缀的防重（只看前缀层 inc.head）：
-    - 普通前缀与 head 相同或一个是另一个的开头、别的自增前缀与 head 一个是另一个的开头：RULE_PREFIX_OVERLAP；
-    - 这个自增值已归别的 PI：RULE_INC_TAKEN（选规则后被别的 PI 先生成占走）；
-    - 本 PI 的号段（完整前缀）已按别的进制 / 位数 / 字符表用过（号全删掉后仍锁定）：RULE_PREFIX_FORMAT_LOCKED。
-    同一 head 下各值之间不互相校验：自增位数锁定、紧跟前缀，值不同的号在这一位上一定不同。"""
+def _inc_guard(inc: Inc, value: int, spec: codec.Spec, pi: str, current: tuple[str, ...] | None) -> None:
+    """识别码前缀的防重（只看前缀层 inc.head）：
+    - 普通前缀与 head 相同或一个是另一个的开头、别的识别码前缀与 head 一个是另一个的开头：RULE_PREFIX_OVERLAP；
+    - 这个值已归别的 PI（没释放）：RULE_INC_TAKEN（选规则后被别的 PI 先生成占走）；
+    - 这个号段（完整前缀，含改选的已释放号段）已按别的进制 / 位数 / 字符表用过：RULE_PREFIX_FORMAT_LOCKED。
+    同一 head 下各值之间不互相校验：识别码位数锁定、紧跟前缀，值不同的号在这一位上一定不同。"""
     head = inc.head
     heads = _heads(head)
     plain = db.one(
@@ -425,49 +548,68 @@ def _inc_guard(inc: Inc, value: int, spec: codec.Spec, pi: str) -> None:
     other = _overlapping_inc(head, other_than=head)
     if other is not None:
         raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=head, other=other["inc_head"], pi=other["claimed_pi"] or "-")
-    taken = db.one(
-        "SELECT claimed_pi FROM sn_rule_version WHERE inc_head = %s AND inc_value = %s AND claimed_pi <> %s LIMIT 1",
-        head,
-        value,
-        pi,
-    )
-    if taken is not None:
-        raise biz(ErrorCode.RULE_INC_TAKEN, prefix=head, value=inc.text(value), pi=taken["claimed_pi"])
-    for v in db.all("SELECT * FROM sn_rule_version WHERE prefix = %s AND claimed_pi = %s", spec.prefix, pi):
+    memo: dict[str, bool] = {}
+    for r in db.all(
+        "SELECT * FROM sn_rule_version WHERE inc_head = %s AND inc_value = %s AND claimed_pi <> %s", head, value, pi
+    ):
+        if not _released(r, current, memo):
+            raise biz(ErrorCode.RULE_INC_TAKEN, prefix=head, value=inc.text(value), pi=r["claimed_pi"])
+    for v in db.all("SELECT * FROM sn_rule_version WHERE prefix = %s", spec.prefix):
         b = base_of(v)
         if not same_seq_format(spec_of(b), spec):
             raise biz(ErrorCode.RULE_PREFIX_FORMAT_LOCKED, prefix=spec.prefix, base=b["base"], seq_len=b["seq_len"])
 
 
-def _inc_verify(inc: Inc, value: int, spec: codec.Spec, pi: str, customer: str | None) -> None:
-    """本 PI 能否用自增值 value（完整前缀 spec.prefix）：防重、客户、位数、范围都过，且仍是本 PI 该取的值。"""
-    _inc_guard(inc, value, spec, pi)
-    got = inc_pick(pi, inc, customer)
+def _inc_verify(inc: Inc, value: int, spec: codec.Spec, pi: str, customer: str | None, scope: IncScope) -> None:
+    """本 PI 能否用识别码值 value（完整前缀 spec.prefix）：防重、客户、位数、范围都过，且仍是本 PI 该取的值
+    （scope 按最新已生效的清单重算）。"""
+    scope = _scope_now(scope, inc.head)
+    _inc_guard(inc, value, spec, pi, scope.current)
+    got = inc_pick(pi, inc, customer, scope)
     if got != value:
         raise biz(ErrorCode.RULE_INC_TAKEN, prefix=inc.head, value=inc.text(value), pi="-")
 
 
 def _inc_lock_key(head: str) -> str:
-    """自增前缀锁（与前缀锁同一组命名锁，键另加标记，不与真实前缀相同）。"""
+    """识别码前缀锁（与前缀锁同一组命名锁，键另加标记，不与真实前缀相同）：同一识别码前缀的取值、生成、
+    改适用客户串行。"""
     return "\x01INC\x01" + head
 
 
-def check_inc(inc: Inc, value: int, spec: codec.Spec, pi: str, customer: str | None, gen: bool = False) -> None:
-    """在事务内校验并占住自增前缀（拿自增前缀锁，锁到事务结束：同一自增前缀的取值、生成串行）。
+def check_inc(
+    inc: Inc,
+    value: int,
+    spec: codec.Spec,
+    pi: str,
+    customer: str | None,
+    scope: IncScope | None = None,
+    gen: bool = False,
+) -> None:
+    """在事务内校验并占住识别码前缀（拿识别码前缀锁，锁到事务结束）。
     gen（生成事务内）：按本事务所见与最新已提交的数据各判断一次（本事务的快照可能早于别的 PI 的生成提交）。"""
+    if scope is None:
+        scope = inc_scope(inc.head, customer)
     locks.hold_prefixes([_inc_lock_key(inc.head)])
-    _inc_verify(inc, value, spec, pi, customer)
+    _inc_verify(inc, value, spec, pi, customer, scope)
     if gen:
         with db.new_tx():
-            _inc_verify(inc, value, spec, pi, customer)
+            _inc_verify(inc, value, spec, pi, customer, scope)
 
 
 def inc_usable(res: Resolved, pi: str) -> bool:
     """check_inc 的判断版（不加锁、不抛错）：带识别码的规则本 PI 现在能否用（生成页逐行判断）。"""
     if res.inc is None or res.version is None:
         return False
+    customer = res.version.get("inc_customer")
     try:
-        _inc_verify(res.inc, int(res.version["inc_value"]), res.spec(), pi, res.version.get("inc_customer"))
+        _inc_verify(
+            res.inc,
+            int(res.version["inc_value"]),
+            res.spec(),
+            pi,
+            customer,
+            res.inc_scope or inc_scope(res.inc.head, customer),
+        )
     except BizError:
         return False
     return True
@@ -490,7 +632,7 @@ def check_line_prefix(res: Resolved | None, prefix: str | None, pi: str, registe
                 value=registered[len(inc.head) : len(inc.head) + inc.width],
                 pi=who or "-",
             )
-        check_inc(inc, int(res.version["inc_value"]), res.spec(), pi, res.version.get("inc_customer"))
+        check_inc(inc, int(res.version["inc_value"]), res.spec(), pi, res.version.get("inc_customer"), res.inc_scope)
         return
     if prefix:
         check_prefix(prefix, spec=res.spec() if res is not None and res.ready else None, pi=pi)
@@ -653,8 +795,12 @@ def _inc_prefix_info(
     inc: Inc, custom: dict, v: dict | None, fail: BizError | None, grow: bool, registered: bool
 ) -> dict:
     """pi_prefix 的带识别码版：prefix 为前缀层文本（页面组件拆回为「前缀 + 识别码 + 固定字符」），
-    inc_value 为本 PI 的值（只预显示），取不到时 inc_error 为原因（已用完须改前缀等）。"""
+    inc_value 为本 PI 的值（只预显示），取不到时 inc_error 为原因（已用完须改前缀等）；custom 另带 inc_customers
+    （适用客户：登记的自定义规则里的，否则为已生效的清单）。"""
     value = None if v is None else v.get("inc_value")
+    if "inc_customers" not in custom:
+        current = inc_customers_of(inc.head)
+        custom = {**custom, "inc_customers": list(current) if current is not None else []}
     return {
         "prefix": inc.head,
         "custom": {**custom, "inc_value": value},
@@ -666,14 +812,15 @@ def _inc_prefix_info(
 
 
 def _customer_inc_default(pi: str) -> dict | None:
-    """本 PI 的客户最近一次生成用的带识别码的规则：同一客户的新 PI 默认带出它的配置（取下一个自增值）；
-    没有为 None。"""
+    """适用客户里有本 PI 客户的识别码前缀中，这组客户最近一次生成用的那个：新 PI 默认带出它的配置（取下一个值）；
+    没有为 None。客户已移出的前缀不再带出。"""
     customer = _customer(pi)
     if not customer:
         return None
     last = db.one(
-        "SELECT * FROM sn_rule_version WHERE inc_customer = %s AND inc_head IS NOT NULL ORDER BY id DESC LIMIT 1",
-        customer,
+        "SELECT v.* FROM sn_rule_version v JOIN sn_rule r ON r.id = v.rule_id WHERE r.inc_customers LIKE %s "
+        "AND v.inc_head IS NOT NULL ORDER BY v.id DESC LIMIT 1",
+        util.like_any("," + customer + ","),
     )
     if last is None:
         return None
@@ -683,7 +830,7 @@ def _customer_inc_default(pi: str) -> dict | None:
     spec = spec_of(v)
     fail = None
     try:
-        value = inc_pick(pi, inc, customer)
+        value = inc_pick(pi, inc, customer, inc_scope(inc.head, customer))
     except BizError as e:
         value, fail = None, e
     draft = None if value is None else {**v, "inc_value": value}
@@ -695,13 +842,17 @@ def pi_prefix_locked(pi: str) -> dict[str, dict]:
     号全部删掉后前缀仍归属本 PI、进制和流水位数仍锁定（check_prefix）：生成页「选规则」前缀是其中之一时按这个格式，
     免得按默认位数保存时报 RULE_PREFIX_FORMAT_LOCKED。"""
     out: dict[str, dict] = {}
+    memo: dict[str, bool] = {}
     for v in db.all(
         "SELECT v.* FROM sn_rule_version v LEFT JOIN sn_rule_version p ON p.id = v.derived_from "
         "AND p.prefix = v.prefix AND p.seq_len <> v.seq_len WHERE v.claimed_pi = %s AND p.id IS NULL ORDER BY v.id",
         pi,
     ):
-        out[v["prefix"]] = _custom_dict(spec_of(v))
         inc = inc_of(v)
+        if inc is not None and _released(v, inc_customers_of(inc.head), memo):
+            # 已释放的识别码号段（客户已移出适用客户、号已全删掉）不再归本 PI，不显示、不锁定
+            continue
+        out[v["prefix"]] = _custom_dict(spec_of(v))
         if inc is not None:
             # 带识别码：页面组成里的前缀是前缀层文本，按它也能找到本 PI 号段锁定的格式
             out[inc.head] = _custom_dict(spec_of(v), inc)
@@ -736,8 +887,10 @@ def preview(
     """编辑时的示例号：前 5 个和最大号（米数、单位用示例值）、最大流水（规则位数的）。seq_start：从这个流水起
     （自定义规则的起始号），不填从 1 起。grow（上限自动突破）：起始号可超过规则位数（按突破后的位数），
     最大号之后另带突破后的第一个号（最大流水 + 1）。
-    inc_in（识别码：inc_start、inc_end、inc_tail；s.prefix 为前缀层文本）：示例按 pi_in 将取的值（只预显示，
-    不占用）；取不到值（已用完须改前缀、前缀已锁定别的客户等）时 inc_error 为原因，示例按起始值。"""
+    inc_in（识别码：inc_start、inc_end、inc_tail，inc_customers 适用客户、inc_pick 改选的已释放号段；s.prefix 为
+    前缀层文本）：示例按 pi_in 将取的值（只预显示，不占用）；取不到值（已用完须改前缀、客户不在适用客户里等）时
+    inc_error 为原因，示例按起始值。inc 另带 customers（判断用的适用客户）、current（已生效的，前缀还没有规则时为空）、
+    free（已释放、可以改选的号段）。"""
     spec = normalize(s)
     inc = None if inc_in is None else _inc_of_custom(inc_in, spec.prefix)
     inc_out = None
@@ -745,17 +898,26 @@ def preview(
         pi = util.trim(pi_in)
         fail = None
         value = inc.start
+        customer = _customer(pi) if pi else None
+        scope = inc_scope(inc.head, customer, inc_in)
         try:
             if not pi:
                 raise biz(ErrorCode.PI_REQUIRED)
-            value = inc_pick(pi, inc, _customer(pi))
+            value = inc_pick(pi, inc, customer, scope)
         except BizError as e:
             fail = e
         spec = replace(spec, prefix=inc.prefix(value))
         err = codec.validate(spec)
         if err is not None:
             raise biz(err)
-        inc_out = {**(_inc_json(inc, None if fail else value) or {}), "error": _err_json(fail)}
+        inc_out = {
+            **(_inc_json(inc, None if fail else value) or {}),
+            "error": _err_json(fail),
+            "customer": customer,
+            "customers": list(scope.allowed),
+            "current": None if scope.current is None else list(scope.current),
+            "free": inc_free(inc, scope.current),
+        }
     sample_len = codec.clean_length(length) or SAMPLE_LENGTH
     sample_unit = util.trim(unit) or SAMPLE_UNIT
     mx = codec.max_seq(spec)
@@ -995,13 +1157,25 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
             )
             inc = inc_of(shown)
             if inc is not None:
-                # 自增前缀：组上为前缀层文本、范围、锁定的客户与各 PI 的值（每张 PI 一个号段）
+                # 识别码前缀：组上为前缀层文本、范围、适用客户与各 PI 的值（每张 PI 一个号段）及号段状态：
+                # USED 使用中 / REMOVED 客户已移出、号段上还有号 / RELEASED 已释放（可给别的 PI 改选）
+                current = tuple(cust_list(r["inc_customers"]))
+                memo: dict[str, bool] = {}
                 g["inc"] = {
                     **(_inc_json(inc, None) or {}),
-                    "customer": shown["inc_customer"],
+                    "rule_id": r["id"],
+                    "customers": list(current),
                     "values": sorted(
                         {
-                            (int(v["inc_value"]), v["claimed_pi"], v["prefix"])
+                            (
+                                int(v["inc_value"]),
+                                v["claimed_pi"],
+                                v["prefix"],
+                                v["inc_customer"] or "",
+                                "RELEASED"
+                                if _released(v, current, memo)
+                                else ("USED" if (v["inc_customer"] or "") in current else "REMOVED"),
+                            )
                             for v in on
                             if v["claimed_pi"] and v["inc_value"] is not None
                         }
@@ -1070,15 +1244,23 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
                 "top_text": _seq_text_of(top, spec),
                 # 流水上限自动突破（按前缀；前缀还没登记时默认开启）
                 "seq_grow": True if c is None else bool(c["seq_grow"]),
-                # 自增前缀：{head, start, end, width, customer, values: [{value, text, pi_no, prefix}]}；
+                # 识别码前缀：{head, start, end, width, rule_id, customers,
+                #   values: [{value, text, pi_no, prefix, customer, status}]}；
                 # 各 PI 的号段各自排号（最大号、自动突破按各号段），组上不给 top_seq
                 "inc": None
                 if g["inc"] is None
                 else {
                     **g["inc"],
                     "values": [
-                        {"value": v, "text": str(v).zfill(g["inc"]["width"]), "pi_no": p, "prefix": x}
-                        for v, p, x in g["inc"]["values"]
+                        {
+                            "value": v,
+                            "text": str(v).zfill(g["inc"]["width"]),
+                            "pi_no": p,
+                            "prefix": x,
+                            "customer": c,
+                            "status": st,
+                        }
+                        for v, p, x, c, st in g["inc"]["values"]
                     ],
                 },
             }
@@ -1496,8 +1678,10 @@ class Resolved:
     seq_grow: bool = False
     #: 带识别码：version 的 prefix 为本 PI 的完整前缀，inc_value / inc_customer 为取到的值、PI 的客户
     inc: Inc | None = None
-    #: 带识别码但本 PI 取不到值（已用完、前缀已锁定别的客户、位数不同）：version 为 None，fail 为原因
+    #: 带识别码但本 PI 取不到值（已用完、客户不在适用客户里、位数不同）：version 为 None，fail 为原因
     fail: BizError | None = field(default=None, compare=False)
+    #: 带识别码：本 PI 的适用客户判断范围（含本 PI 待生效的增删、改选的已释放号段，见 IncScope）
+    inc_scope: IncScope | None = field(default=None, compare=False)
 
     @property
     def ready(self) -> bool:
@@ -1553,6 +1737,7 @@ def _own_inc(vs: list[dict], pi: str) -> dict | None:
             for v in vs
             if v["claimed_pi"] == pi
             and v.get("inc_head") is not None
+            and not v.get("inc_released")
             and not is_grow_version(v, by_id.get(v["derived_from"]))
         ),
         None,
@@ -1560,18 +1745,20 @@ def _own_inc(vs: list[dict], pi: str) -> dict | None:
 
 
 def _resolve_inc(rule: dict, vs: list[dict], t: dict, pi: str, source: str) -> Resolved:
-    """带识别码的规则（当前版本 t 为第一张 PI 的配置）：本 PI 已有自己的值时用自己的版本；否则按 t 的配置取
-    下一个自增值（PLAN_INC，只预显示，生成时才另出版本、占用）。取不到值时 version 为 None、fail 为原因。"""
-    own = _own_inc(vs, pi)
-    if own is not None:
-        return Resolved(source, MODE_LIBRARY, PLAN_USE, rule, own, inc=inc_of(own))
+    """带识别码的规则（当前版本 t 为第一张 PI 的配置）：本 PI 已有自己的值、还能用时（inc_pick）用自己的版本；
+    否则按 t 的配置取下一个值（PLAN_INC，只预显示，生成时才另出版本、占用）。取不到值时 version 为 None、
+    fail 为原因（客户不在适用客户里、已用完须改前缀等）。"""
     inc = inc_of(t)
     assert inc is not None
     customer = _customer(pi)
+    scope = inc_scope(inc.head, customer)
     try:
-        value = inc_pick(pi, inc, customer)
+        value = inc_pick(pi, inc, customer, scope)
     except BizError as e:
-        return Resolved(source, MODE_LIBRARY, PLAN_INC, rule, None, inc=inc, fail=e)
+        return Resolved(source, MODE_LIBRARY, PLAN_INC, rule, None, inc=inc, fail=e, inc_scope=scope)
+    own = _own_inc(vs, pi)
+    if own is not None and int(own["inc_value"]) == value:
+        return Resolved(source, MODE_LIBRARY, PLAN_USE, rule, own, inc=inc_of(own), inc_scope=scope)
     draft = {
         **t,
         "id": None,
@@ -1581,8 +1768,9 @@ def _resolve_inc(rule: dict, vs: list[dict], t: dict, pi: str, source: str) -> R
         "derived_from": t["id"],
         "inc_value": value,
         "inc_customer": customer,
+        "inc_released": 0,
     }
-    return Resolved(source, MODE_LIBRARY, PLAN_INC, rule, draft, inc=inc)
+    return Resolved(source, MODE_LIBRARY, PLAN_INC, rule, draft, inc=inc, inc_scope=scope)
 
 
 def _custom_spec(c: dict) -> codec.Spec:
@@ -1621,12 +1809,16 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
     inc = _inc_of_custom(c, spec.prefix)
     custom = _custom_dict(spec, inc)
     extra: dict = {}
+    scope = None
     if inc is not None:
+        # 适用客户（页面上的清单、选规则时已生效的清单）与改选的已释放号段随参数一起登记
+        custom.update({k: c[k] for k in ("inc_customers", "inc_base", "inc_pick") if c.get(k) is not None})
         customer = _customer(pi) if pi else None
+        scope = inc_scope(inc.head, customer, c)
         try:
             if not pi:
                 raise biz(ErrorCode.PI_REQUIRED)
-            value = inc_pick(pi, inc, customer)
+            value = inc_pick(pi, inc, customer, scope)
         except BizError as e:
             return Resolved(
                 source,
@@ -1639,6 +1831,7 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
                 seq_grow=grow,
                 inc=inc,
                 fail=e,
+                inc_scope=scope,
             )
         spec = replace(spec, prefix=inc.prefix(value))
         err = codec.validate(spec)
@@ -1651,6 +1844,7 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
             "inc_end": inc.end,
             "inc_value": value,
             "inc_customer": customer,
+            "inc_released": 0,
         }
     draft = {
         "id": None,
@@ -1671,12 +1865,23 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
         "derived_from": None,
         **extra,
     }
-    return Resolved(source, MODE_CUSTOM, PLAN_NEW, None, draft, custom=custom, seq_start=start, seq_grow=grow, inc=inc)
+    return Resolved(
+        source,
+        MODE_CUSTOM,
+        PLAN_NEW,
+        None,
+        draft,
+        custom=custom,
+        seq_start=start,
+        seq_grow=grow,
+        inc=inc,
+        inc_scope=scope,
+    )
 
 
-def _custom_dict(spec: codec.Spec, inc: Inc | None = None) -> dict:
+def _custom_dict(spec: codec.Spec, inc: Inc | None = None, customers=None) -> dict:
     """自定义规则参数（生成页「选规则」组件按它拆回）。带识别码时 prefix 为前缀层文本，另带 inc_start、inc_end、
-    inc_tail（不带时与原来相同，没有这几项）。"""
+    inc_tail，customers 给出时另带 inc_customers（适用客户；不带识别码时与原来相同，没有这几项）。"""
     out = {
         "prefix": spec.prefix if inc is None else inc.head,
         "base": spec.base,
@@ -1690,6 +1895,8 @@ def _custom_dict(spec: codec.Spec, inc: Inc | None = None) -> dict:
     }
     if inc is not None:
         out.update(inc.fields())
+        if customers is not None:
+            out["inc_customers"] = list(customers)
     return out
 
 
@@ -1893,7 +2100,7 @@ def _resolve_for_select(rule: dict, pi: str, source: str) -> Resolved:
             raise res.fail
         if res.plan == PLAN_INC:
             v = res.version
-            check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"])
+            check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"], res.inc_scope)
         return res
     if res.plan == PLAN_SHARE:
         check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
@@ -2027,6 +2234,8 @@ def select_for_lines(
         cu.check_write(*{line["org_code"] for _, _, line in keys})
         grow = None
         if custom is not None:
+            if custom.get("inc_end") is not None:
+                custom = _check_inc_custom(cu, pi, custom)
             res = _custom_resolved(SRC_LINE, custom, pi)
             grow = custom.get("seq_grow")
             grow = None if grow is None else bool(grow)
@@ -2037,7 +2246,7 @@ def select_for_lines(
             if res.inc is not None:
                 # 带识别码：只预显示本 PI 的值（生成时才占用，见 realize）；前缀防重按前缀层文本
                 v = res.version
-                check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"])
+                check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"], res.inc_scope)
                 own = None
             else:
                 own = own_version(pi, res.spec()) or same_format_rule(cu, pi, res.spec())
@@ -2071,8 +2280,68 @@ def select_for_lines(
             rid, cj, start = rule["id"], None, None
             label = f"{rule['rule_code']} v{res.version['version']}"
         _register(cu, pi, res, rid, cj, start, grow, label)
+        if res.inc_scope is not None and res.inc_scope.pick is not None:
+            _resume_released(res.version["prefix"])
         res = replace(res, seq_grow=prefix_grow(res.version["prefix"]))
         return {"pi_no": pi, "rule": info(res), "lines": len(_pi_lines(pi))}
+
+
+def _resume_released(prefix: str) -> None:
+    """改选已释放的识别码号段：这个号段的前缀最大号补到原 PI 删掉的号的最大流水（删光号时前缀最大号会退回），
+    默认接着原最大号编，原 PI 删掉的流水作为空号段可在「流水」里手动选用（与别的 PI 共用前缀时的空号段相同）。"""
+    mx = db.scalar("SELECT MAX(seq_dec) FROM sn_item_deleted WHERE seq_prefix = %s", prefix)
+    if mx:
+        db.exec(
+            "UPDATE sn_prefix_counter SET last_seq_dec = GREATEST(last_seq_dec, %s), updated_at = %s WHERE prefix = %s",
+            int(mx),
+            util.now(),
+            prefix,
+        )
+
+
+def _check_inc_custom(cu: CurrentUser, pi: str, custom: dict) -> dict:
+    """生成页识别码组件的适用客户（custom.inc_customers；不传按已生效的清单，前缀还没有规则时为本 PI 的客户）：
+    校验清单（见 _check_customers；须含本 PI 的客户），前缀已有规则时记下选规则时已生效的清单（inc_base，生成时按
+    「加了哪些、删了哪些」叠加到最新的清单上）；改选的已释放号段（inc_pick）须是数字。返回登记用的参数。"""
+    c = dict(custom)
+    head = util.trim(c.get("prefix"))
+    customer = _customer(pi)
+    current = inc_customers_of(head)
+    if c.get("inc_customers") is None:
+        # 没传清单：按已生效的（不在里面时取值报 RULE_INC_CUSTOMER），前缀还没有规则时为本 PI 的客户
+        c["inc_customers"] = list(current) if current is not None else ([customer] if customer else [])
+    else:
+        want = _codes(c["inc_customers"])
+        if customer and customer not in want:
+            raise biz(ErrorCode.RULE_INC_CUSTOMER_SELF, customer=customer)
+        _check_customers(cu, want, list(current) if current is not None else [])
+        c["inc_customers"] = want
+    c["inc_base"] = None if current is None else list(current)
+    if c.get("inc_pick") is not None:
+        try:
+            c["inc_pick"] = int(c["inc_pick"])
+        except (TypeError, ValueError):
+            raise biz(ErrorCode.RULE_INC_RANGE_INVALID) from None
+    return c
+
+
+def _check_customers(cu: CurrentUser, want: list[str], before: list[str]) -> None:
+    """识别码适用客户：不能为空、最多 INC_CUSTOMERS_MAX 个；新加的须在已同步的订单里出现过；增删的须在操作员授权
+    生产组织的订单里（系统管理员不限；授权范围外的客户可见、不能增删）。"""
+    if not want:
+        raise biz(ErrorCode.RULE_INC_CUSTOMERS_EMPTY)
+    if len(want) > INC_CUSTOMERS_MAX:
+        raise biz(ErrorCode.RULE_INC_CUSTOMERS_TOO_MANY, max=INC_CUSTOMERS_MAX)
+    added = sorted(set(want) - set(before))
+    for c in added:
+        if not db.exists("SELECT EXISTS(SELECT 1 FROM sn_prd_mo WHERE customer_code = %s)", c):
+            raise biz(ErrorCode.RULE_INC_CUSTOMER_UNKNOWN, customer=c)
+    if cu.is_admin:
+        return
+    fsql, fargs = factories.scope_sql(cu.read_factories(None), "org_code")
+    for c in sorted(added + sorted(set(before) - set(want))):
+        if not db.exists("SELECT EXISTS(SELECT 1 FROM sn_prd_mo WHERE customer_code = %s" + fsql + ")", c, *fargs):
+            raise biz(ErrorCode.RULE_INC_CUSTOMER_SCOPE, customer=c)
 
 
 def _check_pi_scope(cu: CurrentUser, pi: str) -> None:
@@ -2136,8 +2405,9 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
             or (r["category_scope"] == CUSTOMER and customer and r["category_value"] == customer)
         )
         t = _current_of(r, vs)
-        # 带识别码的规则锁定客户：本 PI 的客户正是它时推荐
-        recommended = recommended or bool(t is not None and customer and t.get("inc_customer") == customer)
+        # 带识别码的规则：本 PI 的客户在适用客户里时推荐
+        customers = cust_list(r["inc_customers"])
+        recommended = recommended or bool(customer and customer in customers)
         use = res.version if res is not None and res.version is not None else t
         item = {
             "rule_id": r["id"],
@@ -2154,7 +2424,11 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
             "prefix": r["prefix"],
             "current_prefix": None if t is None else t["prefix"],
             # 本 PI 用它时的配置（「自定义」组件按它拆回；带识别码时 prefix 为前缀层文本）
-            "custom": None if use is None else _custom_dict(spec_of(use), inc_of(use)),
+            "custom": None
+            if use is None
+            else _custom_dict(spec_of(use), inc_of(use), customers if inc_of(use) is not None else None),
+            # 带识别码：适用客户
+            "inc_customers": customers if t is not None and t.get("inc_head") is not None else None,
             "used_pis": len({v["claimed_pi"] for v in vs if v["claimed_pi"] is not None}),
             "plan": None if res is None else res.plan,
             "other_pi": None if res is None else res.other_pi,
@@ -2310,10 +2584,13 @@ def _attach(cu: CurrentUser, pi: str, rule_id: int, spec: codec.Spec, orgs: set[
 
 
 def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
-    """生成事务内：占用本 PI 的自增值，落库为本 PI 的版本（前缀为完整的「前缀 + 自增值 + 固定字符」）。
-    先拿自增前缀锁，按最新已提交的数据再确认这个值（期间被别的 PI 先生成占走时报 RULE_INC_TAKEN）。
-    一个前缀一条规则：这个自增前缀已有规则时，在它下面为本 PI 另出版本（不改当前版本，当前版本即第一张 PI 的配置）；
-    还没有时（第一张 PI，自定义规则）存入规则库（编码 PI-PI号-n），当前版本即本 PI 的版本。PI 登记改记为这条规则。"""
+    """生成事务内：占用本 PI 的识别码值，落库为本 PI 的版本（前缀为完整的「前缀 + 识别码 + 固定字符」）。
+    先拿识别码前缀锁，按最新已提交的数据再确认这个值（期间被别的 PI 先生成占走时报 RULE_INC_TAKEN）。
+    一个前缀一条规则：这个识别码前缀已有规则时，本 PI 待生效的适用客户增删这时叠加到最新的清单上
+    （见 _apply_customers），
+    再在它下面为本 PI 另出版本（不改当前版本，当前版本即第一张 PI 的配置）；还没有时（第一张 PI，自定义规则）存入规则库
+    （编码 PI-PI号-n），适用客户为本 PI 定的清单，当前版本即本 PI 的版本。改选已释放号段时原 PI 的号段写入释放标记。
+    PI 登记改记为这条规则。"""
     from app.services import orders
 
     inc = res.inc
@@ -2324,10 +2601,11 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
         raise biz(err)
     value = int(res.version["inc_value"])
     customer = res.version.get("inc_customer")
-    check_inc(inc, value, spec, pi, customer, gen=True)
+    scope = res.inc_scope or inc_scope(inc.head, customer)
+    check_inc(inc, value, spec, pi, customer, scope, gen=True)
     orgs = {r["org_code"] for r in _pi_lines(pi)} | (orders.bill_orgs(no for no, _ in lines) - {"-"})
-    fam = db.one("SELECT rule_id FROM sn_rule_version WHERE inc_head = %s ORDER BY id LIMIT 1", inc.head)
-    if fam is None:
+    found = _rule_of_prefix_latest(inc.head)
+    if found is None:
         code, name = _custom_names(pi)
         owner = next(iter(orgs)) if len(orgs) == 1 else None
         rid = _insert_rule(
@@ -2336,19 +2614,39 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
             name,
             spec,
             (PI, pi),
-            f" (自定义规则，生成成功后存入规则库；前缀 {inc.head} 识别码取 {inc.text(value)}，锁定客户 {customer})",
+            f" (自定义规则，生成成功后存入规则库；前缀 {inc.head} 识别码取 {inc.text(value)}，"
+            f"适用客户 {_names(scope.allowed)})",
             claimed_pi=pi,
             factory=owner,
             inc=inc,
             inc_value=value,
             inc_customer=customer,
         )
+        db.exec("UPDATE sn_rule SET inc_customers = %s WHERE id = %s", cust_text(scope.allowed), rid)
         _bind_rule(pi, rid)
         return db.one("SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = 1", rid)
-    rule = db.one("SELECT * FROM sn_rule WHERE id = %s FOR UPDATE", fam["rule_id"])
-    # 本 PI 在这个前缀下已有完全同格式的版本（号全删掉后重选）：沿用，不另出
+    rule = db.one("SELECT * FROM sn_rule WHERE id = %s FOR UPDATE", found["id"])
+    if scope.add or scope.remove:
+        latest = cust_list(rule["inc_customers"])
+        after = sorted((set(latest) | set(scope.add)) - set(scope.remove))
+        if customer not in after:
+            raise biz(ErrorCode.RULE_INC_CUSTOMER, prefix=inc.head, customers=_names(after))
+        if not after:
+            raise biz(ErrorCode.RULE_INC_CUSTOMERS_EMPTY)
+        if len(after) > INC_CUSTOMERS_MAX:
+            raise biz(ErrorCode.RULE_INC_CUSTOMERS_TOO_MANY, max=INC_CUSTOMERS_MAX)
+        _apply_customers(cu, rule, latest, after, by_pi=pi)
+    # 改选已释放的号段：原 PI 的号段写入释放标记（之后不再算它的，也不因它的客户加回来而归还）
+    db.exec(
+        "UPDATE sn_rule_version SET inc_released = 1 WHERE inc_head = %s AND inc_value = %s AND claimed_pi <> %s",
+        inc.head,
+        value,
+        pi,
+    )
+    # 本 PI 在这个前缀下已有完全同格式、同一个值的版本（号全删掉后重选）：沿用，不另出
     for v in db.all(
-        "SELECT * FROM sn_rule_version WHERE rule_id = %s AND claimed_pi = %s AND inc_head = %s ORDER BY id DESC",
+        "SELECT * FROM sn_rule_version WHERE rule_id = %s AND claimed_pi = %s AND inc_head = %s AND inc_released = 0 "
+        "ORDER BY id DESC",
         rule["id"],
         pi,
         inc.head,
@@ -2371,7 +2669,7 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
         inc_value=value,
         inc_customer=customer,
     )
-    # 同一客户的各 PI 共用这条规则：别的生产组织的 PI 也用到时改为全局规则（各组织都能看到、选用）
+    # 适用客户的各 PI 共用这条规则：别的生产组织的 PI 也用到时改为全局规则（各组织都能看到、选用）
     if rule["factory_code"] is not None and not orgs <= {rule["factory_code"]}:
         db.exec("UPDATE sn_rule SET factory_code = NULL WHERE id = %s", rule["id"])
     audit.record(
@@ -2383,6 +2681,141 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
     )
     _bind_rule(pi, rule["id"])
     return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)
+
+
+# ================================================================== 识别码适用客户
+
+
+def _inc_regs(rule: dict) -> list[dict]:
+    """登记在这个识别码前缀上的 PI（规则库规则登记为这条规则，或自定义规则的前缀层是它）。"""
+    head = rule["prefix"]
+    out = []
+    for r in db.all("SELECT * FROM sn_pi_rule WHERE prefix LIKE %s", util.like_prefix(head)):
+        if r["rule_id"] is not None:
+            if int(r["rule_id"]) == int(rule["id"]):
+                out.append(r)
+            continue
+        c = json.loads(r["custom_json"] or "{}")
+        if c.get("inc_end") is not None and util.trim(c.get("prefix")) == head:
+            out.append(r)
+    return out
+
+
+def _customer_impact(rule: dict, before: list[str], after: list[str], by_pi: str | None = None) -> list[dict]:
+    """改适用客户的影响（按 PI）：被删除的客户下——号段上还有号的不动（KEEP）；号已全删掉的号段释放（RELEASE）；
+    登记在这个前缀上、本 PI 现在没有号的解除登记（UNBIND）。加回来的客户下号已全删掉的号段释放（取新的值）。
+    by_pi：执行修改的 PI（生成页），不算它。"""
+    removed, added = set(before) - set(after), set(after) - set(before)
+    if not removed and not added:
+        return []
+    head = rule["prefix"]
+    memo: dict[str, bool] = {}
+    out: dict[str, dict] = {}
+    for r in _inc_rows(head):
+        if r["inc_released"] or r["claimed_pi"] == by_pi:
+            continue
+        cust = r["inc_customer"] or ""
+        if cust not in removed and cust not in added:
+            continue
+        x = out.setdefault(
+            r["claimed_pi"],
+            {"pi_no": r["claimed_pi"], "customer": cust, "prefix": r["prefix"], "actions": []},
+        )
+        act = "KEEP" if _live(r["prefix"], memo) else "RELEASE"
+        if cust in added and act == "KEEP":
+            continue
+        if act not in x["actions"]:
+            x["actions"].append(act)
+    for reg in _inc_regs(rule):
+        p = reg["pi_no"]
+        if p == by_pi:
+            continue
+        cust = _customer(p) or ""
+        if cust in removed and pi_used_prefix(p) is None:
+            x = out.setdefault(p, {"pi_no": p, "customer": cust, "prefix": reg["prefix"], "actions": []})
+            x["actions"].append("UNBIND")
+    return [x for x in sorted(out.values(), key=lambda x: x["pi_no"]) if x["actions"]]
+
+
+def _apply_customers(
+    cu: CurrentUser, rule: dict, before: list[str], after: list[str], by_pi: str | None = None
+) -> dict:
+    """事务内（已拿识别码前缀锁）：适用客户改为 after，并执行影响（_customer_impact）：释放号段、解除登记，留痕。"""
+    head = rule["prefix"]
+    impact = _customer_impact(rule, before, after, by_pi)
+    released, unbound = [], []
+    for x in impact:
+        if "RELEASE" in x["actions"]:
+            db.exec(
+                "UPDATE sn_rule_version SET inc_released = 1 WHERE inc_head = %s AND claimed_pi = %s "
+                "AND inc_value IS NOT NULL",
+                head,
+                x["pi_no"],
+            )
+            released.append(f"{x['pi_no']}({x['prefix']})")
+        if "UNBIND" in x["actions"]:
+            db.exec("DELETE FROM sn_pi_rule WHERE pi_no = %s", x["pi_no"])
+            unbound.append(x["pi_no"])
+            audit.record(
+                cu,
+                audit.entry(audit.RULE_PI_UNBIND)
+                .pi(x["pi_no"])
+                .customer(x["customer"])
+                .info(f"{x['prefix']} (识别码前缀 {head} 删除客户 {x['customer']}，解除规则登记)"),
+            )
+    db.exec(
+        "UPDATE sn_rule SET inc_customers = %s, updated_by = %s, updated_at = %s WHERE id = %s",
+        cust_text(after),
+        cu.emp_no,
+        util.now(),
+        rule["id"],
+    )
+    added, removed = sorted(set(after) - set(before)), sorted(set(before) - set(after))
+    audit.record(
+        cu,
+        audit.entry(audit.RULE_UPDATE)
+        .pi(by_pi)
+        .info(
+            f"{rule['rule_code']} 识别码前缀 {head} 适用客户 {_names(before)} -> {_names(after)}"
+            + (f"；加 {_names(added)}" if added else "")
+            + (f"；删 {_names(removed)}" if removed else "")
+            + (f"；释放号段 {_names(released)}" if released else "")
+            + (f"；解除 PI {_names(unbound)} 的规则登记" if unbound else "")
+        ),
+    )
+    return {"customers": list(after), "added": added, "removed": removed, "released": released, "unbound": unbound}
+
+
+def _inc_rule(cu: CurrentUser, rule_id: int, lock: bool = False) -> dict:
+    r = get_rule(rule_id, lock=lock)
+    check_visible(cu, r)
+    if not db.exists(
+        "SELECT EXISTS(SELECT 1 FROM sn_rule_version WHERE rule_id = %s AND inc_head IS NOT NULL)", r["id"]
+    ):
+        raise biz(ErrorCode.RULE_NOT_INC, rule_code=r["rule_code"])
+    return r
+
+
+def inc_customers_impact(cu: CurrentUser, rule_id: int, customers: list[str] | None, pi: str | None = None) -> dict:
+    """改识别码适用客户前查看影响（删除客户前弹窗列出）：受影响的 PI 与处理（KEEP / RELEASE / UNBIND）。
+    pi：生成页本 PI（它自己不算）。"""
+    r = _inc_rule(cu, rule_id)
+    before = cust_list(r["inc_customers"])
+    after = _codes(customers)
+    return {"customers": before, "impact": _customer_impact(r, before, after, util.trim(pi) or None)}
+
+
+def set_inc_customers(cu: CurrentUser, rule_id: int, customers: list[str] | None) -> dict:
+    """规则库页面改识别码适用客户：保存即生效（本 PI 生成成功才生效的是生成页的修改）。校验同生成页（不能为空、
+    最多 30 个、新加的须在已同步的订单里、增删的须在授权组织的订单里），执行影响（释放号段、解除登记）并留痕。"""
+    with db.tx():
+        r = _inc_rule(cu, rule_id, lock=True)
+        locks.hold_prefixes([_inc_lock_key(r["prefix"])])
+        before = cust_list(r["inc_customers"])
+        after = _codes(customers)
+        _check_customers(cu, after, before)
+        out = _apply_customers(cu, r, before, after) if after != before else {"customers": before}
+    return {"rule": view(get_rule(rule_id)), **out}
 
 
 def share_version(cu: CurrentUser, pi: str, rule: dict, t: dict) -> dict:

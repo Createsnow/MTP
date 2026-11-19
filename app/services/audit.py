@@ -242,6 +242,7 @@ _PATH_ACTIONS = (
     (r"/api/orders/.*", ORDER_SYNC),
     (r"/api/rules/line-(select|clear)", RULE_LINE_SELECT),
     (r"/api/rules/pi-binding", RULE_PI_BIND),
+    (r"/api/rules/\d+/inc-customers", RULE_UPDATE),
     (r"/api/rules/\d+", RULE_UPDATE),
     (r"/api/rules", RULE_CREATE),
     (r"/api/generate/batches/[^/]+/cancel", SN_GEN_CANCEL),

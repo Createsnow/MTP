@@ -47,6 +47,9 @@ class RulePreviewIn(RuleSpecIn):
     inc_start: int | None = None
     inc_end: int | None = None
     inc_tail: str | None = None
+    #: 识别码适用客户（页面上的清单；不传按已生效的，前缀还没有规则时为本 PI 的客户）、改选的已释放号段
+    inc_customers: list[str] | None = None
+    inc_pick: int | None = None
 
 
 class LineRef(In):
@@ -75,10 +78,15 @@ class CustomRuleIn(In):
     seq_grow: bool | None = None
     #: 识别码（中间件，紧跟前缀、在流水之前；inc_end 不传 = 不带）：prefix 为前缀层文本（防重只看它），
     #: 范围 inc_start~inc_end（0–999，位数为结束值的位数，不足补 0），inc_tail 为识别码之后、流水之前的固定字符。
-    #: 同一客户的 PI 依次取已用最大值 + 1，前缀 + 自增值为本 PI 独占的号段，流水从 1 开始
+    #: 适用客户下的 PI 依次取已用最大值 + 1，前缀 + 识别码为本 PI 独占的号段，流水从 1 开始
     inc_start: int | None = None
     inc_end: int | None = None
     inc_tail: str | None = None
+    #: 识别码适用客户（只能选已同步的订单客户，须含本 PI 的客户；不传按已生效的清单）：前缀已有规则时，相对选规则时
+    #: 已生效的清单「加了哪些、删了哪些」在本 PI 生成成功时才叠加到最新的清单上；前缀还没有规则时为第一次生成定下的清单
+    inc_customers: list[str] | None = None
+    #: 改选的已释放识别码号段（值）；不传 = 取下一个值
+    inc_pick: int | None = None
 
 
 class LineSelectIn(In):
@@ -93,6 +101,13 @@ class LineSelectIn(In):
 class PiBindIn(In):
     pi_no: str | None = None
     rule_id: int | None = None
+
+
+class IncCustomersIn(In):
+    """识别码适用客户（规则库页面修改，保存即生效；查看影响时 pi_no 为生成页本 PI，它自己不算）。"""
+
+    customers: list[str] | None = None
+    pi_no: str | None = None
 
 
 class PrefixGrowIn(In):

@@ -535,6 +535,11 @@
       "custom": "自定义",
       "recommended": "推荐",
       "fromRule": "来自规则 {code}",
+      "incCustomers": "适用客户",
+      "incAfterGen": "本 PI 生成成功后生效",
+      "incPick": "改选已释放号段",
+      "incPickNext": "取下一个值",
+      "incImpactTitle": "本 PI 生成成功后，以下 PI 会受影响",
       "pickedFill": "已按规则 {code} 填入，可在此修改",
       "outcome": {
         "USE": "将用规则 {code}",
@@ -1147,6 +1152,22 @@
     "seqGrowTip": "按前缀统一设置，作用于这个前缀下的全部 PI；流水已超出规则位数后不能关闭",
     "incTag": "识别码 {start}~{end} · 客户 {customer}",
     "incSegment": "号段前缀",
+    "incStatus": "号段状态",
+    "incStatusOf": {
+      "USED": "使用中",
+      "REMOVED": "客户已移出",
+      "RELEASED": "已释放"
+    },
+    "incCustomersEdit": "适用客户",
+    "incCustomersTitle": "识别码适用客户：{prefix}",
+    "incCustomersPh": "从已同步的订单客户中选择",
+    "incCustomersHint": "这组客户下的 PI 共用一套识别码递增序号；保存即生效。删除客户时：号段上还有号的 PI 不动，号已全删掉的号段释放，还没生成的 PI 解除规则登记",
+    "incImpactTitle": "以下 PI 会受影响",
+    "incImpact": {
+      "KEEP": "号段上还有号，不动",
+      "RELEASE": "号已全删掉，号段释放",
+      "UNBIND": "解除规则登记"
+    },
     "status": "状态",
     "unused": "未使用",
     "detail": "详情",
