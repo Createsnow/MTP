@@ -50,14 +50,21 @@ ADMIN = "admin"
 OPERATOR = "operator"
 #: 审计员：授权组织内只读——SN 查询与导出、操作痕迹
 AUDITOR = "auditor"
+#: 管理员：授权组织内普通操作员的全部权限 + 审计（操作痕迹）+ 管理授权组织内的普通操作员、审计员账户
+#: （新建、修改、停用、启用、重置密码）；不能管理系统管理员、管理员和 MES 接口账户，不能改全局配置
+MANAGER = "manager"
 #: MES 接口账户：只调 /api/mes/v1
 MES = "mes"
-ROLES = frozenset((ADMIN, OPERATOR, AUDITOR, MES))
+ROLES = frozenset((ADMIN, MANAGER, OPERATOR, AUDITOR, MES))
 #: 页面上绑定授权组织（一个或多个，必须至少一个）的角色
-SCOPED_ROLES = frozenset((OPERATOR, AUDITOR))
+SCOPED_ROLES = frozenset((MANAGER, OPERATOR, AUDITOR))
+#: 具备普通操作员业务权限（授权组织内写操作）的角色
+OPERATE_ROLES = frozenset((MANAGER, OPERATOR))
+#: 管理员可以管理（新建、修改、停用、启用、重置密码）的账户角色
+MANAGER_MANAGED_ROLES = frozenset((OPERATOR, AUDITOR))
 #: 页面单会话的角色：同一账户只在最后登录的页面有效（新页签登录后旧页签失效）。
 #: 系统管理员不在内，可在多个页签同时登录；MES 接口账户不登录页面。
-SINGLE_SESSION_ROLES = frozenset((OPERATOR, AUDITOR))
+SINGLE_SESSION_ROLES = frozenset((MANAGER, OPERATOR, AUDITOR))
 
 
 def is_super_admin(emp_no: str | None, role: str | None) -> bool:

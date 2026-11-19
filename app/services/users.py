@@ -1,7 +1,9 @@
-"""登录、改密与账户管理（F-01）。账户只停用不删除；只有系统管理员能维护账户。
+"""登录、改密与账户管理（F-01）。账户只停用不删除；系统管理员能维护全部账户，
+管理员只能维护授权组织内的普通操作员、审计员（新建、修改、停用、启用、重置密码）；
+MES 接口账户密钥只有系统管理员能看、能重置。
 
-页面账户（系统管理员 / 普通操作员 / 审计员）用工号和密码直接登录，任何时候都不强制改密；
-系统管理员只有一个（工号 SN_INIT_ADMIN_EMP_NO）；普通操作员、审计员必须至少授权一个生产组织；
+页面账户（系统管理员 / 管理员 / 普通操作员 / 审计员）用工号和密码直接登录，任何时候都不强制改密；
+系统管理员只有一个（工号 SN_INIT_ADMIN_EMP_NO）；管理员、普通操作员、审计员必须至少授权一个生产组织；
 本人改密、系统管理员重置密码后，该账户所有页面的令牌失效，须用新密码重新登录。
 MES 接口账户不能登录页面：创建或重置时系统生成密钥（加密保存，系统管理员随时可查看），
 MES 每次请求带 Authorization: Bearer <工号>:<密钥>；
@@ -211,11 +213,27 @@ def set_lang(cu: CurrentUser, lang: str | None) -> dict:
 
 
 def list_users(
-    q: str | None, role: str | None, status: str | None, factory: str | None, page: util.Page, kind: str | None = None
+    q: str | None,
+    role: str | None,
+    status: str | None,
+    factory: str | None,
+    page: util.Page,
+    kind: str | None = None,
+    cu: CurrentUser | None = None,
 ) -> dict:
-    """kind：page = 账户页签（页面账户，不含 MES 接口账户），mes = MES 接口账户页签；空 = 全部。"""
+    """kind：page = 账户页签（页面账户，不含 MES 接口账户），mes = MES 接口账户页签；空 = 全部。
+    管理员只看到它能管理的账户：授权组织全部在它的授权范围内的普通操作员、审计员。"""
     where = " WHERE 1=1"
     args: list = []
+    if cu is not None and not cu.is_super_admin:
+        roles = sorted(util.MANAGER_MANAGED_ROLES)
+        where += (
+            f" AND role IN ({marks(len(roles))})"
+            " AND EXISTS (SELECT 1 FROM sn_user_factory a WHERE a.user_id = sn_user.id)"
+            " AND NOT EXISTS (SELECT 1 FROM sn_user_factory b WHERE b.user_id = sn_user.id"
+            + (f" AND b.factory_code NOT IN ({marks(len(cu.factories))}))" if cu.factories else ")")
+        )
+        args += [*roles, *cu.factories]
     k = util.trim(kind)
     if k == "page":
         where += " AND role <> %s"
@@ -253,7 +271,7 @@ def list_users(
 
 @dataclass(frozen=True)
 class Binding:
-    """factory = MES 接口账户的生产组织；scope = 普通操作员、审计员授权的生产组织（至少一个）。"""
+    """factory = MES 接口账户的生产组织；scope = 管理员、普通操作员、审计员授权的生产组织（至少一个）。"""
 
     factory: str | None
     scope: tuple[str, ...]
@@ -361,6 +379,23 @@ def _check_not_last_admin(target: dict) -> None:
         raise biz(ErrorCode.USER_LAST_ADMIN)
 
 
+def _check_manageable(cu: CurrentUser, target: dict) -> None:
+    """管理员只能管理授权组织全部在自己授权范围内的普通操作员、审计员；系统管理员不限。"""
+    if cu.is_super_admin:
+        return
+    codes = bound_factories(target["id"]) if target["role"] in util.MANAGER_MANAGED_ROLES else []
+    if not codes or any(c not in cu.factories for c in codes):
+        raise biz(ErrorCode.USER_MANAGE_OUT_OF_SCOPE, factory=cu.scope_text())
+
+
+def _check_grant(cu: CurrentUser, role: str, b: Binding) -> None:
+    """管理员新建 / 修改后的账户：角色只能是普通操作员、审计员，授权组织不能超出自己的授权范围。"""
+    if cu.is_super_admin:
+        return
+    if role not in util.MANAGER_MANAGED_ROLES or b.factory is not None or any(c not in cu.factories for c in b.scope):
+        raise biz(ErrorCode.USER_MANAGE_OUT_OF_SCOPE, factory=cu.scope_text())
+
+
 def create(
     cu: CurrentUser,
     emp_no: str | None,
@@ -381,6 +416,7 @@ def create(
             raise biz(ErrorCode.USER_NAME_REQUIRED)
         r = util.trim(role)
         b = _check_role_factory(r, factory_code, factory_codes)
+        _check_grant(cu, r, b)
         secret = None
         if r == util.MES:
             secret = new_secret()
@@ -433,6 +469,7 @@ def update(
 ) -> dict:
     with db.tx():
         u = _must_get(uid)
+        _check_manageable(cu, u)
         old = Binding(u["factory_code"], tuple(bound_factories(uid)))
         n = util.trim(name)
         if not n or len(n) > 64:
@@ -444,6 +481,7 @@ def update(
         if super_admin and r != util.ADMIN:
             raise biz(ErrorCode.USER_SUPER_ADMIN_FIXED)
         b = _check_role_factory(r, factory_code, factory_codes, old.codes(), admin_ok=super_admin)
+        _check_grant(cu, r, b)
         if u["role"] == util.ADMIN and r != util.ADMIN:
             _check_not_last_admin(u)
         ips = _ip_list(ip_whitelist) if r == util.MES and ip_whitelist is not None else u["ip_whitelist"]
@@ -512,6 +550,7 @@ def disable(cu: CurrentUser, uid: int) -> dict:
         u = _must_get(uid)
         if u["id"] == cu.id:
             raise biz(ErrorCode.USER_SELF_DISABLE)
+        _check_manageable(cu, u)
         if u["emp_no"] == settings.init_admin_emp_no:
             raise biz(ErrorCode.USER_SUPER_ADMIN_FIXED)
         if u["status"] == DISABLED:
@@ -533,6 +572,7 @@ def disable(cu: CurrentUser, uid: int) -> dict:
 def enable(cu: CurrentUser, uid: int) -> dict:
     with db.tx():
         u = _must_get(uid)
+        _check_manageable(cu, u)
         if u["status"] == ACTIVE:
             return view(u)
         db.exec(
@@ -549,6 +589,7 @@ def reset_password(cu: CurrentUser, uid: int, password: str | None) -> dict:
     """重置为系统管理员给定的密码：旧令牌全部失效，该账户用新密码重新登录（不强制改密）。"""
     with db.tx():
         u = _must_get(uid)
+        _check_manageable(cu, u)
         if u["role"] == util.MES:
             raise biz(ErrorCode.USER_ROLE_FIXED)
         check_policy(password)

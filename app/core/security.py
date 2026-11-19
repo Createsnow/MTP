@@ -149,7 +149,7 @@ class CurrentUser:
     factory_code: str | None
     source: str
     trace_id: str | None
-    #: 授权的生产组织：普通操作员、审计员 = 绑定的一个或多个；MES 接口账户 = 本组织；系统管理员为空 = 全部
+    #: 授权的生产组织：管理员、普通操作员、审计员 = 绑定的一个或多个；MES 接口账户 = 本组织；系统管理员为空 = 全部
     factories: tuple[str, ...] = ()
 
     @staticmethod
@@ -168,7 +168,18 @@ class CurrentUser:
 
     @property
     def is_operator(self) -> bool:
-        return self.role == util.OPERATOR
+        """具备普通操作员业务权限：普通操作员、管理员（都限授权组织）。"""
+        return self.role in util.OPERATE_ROLES
+
+    @property
+    def is_manager(self) -> bool:
+        """管理员：授权组织内普通操作员权限 + 审计 + 管理授权组织内的普通操作员、审计员账户。"""
+        return self.role == util.MANAGER
+
+    @property
+    def can_manage_users(self) -> bool:
+        """能进入账户管理：系统管理员账户、管理员（管理员只能管授权组织内的普通操作员、审计员）。"""
+        return self.is_super_admin or (self.source != SYSTEM and self.is_manager)
 
     @property
     def is_auditor(self) -> bool:
@@ -195,7 +206,7 @@ class CurrentUser:
             raise biz(ErrorCode.FACTORY_FORBIDDEN, factory=self.scope_text())
 
     def check_write(self, *factories: str | None) -> None:
-        """写操作：系统管理员不限；普通操作员涉及的生产组织须全部在授权范围内（空值不计）；其他角色不能写。"""
+        """写操作：系统管理员不限；普通操作员、管理员涉及的生产组织须全部在授权范围内（空值不计）；其他角色不能写。"""
         if self.is_admin:
             return
         if not self.is_operator:
@@ -204,7 +215,7 @@ class CurrentUser:
             raise biz(ErrorCode.FACTORY_FORBIDDEN, factory=self.scope_text())
 
     def write_factory(self, requested: str | None) -> str:
-        """写操作（转组织）的来源生产组织：系统管理员必须指定；普通操作员只能是授权组织，只授权一个时可不填。"""
+        """写操作（转组织）的来源生产组织：系统管理员必须指定；普通操作员、管理员只能是授权组织，只授权一个时可不填。"""
         req = util.trim(requested)
         if self.is_admin:
             if not req:

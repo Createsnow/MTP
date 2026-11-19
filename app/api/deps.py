@@ -1,5 +1,5 @@
 """/api 鉴权依赖：Bearer 令牌 → 账户（改密或被重置即拒绝、停用即拒绝；
-普通操作员、审计员的页面令牌在别的页面重新登录即拒绝，系统管理员可多页签同时登录）→ 角色。
+管理员、普通操作员、审计员的页面令牌在别的页面重新登录即拒绝，系统管理员可多页签同时登录）→ 角色。
 
 当前账户挂到 request.state.user，全局 BizError 处理据此记失败痕迹。
 """
@@ -95,9 +95,17 @@ def require_role(*roles: str) -> Callable[[Request], CurrentUser]:
 
 
 def require_super_admin(request: Request) -> CurrentUser:
-    """账户管理：只有系统管理员账户。"""
+    """只有系统管理员账户：MES 接口账户密钥的查看与重置。"""
     cu = authenticate(request)
     if not cu.is_super_admin:
+        raise biz(ErrorCode.USER_MANAGE_FORBIDDEN)
+    return cu
+
+
+def require_user_manager(request: Request) -> CurrentUser:
+    """账户管理：系统管理员账户、管理员（管理员能管哪些账户由 services/users 校验）。"""
+    cu = authenticate(request)
+    if not cu.can_manage_users:
         raise biz(ErrorCode.USER_MANAGE_FORBIDDEN)
     return cu
 
@@ -157,15 +165,17 @@ def mes_user(request: Request) -> CurrentUser:
     return cu
 
 
-#: 任何页面账户（系统管理员、普通操作员、审计员）
+#: 任何页面账户（系统管理员、管理员、普通操作员、审计员）
 UserDep = Annotated[CurrentUser, Depends(current_user)]
 #: 只有系统管理员：生产组织与 MES 配置、全量重建快照等全局配置
 AdminDep = Annotated[CurrentUser, Depends(require_role(util.ADMIN))]
-#: 系统管理员 + 普通操作员：业务操作（普通操作员限授权组织，由业务层 check_write 校验）
-OperatorDep = Annotated[CurrentUser, Depends(require_role(util.ADMIN, util.OPERATOR))]
-#: 系统管理员 + 审计员：操作痕迹（审计报表）
-AuditDep = Annotated[CurrentUser, Depends(require_role(util.ADMIN, util.AUDITOR))]
-#: 账户管理：只有系统管理员账户
+#: 系统管理员 + 管理员 + 普通操作员：业务操作（管理员、普通操作员限授权组织，由业务层 check_write 校验）
+OperatorDep = Annotated[CurrentUser, Depends(require_role(util.ADMIN, util.MANAGER, util.OPERATOR))]
+#: 系统管理员 + 管理员 + 审计员：操作痕迹（审计报表；管理员、审计员限授权组织）
+AuditDep = Annotated[CurrentUser, Depends(require_role(util.ADMIN, util.MANAGER, util.AUDITOR))]
+#: 账户管理：系统管理员账户 + 管理员（管理员只管授权组织内的普通操作员、审计员）
+UserManageDep = Annotated[CurrentUser, Depends(require_user_manager)]
+#: 只有系统管理员账户：MES 接口账户密钥
 SuperAdminDep = Annotated[CurrentUser, Depends(require_super_admin)]
 
 
