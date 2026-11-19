@@ -15,7 +15,8 @@
 
     <template v-if="mode === 'LIBRARY'">
       <el-input v-model="kw" clearable prefix-icon="Search" class="mb" />
-      <!-- 每条列「规则编码 v版本」（本 PI 用的版本）、格式与本 PI 用它时的处理（须换前缀等） -->
+      <!-- 一个前缀一条规则：点选即选前缀，按本 PI 用它时的配置填进「自定义」，在那里改。
+           每条列「规则编码 v版本」（本 PI 用的版本，版本号只按后缀区分）、格式与本 PI 用它时的处理（共用前缀等） -->
       <div class="rule-list">
         <div v-for="o in filtered" :key="o.rule_id" class="it" :class="{ on: picked?.rule_id === o.rule_id }" tabindex="0"
           @click="pick(o)" @keyup.enter="pick(o)">
@@ -26,7 +27,7 @@
           </span>
           <span class="tags">
             <el-tag v-if="o.recommended" size="small" type="success">{{ t("generate.rule.recommended") }}</el-tag>
-            <el-tag v-if="o.plan" size="small" :type="o.plan === 'PREFIX' ? 'warning' : 'info'">{{ t(`generate.plan.${o.plan}`) }}</el-tag>
+            <el-tag v-if="o.plan" size="small" type="info">{{ t(`generate.plan.${o.plan}`) }}</el-tag>
             <!-- 识别码：本 PI 将用的号段前缀（只预显示）；取不到值时（已用完须改前缀等）标红 -->
             <el-tag v-if="o.inc_error" size="small" type="danger">{{ incErrorText(o.inc_error) }}</el-tag>
             <el-tag v-else-if="o.inc?.prefix" size="small" type="success" class="sn-mono">{{ t("generate.rule.incWill", { prefix: o.inc.prefix }) }}</el-tag>
@@ -34,15 +35,6 @@
         </div>
         <div v-if="!filtered.length" class="empty">{{ t("common.empty") }}</div>
       </div>
-      <!-- 共用前缀（SHARE）时新前缀选填：不填共用该前缀，填了为本 PI 换前缀另出版本 -->
-      <div v-if="picked?.inc_error" class="err mt">{{ incErrorText(picked.inc_error) }}</div>
-      <!-- 带识别码的规则不在这里换前缀（在「自定义」里改前缀） -->
-      <el-form v-if="!picked?.inc && (picked?.plan === 'PREFIX' || picked?.plan === 'SHARE')" label-width="120px" class="mt" @submit.prevent>
-        <el-form-item :label="t('generate.rule.newPrefix')" :required="picked.plan === 'PREFIX'">
-          <el-input v-model="newPrefix" maxlength="32" class="w200"
-            :placeholder="picked.plan === 'SHARE' ? picked.current_prefix ?? '' : ''" />
-        </el-form-item>
-      </el-form>
     </template>
 
     <!-- 自定义：SN 组成（组件按顺序拼成；保存时换算成前缀 / 流水 / 米数 / 单位 / 后缀，见 snParts.js）。
@@ -50,6 +42,11 @@
          左侧组件库添加到前缀或后缀，右侧组件清单按三段逐行改参数、上移 / 下移（越过流水即换段）、删除。
          弹窗只放控件与数据，不放说明文字 -->
     <div v-else class="parts-box">
+      <!-- 结果提示：来自哪条规则；改了以后按前缀归到哪条规则下（一个前缀一条规则） -->
+      <div v-if="outcome" class="outcome">
+        <el-tag size="small" :type="outcome.kind === 'NEW' ? 'warning' : 'success'">{{ t(`generate.rule.outcome.${outcome.kind}`, outcome) }}</el-tag>
+        <span v-if="fromRule" class="muted">{{ t("generate.rule.fromRule", { code: fromRule.rule_code }) }}</span>
+      </div>
       <div class="tpls">
         <span class="lb">{{ t("generate.rule.tpls") }}</span>
         <button v-for="k in TPL_KEYS" :key="k" type="button" class="tpl" :class="{ on: tplOn === k }" @click="applyTpl(k)">
@@ -290,7 +287,8 @@ const LEGEND = ["FIX", "INC", "SEQ", "LINE"];
 const mode = ref<"LIBRARY" | "CUSTOM">("LIBRARY");
 const kw = ref("");
 const picked = ref<any>(null);
-const newPrefix = ref("");
+/** 从规则库点选、填进「自定义」的规则（选项，见 rules.options）；没点选为 null */
+const fromRule = ref<any>(null);
 const parts = ref<Part[]>([]);
 /** 组件库「添加到」：前缀 / 后缀 */
 const target = ref<"PRE" | "SUF">("PRE");
@@ -477,11 +475,34 @@ const seqStart = () => {
   return s && s > startMin.value ? s : null;
 };
 const anyGenerated = computed(() => props.lines.some((l) => l.generated_qty > 0));
+/** 编码格式的比较项（流水上限自动突破按前缀，起始号只管下一次生成，都不算） */
+const CFG_KEYS = ["prefix", "base", "seq_len", "with_length", "length_pad", "sep_before", "sep_after", "with_unit", "suffix",
+  "inc_start", "inc_end", "inc_tail"] as const;
+const cfgOf = (c: any) => CFG_KEYS.map((k) => {
+  const v = c?.[k];
+  if (k === "with_length" || k === "with_unit") return !!v;
+  if (k === "length_pad") return c?.with_length ? Number(v) || 0 : 0;
+  if ((k === "sep_before" || k === "sep_after")) return c?.with_length ? v || "" : "";
+  if (k === "inc_start" || k === "inc_end") return v == null ? null : Number(v);
+  return v ?? "";
+});
+const sameCfg = (a: any, b: any) => JSON.stringify(cfgOf(a)) === JSON.stringify(cfgOf(b));
+/** 点选的规则没改过（起始号也没填）：按规则库规则登记（rule_id），与原来在规则库页签选用相同 */
+const unchanged = computed(() => !!fromRule.value?.custom && sameCfg(built.value.spec, fromRule.value.custom) && !seqStart());
+/** 前缀的规则（一个前缀一条规则；带识别码的按前缀层文本） */
+const ruleOfPrefix = computed(() => props.options.find((o) => o.prefix === built.value.spec.prefix) ?? null);
+/** 确定后的结果：USE 用这条规则 / ATTACH 归到前缀的规则下为本 PI 另出版本 / NEW 新前缀，生成后存为新规则 */
+const outcome = computed(() => {
+  if (mode.value !== "CUSTOM" || built.value.errors.length || !built.value.spec.prefix) return null;
+  if (unchanged.value) return { kind: "USE", code: fromRule.value.rule_code };
+  const r = ruleOfPrefix.value;
+  if (r && r.custom && sameCfg(built.value.spec, r.custom)) return { kind: "USE", code: r.rule_code };
+  if (r) return { kind: "ATTACH", code: r.rule_code, prefix: built.value.spec.prefix };
+  return { kind: "NEW", prefix: built.value.spec.prefix };
+});
 const canSave = computed(() => {
-  if (!props.lines.length) return false;
-  if (mode.value === "LIBRARY") {
-    return !!picked.value && !picked.value.inc_error && (picked.value.plan !== "PREFIX" || !!newPrefix.value.trim());
-  }
+  if (!props.lines.length || mode.value !== "CUSTOM") return false;
+  if (unchanged.value) return !fromRule.value.inc_error;
   return !built.value.errors.length && !!built.value.spec.prefix && !sample.error;
 });
 
@@ -489,7 +510,7 @@ const canSave = computed(() => {
  *  没有时按所选物料行现有的自定义规则拆回组件，再没有用默认（流水 4 位）。 */
 function onOpen() {
   kw.value = "";
-  newPrefix.value = "";
+  fromRule.value = null;
   sample.error = "";
   sample.min = null;
   sample.max = null;
@@ -510,10 +531,20 @@ function onOpen() {
   schedule();
 }
 
+/** 点选规则（即选前缀）：按本 PI 用它时的配置填进「自定义」并切过去，在那里改；不改直接确定即用这条规则 */
 function pick(o: any) {
   picked.value = o;
-  // 须为本 PI 换前缀时同样用默认前缀（点选的第一个单据编码后 7 位 / 已用前缀）；共用前缀时默认不填（共用）
-  newPrefix.value = o.plan === "PREFIX" ? toSpec([...defaultHead(), newPart("SEQ")], partCtx.value).spec.prefix : "";
+  if (!o.custom) return;
+  const prev = parts.value;
+  const grow = props.rulePrefix?.registered && props.rulePrefix.prefix === o.prefix ? props.rulePrefix.seq_grow ?? true : true;
+  fromRule.value = o;
+  parts.value = fromSpec({ ...o.custom, seq_start: null, seq_grow: grow }, [textPart(o.custom.prefix)]);
+  mode.value = "CUSTOM";
+  schedule();
+  undoable(t("generate.rule.pickedFill", { code: o.rule_code }), () => {
+    parts.value = prev;
+    fromRule.value = null;
+  });
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -607,12 +638,9 @@ async function save() {
   busy.value = "save";
   try {
     const body: Record<string, unknown> = { pi_no: props.pi, lines: refs() };
-    if (mode.value === "LIBRARY") {
-      body.rule_id = picked.value.rule_id;
-      // 共用前缀时新前缀选填：不填即共用
-      if (picked.value.plan === "PREFIX" || (picked.value.plan === "SHARE" && newPrefix.value.trim())) {
-        body.new_prefix = newPrefix.value.trim();
-      }
+    if (unchanged.value) {
+      // 点选的规则没改：按规则库规则登记（别的 PI 已用时共用前缀）
+      body.rule_id = fromRule.value.rule_id;
     } else {
       // 请求体：prefix、base、seq_len、with_length、length_pad、sep_before、sep_after、with_unit、suffix、seq_start，
       // 另带 seq_grow（上限自动突破，后台不传按关闭）
@@ -632,6 +660,7 @@ async function save() {
 
 <style scoped>
 .mb { margin-bottom: 12px; }
+.outcome { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .mt { margin-top: 12px; }
 .w100 { width: 100px; }
 .w140 { width: 140px; }

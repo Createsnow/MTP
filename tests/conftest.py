@@ -584,8 +584,8 @@ class World:
         )
         return r["rule"]["id"]
 
-    def bind_pi(self, pi: str, rule_id: int, new_prefix: str | None = None) -> Res:
-        return self.api.put("/api/rules/pi-binding", m(pi_no=pi, rule_id=rule_id, new_prefix=new_prefix), self.admin)
+    def bind_pi(self, pi: str, rule_id: int) -> Res:
+        return self.api.put("/api/rules/pi-binding", m(pi_no=pi, rule_id=rule_id), self.admin)
 
     def select(
         self,
@@ -593,7 +593,6 @@ class World:
         lines: list[tuple[str, int]],
         rule_id: int | None = None,
         custom: dict | None = None,
-        new_prefix: str | None = None,
     ) -> Res:
         return self.api.post(
             "/api/rules/line-select",
@@ -602,7 +601,6 @@ class World:
                 lines=[m(bill_no=b, seq=s) for b, s in lines],
                 rule_id=rule_id,
                 custom=custom,
-                new_prefix=new_prefix,
             ),
             self.admin,
         )

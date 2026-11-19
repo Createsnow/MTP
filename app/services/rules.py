@@ -5,17 +5,19 @@
 - 一个 PI 一个规则前缀：选规则（select_for_lines / bind_pi）即登记在 PI 上（sn_pi_rule：前缀、规则库规则或自定义规则
   参数、起始号），本 PI 全部物料行、之后同步进来的单据都用它。本 PI 有号（生成过、没全删）时前缀锁定
   （RULE_PI_PREFIX_LOCKED），没号时可以改选；改选须对本 PI 全部单据的生产组织都有授权。
-- 规则版本首次用于生成（或为某张 PI 换前缀另出、自定义规则生成）时归属该 PI。别的 PI 选同一条规则时默认共用前缀，
-  生成时为它另出同前缀、同格式的版本（share_version，derived_from 记由哪一版而来）；也可以填新前缀另出版本（换前缀）。
+- 一个前缀一条规则（sn_rule.prefix 唯一；带识别码的为前缀层文本）：规则是前缀的档案，各 PI 在这个前缀下用的版本
+  都挂在这条规则上。规则库新建规则即新建前缀；生成过号的规则不能改前缀、进制、流水位数、字符表（须新建规则）。
+- 规则版本首次用于生成时归属该 PI。别的 PI 选同一条规则时共用前缀，生成时为它另出同前缀、同格式的版本
+  （share_version，derived_from 记由哪一版而来）。自定义规则的前缀已有规则时归到那条规则下：本 PI 的米数、单位、
+  后缀与规则不同时为本 PI 另出版本（不改规则的当前版本）。页面显示的版本号只按后缀区分（display_no）。
 - 同一前缀下进制、流水位数、字符表锁定（流水紧跟前缀、定长，前缀 + 流水才能唯一区分号）；米数（补 0、前后分隔符）、
-  单位、后缀可各不相同：版本生成过号后改这几项，另出一版沿用同一前缀；改进制、位数或字符表须换新前缀。
-  尚未归属 PI 的版本独占前缀，规则库保存时前缀不能与已有前缀相同。
+  单位、后缀可各不相同。规则库保存时前缀不能与已有前缀相同。
 - 任何两个不同的前缀都不能一个是另一个的开头（如 SD 与 SDD：流水不同也可能拼出相同的号）。
   万一拼出的完整 SN 相同，仍由号池唯一约束拦下、整次生成回滚。
 
 自定义规则（前缀、进制、位数、米数及其补 0 位数与前后分隔符、是否带单位、后缀、起始号）：只登记在 PI 上，
-生成成功后才存入规则库（编码 PI-PI号-n，名称 PI号_vn），PI 登记改记为这条规则；生成失败或取消不留规则。
-与本 PI 已有的、或规则库里前缀、格式完全相同的规则归到那条规则下，不另建。起始号只管下一次生成（生成后清掉）。
+生成成功后才落库，PI 登记改记为规则：前缀已有规则时归到那条规则下（见 _attach），前缀是新的才新建规则
+（编码 PI-PI号-n，名称 PI号_vn）；生成失败或取消不留规则。起始号只管下一次生成（生成后清掉）。
 
 流水上限自动突破按前缀统一设置（sn_prefix_counter.seq_grow，默认开启）：第一张 PI 选这个前缀时按这次的选择定下，
 之后在规则库改（set_prefix_grow），已突破过规则位数后不能关闭。开启时流水用完规则位数后自动加位（最多 12 位），
@@ -57,14 +59,13 @@ SRC_PI = "PI"
 #: 选法
 MODE_LIBRARY = "LIBRARY"
 MODE_CUSTOM = "CUSTOM"
-#: 本 PI 用哪一版：USE 已归属本 PI / CLAIM 尚无 PI（首次生成时归属本 PI）/ NEW 自定义（生成时新建）/
-#: SHARE 已归属别的 PI，共用前缀（生成时为本 PI 另出同前缀、同格式的版本，见 share_version）/
-#: PREFIX 须为本 PI 填新前缀（早先的口径；规则库版本现在都可共用前缀，只在调用方保留）
+#: 本 PI 用哪一版：USE 已归属本 PI / CLAIM 尚无 PI（首次生成时归属本 PI）/ NEW 自定义（生成时落库：前缀已有规则时
+#: 归到那条规则下，见 _attach，否则新建规则）/ SHARE 已归属别的 PI，共用前缀（生成时为本 PI 另出同前缀、同格式的版本，
+#: 见 share_version）
 PLAN_USE = "USE"
 PLAN_CLAIM = "CLAIM"
 PLAN_NEW = "NEW"
 PLAN_SHARE = "SHARE"
-PLAN_PREFIX = "PREFIX"
 #: 带识别码的规则库规则，本 PI 还没有自己的值：生成时在这条规则下为本 PI 另出「前缀 + 自增值」的版本（见 Inc）
 PLAN_INC = "INC"
 
@@ -72,6 +73,7 @@ RULE_FIELDS = (
     "id",
     "rule_code",
     "rule_name",
+    "prefix",
     "category_scope",
     "category_value",
     "factory_code",
@@ -163,12 +165,32 @@ def rule_json(r: dict | None) -> dict | None:
     return util.jrow(r, RULE_FIELDS)
 
 
-def version_json(v: dict | None) -> dict | None:
+def version_json(v: dict | None, vs: list[dict] | None = None) -> dict | None:
+    """vs：该规则的全部版本，给出时另带 display_version（页面显示的版本号，见 display_no）。"""
     if v is None:
         return None
     out = util.jrow(v, VERSION_FIELDS, ("used", "with_length", "with_unit"))
     out["format"] = format_text(spec_of(v))
+    if vs is not None:
+        out["display_version"] = display_no(v, vs)
     return out
+
+
+def display_no(v: dict, vs: list[dict]) -> int:
+    """页面显示的版本号：一条规则下只按后缀区分（进制、流水位数、字符表同一前缀锁定；米数、单位格式与各 PI 另出的
+    版本、上限自动突破的版本不另计），按后缀第一次出现的先后编号。v 可以是还没落库的（id 为空）：后缀没出现过时
+    为下一个号。"""
+    seen: dict[str, int] = {}
+    for x in sorted((x for x in vs if x.get("id") is not None), key=lambda x: x["id"]):
+        seen.setdefault(x["suffix"] or "", len(seen) + 1)
+    return seen.get(v["suffix"] or "", len(seen) + 1)
+
+
+def version_no(res: Resolved) -> int | None:
+    """本 PI 用的版本在页面上显示的版本号（规则库规则；自定义规则为 None）。"""
+    if res.rule is None or res.version is None:
+        return None
+    return display_no(res.version, _versions_of(res.rule["id"]))
 
 
 def spec_of(v: dict) -> codec.Spec:
@@ -303,9 +325,9 @@ def _prefix_rules(
     for v in every:
         if v["id"] == exclude_version:
             continue
-        # 尚未归属 PI 的版本独占前缀；规则库保存（pi 为空）不能与已有前缀相同。
-        # 已归属别的 PI 的前缀可以共用（流水部分须相同，同前缀各 PI 共用一套流水，见 generate）
-        if pi is None or v["claimed_pi"] is None:
+        # 规则库保存（pi 为空）不能与已有前缀相同（一个前缀一条规则）。PI 用已有前缀时归到这个前缀的规则下
+        # （尚未归属的版本即规则的当前版本，见 _attach），流水部分须相同（同前缀各 PI 共用一套流水，见 generate）
+        if pi is None:
             raise biz(ErrorCode.RULE_PREFIX_CONFLICT, prefix=prefix)
         # 突破版本（同前缀、由原版本加位而来）按原版本的流水格式比较
         b = by_id.get(v["derived_from"]) or v
@@ -820,8 +842,8 @@ def _views(rs: list[dict]) -> list[dict]:
         out.append(
             {
                 "rule": rule_json(r),
-                "current": version_json(_current_of(r, vs)),
-                "versions": [version_json(v) for v in vs],
+                "current": version_json(_current_of(r, vs), vs),
+                "versions": [version_json(v, vs) for v in vs],
                 "used": any(v["used"] for v in vs),
                 "pis": sorted({v["claimed_pi"] for v in vs if v["claimed_pi"]}),
                 "bindings": {"pi": pi_bind.get(r["id"], [])},
@@ -988,8 +1010,8 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
             g["rules"].append(
                 {
                     "rule": rule_json(r),
-                    "version": version_json(shown),
-                    "current": version_json(cur),
+                    "version": version_json(shown, vs),
+                    "current": version_json(cur, vs),
                     # 规则的当前版本已换到别的前缀时为 False（编辑按当前版本）
                     "is_current_prefix": cur is not None and _group_key(cur) == prefix,
                     "used": any(v["used"] for v in vs if _group_key(v) == prefix),
@@ -1235,10 +1257,11 @@ def _insert_rule(
 ) -> int:
     now = util.now()
     rid = db.insert(
-        "INSERT INTO sn_rule(rule_code, rule_name, category_scope, category_value, factory_code, current_version, "
-        "created_by, created_at, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,1,%s,%s,%s,%s)",
+        "INSERT INTO sn_rule(rule_code, rule_name, prefix, category_scope, category_value, factory_code, "
+        "current_version, created_by, created_at, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,%s,1,%s,%s,%s,%s)",
         code,
         name,
+        spec.prefix if inc is None else inc.head,
         cat[0],
         cat[1],
         factory,
@@ -1305,12 +1328,22 @@ def create(
 
 
 def _next_version(rule_id: int) -> int:
-    return int(db.scalar("SELECT COALESCE(MAX(version), 0) FROM sn_rule_version WHERE rule_id = %s", rule_id)) + 1
+    """规则的下一个版本号（调用方已锁住规则行，各处另出版本都先锁规则行，按先后排队）：取本事务所见与最新已提交的
+    较大者（长事务的快照可能早于别的 PI 另出版本的提交）。"""
+    sql = "SELECT COALESCE(MAX(version), 0) FROM sn_rule_version WHERE rule_id = %s"
+    mine = int(db.scalar(sql, rule_id))
+    if db.tx_local() is None:
+        return mine + 1
+    with db.new_tx():
+        latest = int(db.scalar(sql, rule_id))
+    return max(mine, latest) + 1
 
 
 def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=None, category_value=None) -> dict:
-    """结果：UPDATED 就地修改（当前版本从没生成过号）/ NEW_VERSION 另出一版（须换新前缀）/ RENAMED /
-    RECATEGORIZED（改 PI）/ UNCHANGED。分类与 PI 都不传则不变（早先未分类 / 客户分类的规则原样保留）。"""
+    """结果：UPDATED 就地修改（规则从没生成过号）/ NEW_VERSION 另出一版作为当前版本（生成过号后改米数、单位、后缀；
+    只影响之后新选它的 PI，已有自己版本的 PI 不变）/ RENAMED / RECATEGORIZED（改 PI）/ UNCHANGED。
+    一个前缀一条规则：生成过号的规则不能改前缀、进制、流水位数、字符表（RULE_USED_FORMAT_LOCKED，须新建规则）。
+    分类与 PI 都不传则不变（早先未分类 / 客户分类的规则原样保留）。"""
     with db.tx():
         r = get_rule(rule_id, lock=True)
         check_editable(cu, r)
@@ -1337,15 +1370,17 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
         ):
             # 带识别码的规则：规则库只展示，编码格式在生成页「选规则」里改（改前缀即另一条规则）
             raise biz(ErrorCode.RULE_INC_READONLY, rule_code=r["rule_code"])
+        used = db.exists("SELECT EXISTS(SELECT 1 FROM sn_rule_version WHERE rule_id = %s AND used = 1)", r["id"])
         if spec != before:
-            if cur["used"]:
-                # 生成过号：另出一版。沿用同一前缀（只改米数、单位、后缀）时仍归属原 PI，流水部分须相同；
-                # 换新前缀时新版本尚未归属，首次生成时归属
-                same_prefix = spec.prefix == before.prefix
-                owner = cur["claimed_pi"] if same_prefix else None
-                check_prefix(spec.prefix, spec=spec, pi=owner)
+            # 生成过号：前缀、流水格式锁定（一个前缀一条规则，要换须新建规则）
+            if used and (spec.prefix != before.prefix or not same_seq_format(spec, before)):
+                raise biz(ErrorCode.RULE_USED_FORMAT_LOCKED, rule_code=r["rule_code"])
+            if cur["used"] or cur["claimed_pi"] is not None:
+                # 当前版本已用于生成（或已归属 PI）：改米数、单位、后缀另出一版作为当前版本，尚未归属
+                # （之后新选它的 PI 首次生成时归属；已有自己版本的 PI 不变）
+                locks.hold_prefix(spec.prefix)
                 version = _next_version(r["id"])
-                _insert_version(cu, r["id"], version, spec, now, claimed_pi=owner)
+                _insert_version(cu, r["id"], version, spec, now, derived_from=cur["id"])
                 action = "NEW_VERSION"
                 audit.record(
                     cu,
@@ -1356,6 +1391,8 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
             else:
                 if spec.prefix != before.prefix or not same_seq_format(spec, before):
                     check_prefix(spec.prefix, cur["id"], spec, cur["claimed_pi"])
+                if spec.prefix != before.prefix:
+                    db.exec("UPDATE sn_rule SET prefix = %s WHERE id = %s", spec.prefix, r["id"])
                 db.exec(
                     "UPDATE sn_rule_version SET prefix = %s, suffix = %s, base = %s, seq_len = %s, charset = %s, "
                     "with_length = %s, length_pad = %s, length_sep_before = %s, length_sep_after = %s, "
@@ -1478,8 +1515,9 @@ class Resolved:
 
 
 def resolve(rule: dict, pi: str, source: str) -> Resolved:
-    """规则 rule 在 PI 下用哪一版：当前版本尚无 PI 或已归属本 PI → 用它；已归属别的 PI → 用为本 PI 另出的版本
-    （换前缀另出的，或共用前缀另出的），没有则共用前缀（SHARE：生成时为本 PI 另出同前缀的版本）。"""
+    """规则 rule 在 PI 下用哪一版：本 PI 在这条规则下已有自己的版本 → 用它（最近用的那一版；规则库之后改了当前版本
+    也不变）；没有时当前版本尚无 PI → 首次归属本 PI（CLAIM），已归属别的 PI → 共用前缀（SHARE：生成时为本 PI 另出
+    同前缀的版本）。"""
     return _resolve_in(rule, _versions_of(rule["id"]), pi, source)
 
 
@@ -1490,26 +1528,20 @@ def _resolve_in(rule: dict, vs: list[dict], pi: str, source: str) -> Resolved:
         raise biz(ErrorCode.RULE_VERSION_NOT_FOUND)
     if t.get("inc_head") is not None:
         return _resolve_inc(rule, vs, t, pi, source)
-    # 为本 PI 另出的版本：换前缀另出的（前缀不同）或共用前缀另出的（前缀、位数都相同）；
-    # 同前缀、位数不同的是上限自动突破另出的版本，不算
-    own = next(
-        (
-            v
-            for v in vs
-            if v["claimed_pi"] == pi
-            and v["id"] != t["id"]
-            and not is_grow_version(v, t)
-            and v["derived_from"] == t["id"]
-        ),
-        None,
-    )
-    if t["claimed_pi"] == pi:
-        return Resolved(source, MODE_LIBRARY, PLAN_USE, rule, t)
+    own = _own_version_in(vs, pi)
     if own is not None:
         return Resolved(source, MODE_LIBRARY, PLAN_USE, rule, own)
     if t["claimed_pi"] is None:
         return Resolved(source, MODE_LIBRARY, PLAN_CLAIM, rule, t)
     return Resolved(source, MODE_LIBRARY, PLAN_SHARE, rule, t, other_pi=t["claimed_pi"])
+
+
+def _own_version_in(vs: list[dict], pi: str) -> dict | None:
+    """本 PI 在这条规则下自己的版本（不算上限自动突破另出的）：有几版时取最近用的（updated_at，见 _attach 沿用旧版时
+    更新它），同时按 id。"""
+    by_id = {v["id"]: v for v in vs}
+    mine = [v for v in vs if v["claimed_pi"] == pi and not is_grow_version(v, by_id.get(v["derived_from"]))]
+    return max(mine, key=lambda v: (v["updated_at"], v["id"])) if mine else None
 
 
 def _own_inc(vs: list[dict], pi: str) -> dict | None:
@@ -1799,7 +1831,8 @@ def info(res: Resolved | None, length: str | None = None, start_seq: int = 1, un
         "rule_code": None if res.rule is None else res.rule["rule_code"],
         "rule_name": None if res.rule is None else res.rule["rule_name"],
         "version_id": None if res.version is None else res.version["id"],
-        "version": None if res.version is None else res.version["version"],
+        # 页面显示的版本号（只按后缀区分，见 display_no）
+        "version": version_no(res),
         "other_pi": res.other_pi,
         "custom": res.custom,
         "seq_start": res.seq_start,
@@ -1850,62 +1883,21 @@ def line_rules_brief(pi: str, keys: list[tuple[str, int]]) -> dict[tuple[str, in
 # ================================================================== 选取 / 绑定
 
 
-def _derive(cu: CurrentUser, rule: dict, pi: str, new_prefix: str | None) -> dict:
-    """为本 PI 换前缀：按当前版本的格式另出属于本 PI 的版本。"""
-    t = current_version(rule)
-    p = util.trim(new_prefix)
-    spec = replace(spec_of(t), prefix=p)
-    err = codec.validate(spec)
-    if err is not None:
-        raise biz(err)
-    check_prefix(p, spec=spec, pi=pi)
-    n = _next_version(rule["id"])
-    vid = _insert_version(cu, rule["id"], n, spec, util.now(), claimed_pi=pi, derived_from=t["id"])
-    audit.record(
-        cu,
-        audit.entry(audit.RULE_PREFIX_VERSION)
-        .pi(pi)
-        .info(f"{rule['rule_code']} v{n} {describe(spec)} (由 v{t['version']} 换前缀，归属 {pi})"),
-    )
-    return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)
-
-
-def _resolve_for_select(cu: CurrentUser, rule: dict, pi: str, source: str, new_prefix: str | None) -> Resolved:
-    """规则已归属别的 PI 时：填了新前缀则为本 PI 换前缀另出版本；不填则共用前缀（生成时另出同前缀的版本）。
-    带识别码的规则：本 PI 没有自己的值时取下一个值（只预显示，生成时才另出版本），前缀防重按前缀层文本。"""
+def _resolve_for_select(rule: dict, pi: str, source: str) -> Resolved:
+    """选用规则库规则：已归属别的 PI 时共用前缀（生成时另出同前缀的版本）；要换前缀即换到另一个前缀的规则。
+    带识别码的规则：本 PI 没有自己的值时取下一个值（只预显示，生成时才另出版本），前缀防重按前缀层文本；
+    取不到值时报原因（已用完、前缀已锁定别的客户等，须在「自定义」里改前缀）。"""
     res = resolve(rule, pi, source)
     if res.inc is not None:
-        _check_inc_pre(rule, res, new_prefix)
+        if res.fail is not None:
+            raise res.fail
         if res.plan == PLAN_INC:
             v = res.version
             check_inc(res.inc, int(v["inc_value"]), res.spec(), pi, v["inc_customer"])
         return res
-    if res.plan in (PLAN_SHARE, PLAN_PREFIX):
-        if util.blank(new_prefix):
-            if res.plan == PLAN_PREFIX:
-                t = current_version(rule)
-                raise biz(
-                    ErrorCode.RULE_PREFIX_CHANGE_REQUIRED,
-                    rule_code=rule["rule_code"],
-                    version=t["version"],
-                    other_pi=res.other_pi,
-                )
-            check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
-            return res
-        _derive(cu, rule, pi, new_prefix)
-        res = resolve(rule, pi, source)
+    if res.plan == PLAN_SHARE:
+        check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
     return res
-
-
-def _check_inc_pre(rule: dict, pre: Resolved, new_prefix: str | None) -> None:
-    """带识别码的规则库规则：取不到值时报原因（已用完、前缀已锁定别的客户等，须改前缀）；新前缀在「自定义」里改
-    （改前缀即另一条规则，自增值从起始值开始）。"""
-    if pre.inc is None:
-        return
-    if not util.blank(new_prefix):
-        raise biz(ErrorCode.RULE_INC_PREFIX_CUSTOM, rule_code=rule["rule_code"])
-    if pre.fail is not None:
-        raise pre.fail
 
 
 def _line_keys(pi: str, lines: list[dict] | None) -> list[tuple[str, int, dict]]:
@@ -1946,22 +1938,23 @@ def _pi_lines(pi: str) -> list[dict]:
     ]
 
 
+def rule_of_prefix(prefix: str | None) -> dict | None:
+    """前缀的规则（一个前缀一条规则；带识别码的按前缀层文本）；没有为 None。"""
+    return db.one("SELECT * FROM sn_rule WHERE prefix = %s", prefix) if prefix else None
+
+
 def same_format_rule(cu: CurrentUser | None, pi: str, spec: codec.Spec) -> Resolved | None:
-    """规则库里与 spec 前缀、格式完全相同的规则（本 PI 用它时将用的版本格式正是 spec）：自定义规则归到它下面，
-    不再另建一条重复的规则（规则库按前缀归档）。cu 给出时只找能选用的规则（全局或授权组织的）；
-    本 PI 已有的同格式版本见 own_version（先查它）。前缀已归属别的 PI 时为共用前缀（SHARE）。"""
-    for v in db.all("SELECT * FROM sn_rule_version WHERE prefix = %s ORDER BY id", spec.prefix):
-        if spec_of(v) != spec:
-            continue
-        r = db.one("SELECT * FROM sn_rule WHERE id = %s", v["rule_id"])
-        if r is None or (cu is not None and r["factory_code"] is not None and not cu.can_read(r["factory_code"])):
-            continue
-        try:
-            res = resolve(r, pi, SRC_LINE)
-        except BizError:
-            continue
-        if res.version is not None and spec_of(res.version) == spec:
-            return res
+    """前缀的规则在本 PI 下将用的版本正是 spec（格式完全相同）时为它：自定义规则登记为这条规则。
+    cu 给出时须能选用（全局或授权组织的）。格式不同时为 None：按自定义登记，生成时归到这条规则下另出版本（_attach）。"""
+    r = rule_of_prefix(spec.prefix)
+    if r is None or (cu is not None and r["factory_code"] is not None and not cu.can_read(r["factory_code"])):
+        return None
+    try:
+        res = resolve(r, pi, SRC_LINE)
+    except BizError:
+        return None
+    if res.inc is None and res.version is not None and spec_of(res.version) == spec:
+        return res
     return None
 
 
@@ -2018,11 +2011,10 @@ def select_for_lines(
     lines: list[dict] | None,
     rule_id: int | None,
     custom: dict | None,
-    new_prefix: str | None = None,
 ) -> dict:
     """选定 / 改选规则：一个 PI 一个规则前缀，登记在 PI 上，本 PI 全部物料行、之后同步进来的单据都用它。
-    规则库（rule_id；版本已归属别的 PI 时默认共用前缀，填 new_prefix 则换前缀）或自定义（custom；与本 PI 已有的
-    或规则库里前缀、格式完全相同的规则归到那条规则下；不同的生成成功后才存入规则库）。
+    规则库（rule_id；版本已归属别的 PI 时共用前缀）或自定义（custom；与本 PI 已有的、或前缀的规则在本 PI 下将用的
+    版本格式完全相同时登记为那条规则；不同的生成成功后才落库：前缀已有规则时归到它下面，否则新建规则）。
     - lines：点选 / 勾选的物料行（须属本 PI、有写权限）。
     - 起始号（custom.seq_start）记在 PI 上，只管下一次生成。
     - 流水上限自动突破（custom.seq_grow）按前缀：前缀第一次被选时按这次的选择（不填默认开启），之后在规则库改。
@@ -2072,14 +2064,10 @@ def select_for_lines(
             rule = get_rule(rule_id)
             check_visible(cu, rule)
             pre = resolve(rule, pi, SRC_LINE)
-            _check_inc_pre(rule, pre, new_prefix)
-            target = (
-                util.trim(new_prefix)
-                if pre.plan in (PLAN_SHARE, PLAN_PREFIX) and not util.blank(new_prefix)
-                else (pre.version["prefix"] if pre.version is not None else None)
-            )
-            _check_locked(pi, target)
-            res = _resolve_for_select(cu, rule, pi, SRC_LINE, new_prefix)
+            if pre.fail is not None:
+                raise pre.fail
+            _check_locked(pi, pre.version["prefix"] if pre.version is not None else None)
+            res = _resolve_for_select(rule, pi, SRC_LINE)
             rid, cj, start = rule["id"], None, None
             label = f"{rule['rule_code']} v{res.version['version']}"
         _register(cu, pi, res, rid, cj, start, grow, label)
@@ -2095,8 +2083,8 @@ def _check_pi_scope(cu: CurrentUser, pi: str) -> None:
     cu.check_write(*(orgs or {"-"}))
 
 
-def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None, new_prefix: str | None = None) -> dict:
-    """给 PI 登记规则库规则（同生成页选规则，不带物料行）；版本已归属别的 PI 时默认共用前缀，填新前缀则换前缀。"""
+def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None) -> dict:
+    """给 PI 登记规则库规则（同生成页选规则，不带物料行）；版本已归属别的 PI 时共用前缀。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -2105,14 +2093,10 @@ def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None, new_prefix:
         rule = get_rule(rule_id)
         check_visible(cu, rule)
         pre = resolve(rule, pi, SRC_PI)
-        _check_inc_pre(rule, pre, new_prefix)
-        target = (
-            util.trim(new_prefix)
-            if pre.plan in (PLAN_SHARE, PLAN_PREFIX) and not util.blank(new_prefix)
-            else (pre.version["prefix"] if pre.version is not None else None)
-        )
-        _check_locked(pi, target)
-        res = _resolve_for_select(cu, rule, pi, SRC_PI, new_prefix)
+        if pre.fail is not None:
+            raise pre.fail
+        _check_locked(pi, pre.version["prefix"] if pre.version is not None else None)
+        res = _resolve_for_select(rule, pi, SRC_PI)
         _register(cu, pi, res, rule["id"], None, None, None, f"{rule['rule_code']} v{res.version['version']}")
         return {"pi_no": pi, "rule": info(replace(res, seq_grow=prefix_grow(res.version["prefix"])))}
 
@@ -2135,9 +2119,9 @@ def unbind_pi(cu: CurrentUser, pi_in: str | None) -> dict:
 
 
 def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None = None) -> list[dict]:
-    """生成页规则库选项：本 PI 已用过的规则、分类与本 PI 或本 PI 客户相同的标「推荐」排前面
-    （分类只用于推荐，不是绑定）；
-    给出本 PI 用这条规则时的版本与处理（plan：SHARE 为共用别的 PI 的前缀，可另填新前缀换前缀）。
+    """生成页规则库选项（一个前缀一条规则，点选即选前缀）：本 PI 已用过的规则、分类与本 PI 或本 PI 客户相同的标「推荐」
+    排前面（分类只用于推荐，不是绑定）；给出本 PI 用这条规则时的版本与处理（plan：SHARE 为共用别的 PI 的前缀），
+    以及 custom：本 PI 用它时的配置（页面点选后按它填进「自定义」，同 pi_prefix 的 custom）。
     facs = 授权范围（None = 全部）：只列全局规则和范围内组织的规则。"""
     out = []
     versions = _versions_by_rule()
@@ -2154,6 +2138,7 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
         t = _current_of(r, vs)
         # 带识别码的规则锁定客户：本 PI 的客户正是它时推荐
         recommended = recommended or bool(t is not None and customer and t.get("inc_customer") == customer)
+        use = res.version if res is not None and res.version is not None else t
         item = {
             "rule_id": r["id"],
             "rule_code": r["rule_code"],
@@ -2163,10 +2148,13 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
             "factory_code": r["factory_code"],
             "recommended": bool(recommended),
             "format": None if t is None else format_text(spec_of(t), inc_of(t)),
-            # 本 PI 用这条规则时的版本号（共用前缀、须换前缀时为另出前的当前版本）
-            "version": (res.version["version"] if res is not None and res.version is not None else None)
-            or (None if t is None else t["version"]),
+            # 本 PI 用这条规则时的版本号（页面显示的，只按后缀区分，见 display_no）
+            "version": None if use is None else display_no(use, vs),
+            # 规则前缀（带识别码的为前缀层文本）
+            "prefix": r["prefix"],
             "current_prefix": None if t is None else t["prefix"],
+            # 本 PI 用它时的配置（「自定义」组件按它拆回；带识别码时 prefix 为前缀层文本）
+            "custom": None if use is None else _custom_dict(spec_of(use), inc_of(use)),
             "used_pis": len({v["claimed_pi"] for v in vs if v["claimed_pi"] is not None}),
             "plan": None if res is None else res.plan,
             "other_pi": None if res is None else res.other_pi,
@@ -2205,7 +2193,8 @@ def _bind_rule(pi: str, rule_id: int) -> None:
 
 def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
     """生成事务内：把本次要用的版本落库、标记已使用并归属本 PI，返回版本行。
-    自定义规则（PLAN_NEW）这时才存入规则库（生成失败或取消不留规则），PI 登记改记为这条规则。
+    自定义规则（PLAN_NEW）这时才落库（生成失败或取消不留）：前缀已有规则时归到那条规则下（_attach），前缀是新的才
+    新建规则；PI 登记改记为这条规则。
     与预演时的判断不一致（期间被别的 PI 先用、前缀被占用）时报预演已失效。
     带识别码的规则：这时才占用本 PI 的自增值（见 _realize_inc）。"""
     if res.fail is not None:
@@ -2219,17 +2208,15 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
             raise biz(err)
         from app.services import orders
 
-        # 规则库里已有前缀、格式完全相同、已用于生成的规则（选定后别的 PI 先用同格式生成了）：归到那条规则下，不另建
-        hit = same_format_rule(cu, pi, spec)
-        if hit is not None and hit.plan in (PLAN_USE, PLAN_SHARE):
-            v = realize(cu, pi, hit, lines)
-            _bind_rule(pi, hit.rule["id"])
-            return v
+        orgs = {r["org_code"] for r in _pi_lines(pi)} | (orders.bill_orgs(no for no, _ in lines) - {"-"})
         check_prefix(spec.prefix, spec=spec, pi=pi, gen=True)
+        # 一个前缀一条规则：前缀已有规则（含选定后别的 PI 先用这个前缀生成、存入规则库的）时归到它下面
+        found = _rule_of_prefix_latest(spec.prefix)
+        if found is not None:
+            return _attach(cu, pi, found["id"], spec, orgs)
         code, name = _custom_names(pi)
         # 自定义规则归属本 PI 的生产组织（一个 PI 一个规则，全部物料行都用它；都在同一个组织时归该组织，
         # 否则为全局规则，各组织都能看到）
-        orgs = {r["org_code"] for r in _pi_lines(pi)} | (orders.bill_orgs(no for no, _ in lines) - {"-"})
         owner = next(iter(orgs)) if len(orgs) == 1 else None
         rid = _insert_rule(
             cu, code, name, spec, (PI, pi), " (自定义规则，生成成功后存入规则库)", claimed_pi=pi, factory=owner
@@ -2255,6 +2242,71 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
     ):
         raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
     return db.one("SELECT * FROM sn_rule_version WHERE id = %s", res.version["id"])
+
+
+def _rule_of_prefix_latest(prefix: str) -> dict | None:
+    """生成事务内找前缀的规则：先按本事务所见，没有时再按最新已提交的（本事务的快照可能早于别的 PI 用这个前缀
+    生成、新建规则的提交；同前缀的提交已由前缀锁排在前面）。不加锁读，免得对还不存在的前缀锁住索引间隙。"""
+    r = rule_of_prefix(prefix)
+    if r is None:
+        with db.new_tx():
+            r = rule_of_prefix(prefix)
+    return r
+
+
+def _attach(cu: CurrentUser, pi: str, rule_id: int, spec: codec.Spec, orgs: set[str]) -> dict:
+    """生成事务内：自定义规则的前缀已有规则，归到这条规则下，返回本 PI 用的版本（已用、归属本 PI）：
+    - 本 PI 在这条规则下已有完全同格式的版本（不算上限自动突破的）：沿用（更新 updated_at，之后按它解析）；
+    - 规则的当前版本尚未归属、格式正是 spec：首次归属本 PI；
+    - 否则为本 PI 另出一版（同前缀，米数、单位、后缀按本 PI 的；不改规则的当前版本）。
+    规则属于别的生产组织、本 PI 有别的组织的单据时改为全局规则（各组织都能看到、选用）。PI 登记改记为这条规则。
+    锁住规则行（已存在的行，只锁这一行），与规则库改版、别的 PI 另出版本排队（版本号不撞）。"""
+    rule = db.one("SELECT * FROM sn_rule WHERE id = %s FOR UPDATE", rule_id)
+    now = util.now()
+    mine = db.all("SELECT * FROM sn_rule_version WHERE rule_id = %s AND claimed_pi = %s ORDER BY id DESC", rule_id, pi)
+    hit = next((v for v in mine if spec_of(v) == spec and base_of(v)["id"] == v["id"]), None)
+    if hit is not None:
+        db.exec("UPDATE sn_rule_version SET used = 1, updated_at = %s WHERE id = %s", now, hit["id"])
+        vid = hit["id"]
+        note = f"沿用 v{hit['version']}"
+    else:
+        t = db.one(
+            "SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = %s FOR UPDATE",
+            rule_id,
+            rule["current_version"],
+        )
+        claimed = (
+            t is not None
+            and t["claimed_pi"] is None
+            and spec_of(t) == spec
+            and db.exec(
+                "UPDATE sn_rule_version SET used = 1, claimed_pi = %s, updated_at = %s "
+                "WHERE id = %s AND claimed_pi IS NULL",
+                pi,
+                now,
+                t["id"],
+            )
+            > 0
+        )
+        if claimed:
+            vid = t["id"]
+            note = f"首次归属 v{t['version']}"
+        else:
+            n = _next_version(rule_id)
+            vid = _insert_version(
+                cu, rule_id, n, spec, now, used=True, claimed_pi=pi, derived_from=None if t is None else t["id"]
+            )
+            note = f"v{n} {describe(spec)}"
+    if rule["factory_code"] is not None and not orgs <= {rule["factory_code"]}:
+        db.exec("UPDATE sn_rule SET factory_code = NULL WHERE id = %s", rule_id)
+    audit.record(
+        cu,
+        audit.entry(audit.RULE_PREFIX_VERSION)
+        .pi(pi)
+        .info(f"{rule['rule_code']} {note} (自定义规则前缀 {spec.prefix} 已有规则，归到它下面，归属 {pi})"),
+    )
+    _bind_rule(pi, rule_id)
+    return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)
 
 
 def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:

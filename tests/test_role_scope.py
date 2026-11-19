@@ -121,7 +121,7 @@ def test_rules_owned_by_org(w, api):
     # 选用：全局规则可以绑给授权组织的 PI；别的组织的规则不行
     pi = uid("PI")
     w.order(uid("MO"), a, "C1", pi, ("M1", 1))
-    ok(api.put("/api/rules/pi-binding", m(pi_no=pi, rule_id=glob, new_prefix=P()), op))
+    ok(api.put("/api/rules/pi-binding", m(pi_no=pi, rule_id=glob), op))
     assert api.put("/api/rules/pi-binding", m(pi_no=pi, rule_id=theirs), op).code == "FACTORY_FORBIDDEN"
 
 

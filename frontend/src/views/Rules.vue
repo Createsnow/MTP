@@ -109,7 +109,7 @@
                   {{ t("rules.otherPrefix", { prefix: row.current.prefix }) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('rules.version')" width="64"><template #default="{ row }">v{{ row.rule.current_version }}</template></el-table-column>
+            <el-table-column :label="t('rules.version')" width="64"><template #default="{ row }">v{{ row.current?.display_version ?? row.rule.current_version }}</template></el-table-column>
             <el-table-column :label="t('rules.owner')" min-width="130" show-overflow-tooltip>
               <template #default="{ row }">{{ row.rule.factory_code ? factoryName(row.rule.factory_code) : t("rules.ownerGlobal") }}</template>
             </el-table-column>
@@ -166,19 +166,20 @@
           <div class="muted hint">{{ store.isAdmin ? t("rules.ownerHint") : t("rules.ownerOperatorHint") }}</div>
         </el-form-item>
         <!-- 不填 PI：一条规则可给多张 PI 用，用在哪些 PI 由生成页选规则决定，规则库只显示 -->
+        <!-- 一个前缀一条规则：已用于生成的规则前缀、进制、流水位数、字符表锁定（要换须新建规则） -->
         <el-form-item :label="t('rules.prefix')" required>
-          <el-input v-model.trim="form.prefix" class="sn-mono" />
-          <div class="muted hint">{{ t("rules.prefixHint") }}</div>
+          <el-input v-model.trim="form.prefix" class="sn-mono" :disabled="formatLocked" />
+          <div class="muted hint">{{ formatLocked ? t("rules.formatLocked") : t("rules.prefixHint") }}</div>
         </el-form-item>
         <!-- 按 SN 的组成顺序：前缀 → 流水 → 米数前分隔符 + 米数 + 米数后分隔符 → 单位 → 后缀 -->
         <el-form-item :label="t('rules.base')">
-          <el-radio-group v-model="form.base" @change="form.charset = ''">
+          <el-radio-group v-model="form.base" :disabled="formatLocked" @change="form.charset = ''">
             <el-radio-button v-for="b in BASES" :key="b" :value="b">{{ b }}</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item :label="t('rules.seqLen')"><el-input-number v-model="form.seq_len" :min="1" :max="12" /></el-form-item>
+        <el-form-item :label="t('rules.seqLen')"><el-input-number v-model="form.seq_len" :min="1" :max="12" :disabled="formatLocked" /></el-form-item>
         <el-form-item :label="t('rules.charset')">
-          <el-input v-model.trim="form.charset" :placeholder="defaultCharset" class="sn-mono" />
+          <el-input v-model.trim="form.charset" :placeholder="defaultCharset" class="sn-mono" :disabled="formatLocked" />
           <div class="muted hint">{{ t("rules.charsetHint") }}</div>
         </el-form-item>
         <el-form-item :label="t('rules.withLength')">
@@ -302,7 +303,9 @@ const pick = (g: any) => (curPrefix.value = g.prefix);
 watch(paged, (list) => {
   if (!cur.value && list.length) curPrefix.value = list[0].prefix;
 });
-/** 编辑时提示：格式不变 / 就地修改（当前版本没生成过号）/ 另出一版（生成过号）。 */
+/** 编辑已用于生成的规则：前缀、进制、流水位数、字符表锁定（一个前缀一条规则，后端同样校验） */
+const formatLocked = computed(() => !!editing.value?.rule_used);
+/** 编辑时提示：格式不变 / 就地修改（规则没生成过号）/ 另出一版（生成过号）。 */
 const editHint = computed(() => {
   const c = editing.value?.current;
   if (!c) return "";
@@ -313,8 +316,10 @@ const editHint = computed(() => {
     || c.charset !== charset || !!c.with_length !== len || !!c.with_unit !== form.with_unit
     || (c.length_pad || 0) !== (len ? form.length_pad || 0 : 0)
     || (c.length_sep_before || "") !== (len ? form.sep_before : "") || (c.length_sep_after || "") !== (len ? form.sep_after : "");
-  if (!changed) return c.used ? "USED" : "";
-  return c.used ? "NEW_VERSION" : "IN_PLACE";
+  const used = !!editing.value?.rule_used;
+  if (!changed) return used ? "USED" : "";
+  // 当前版本已用于生成或已归属 PI：另出一版；否则（含规则库改版后还没人用的当前版本）就地修改
+  return c.used || c.claimed_pi ? "NEW_VERSION" : "IN_PLACE";
 });
 
 async function load() {
@@ -463,7 +468,7 @@ async function save() {
     if (editing.value) {
       // 不传 PI：规则原有的分类与 PI 不变
       const r: any = await api.updateRule(editing.value.rule.id, { rule_name: form.rule_name, ...spec() });
-      ElMessage.success(t(`rules.result${r.action}`, { v: r.rule?.rule?.current_version }));
+      ElMessage.success(t(`rules.result${r.action}`, { v: r.rule?.current?.display_version ?? r.rule?.rule?.current_version }));
     } else {
       await api.createRule({ rule_code: form.rule_code, rule_name: form.rule_name, factory_code: form.factory_code || null, ...spec() });
       ElMessage.success(t("common.saved"));

@@ -88,14 +88,11 @@ class LineSelectIn(In):
     rule_id: int | None = None
     #: 自定义规则（二选一）
     custom: CustomRuleIn | None = None
-    #: 选中的规则版本已用于别的 PI 时，为本 PI 填的新前缀
-    new_prefix: str | None = None
 
 
 class PiBindIn(In):
     pi_no: str | None = None
     rule_id: int | None = None
-    new_prefix: str | None = None
 
 
 class PrefixGrowIn(In):

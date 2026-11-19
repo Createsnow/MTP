@@ -152,7 +152,6 @@ def test_inc_customer_lock_width_lock_and_padding(w, api, sql):
     assert (r["plan"], r["inc"]["prefix"]) == ("INC", f"{head}01")
     w.generate(p3)
     assert sns(sql, p3)[0] == f"{head}010001"
-    assert w.select(p3, [(b3, 1)], rule_id=rid, new_prefix="ZZ").code == "RULE_INC_PREFIX_CUSTOM"
     # 范围非法
     _, p4, b4 = mk(w, ("M1", 1), org=org)
     assert w.select(p4, [(b4, 1)], custom=inc(H(), 5, 3)).code == "RULE_INC_RANGE_INVALID"

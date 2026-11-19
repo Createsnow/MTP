@@ -125,11 +125,14 @@ class ErrorCode(Enum):
         "前缀 {prefix} 已按 {base} 进制、{seq_len} 位流水使用；同一前缀下进制、流水位数、字符表不能改，须换新前缀",
     )
     RULE_PREFIX_OVERLAP = (409, "前缀 {prefix} 与 PI {pi} 的前缀 {other} 一个是另一个的开头，可能编出相同的号，请更换")
-    RULE_PREFIX_CHANGE_REQUIRED = (409, "规则 {rule_code} 版本 {version} 已用于 PI {other_pi}，须为本 PI 填新前缀")
+    RULE_USED_FORMAT_LOCKED = (
+        409,
+        "规则 {rule_code} 已用于生成，前缀、进制、流水位数、字符表不能改；一个前缀一条规则，请新建规则（新前缀）",
+    )
     RULE_PI_PREFIX_LOCKED = (
         409,
         "PI {pi} 已用前缀 {prefix} 生成过号，一个 PI 只能用一个规则前缀，不能改用 {new}；"
-        "要改米数、单位、后缀请在规则库修改规则",
+        "要改米数、单位、后缀请在「选规则 → 自定义」中修改",
     )
     RULE_PREFIX_GROW_LOCKED = (409, "前缀 {prefix} 的流水已超出规则位数（已自动突破），不能关闭流水上限自动突破")
     RULE_LINE_REQUIRED = (400, "请选择物料行")
@@ -143,7 +146,6 @@ class ErrorCode(Enum):
     RULE_INC_WIDTH = (409, "前缀 {prefix} 的识别码已按 {width} 位使用，识别码位数不能改，须更改前缀")
     RULE_INC_TAKEN = (409, "预演已失效：前缀 {prefix} 的识别码 {value} 已被 PI {pi} 占用，请重新选规则")
     RULE_INC_NO_CUSTOMER = (409, "PI {pi} 没有客户编码，不能使用识别码")
-    RULE_INC_PREFIX_CUSTOM = (409, "带识别码的规则 {rule_code} 请在「自定义」中更改前缀")
     RULE_INC_READONLY = (409, "规则 {rule_code} 带识别码，规则库里只能改名称，编码格式请在生成页「选规则」中修改")
     # ---------- 生成 ----------
     GEN_SCOPE_INVALID = (400, "生成范围须为同一张 PI 下的单据或物料行")

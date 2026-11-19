@@ -31,10 +31,11 @@ _ORDERS = [
 
 def _rule(code: str, name: str, pi: str, prefix: str, base: int, seq_len: int, with_length: bool, ts) -> None:
     rid = db.insert(
-        "INSERT INTO sn_rule(rule_code, rule_name, category_scope, category_value, current_version, created_by, "
-        "created_at, updated_by, updated_at) VALUES (%s,%s,'PI',%s,1,'demo',%s,'demo',%s)",
+        "INSERT INTO sn_rule(rule_code, rule_name, prefix, category_scope, category_value, current_version, "
+        "created_by, created_at, updated_by, updated_at) VALUES (%s,%s,%s,'PI',%s,1,'demo',%s,'demo',%s)",
         code,
         name,
+        prefix,
         pi,
         ts,
         ts,

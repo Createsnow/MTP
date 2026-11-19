@@ -214,9 +214,9 @@ def test_rule_list_and_options_show_versions_pis_and_bindings(w, api):
     rid = w.rule(P())
     ok(w.bind_pi(pi1, rid))
     w.generate(pi1)
-    # 版本已归属 pi1：不填新前缀即共用前缀（生成时才另出版本）；填了新前缀则换前缀另出版本
+    # 版本已归属 pi1：共用前缀（生成时才为 pi2 另出版本）
     assert ok(w.bind_pi(pi2, rid))["rule"]["plan"] == "SHARE"
-    ok(w.bind_pi(pi2, rid, new_prefix=P()))
+    w.generate(pi2)
     listed = [x for x in ok(api.get("/api/rules", w.admin)).body if x["rule"]["id"] == rid]
     assert len(listed) == 1
     v = listed[0]
@@ -230,13 +230,14 @@ def test_rule_list_and_options_show_versions_pis_and_bindings(w, api):
         return next(x for x in ok(api.get(f"/api/rules/options?pi={pi}", w.admin)).body if x["rule_code"] == code)
 
     assert (option(pi1)["plan"], option(pi1)["used_pis"]) == ("USE", 2)
-    assert option(pi2)["plan"] == "USE", "已为本 PI 换前缀另出的版本"
+    assert option(pi2)["plan"] == "USE", "已为本 PI 另出的版本（共用前缀）"
+    assert option(pi2)["version"] == 1, "页面版本号只按后缀区分"
     assert (option(pi3)["plan"], option(pi3)["other_pi"]) == ("SHARE", pi1), "别的 PI 已用：可共用前缀"
 
 
 def test_used_version_format_change_keeps_prefix_unless_serial_changes(w, api, sql):
-    """生成过号的版本：只改米数、单位、后缀，另出一版沿用同一前缀（仍归属原 PI，流水接续）；
-    改进制、流水位数或字符表须换新前缀。"""
+    """生成过号的规则：改前缀、进制、流水位数、字符表报 RULE_USED_FORMAT_LOCKED（一个前缀一条规则，须新建规则）；
+    只改米数、单位、后缀另出一版作为当前版本，尚未归属，只影响之后新选它的 PI（已用的 PI 沿用自己的版本，流水接续）。"""
     org, pi, bill = mk(w, ("M1", 4, "100"))
     _, _, bill2 = mk(w, ("M1", 2, "200"), pi=pi, org=org)
     rid = w.rule(P(), seq_len=5)
@@ -244,24 +245,29 @@ def test_used_version_format_change_keeps_prefix_unless_serial_changes(w, api, s
     w.generate(pi, bills=[bill])
     cur = sql.one("SELECT * FROM sn_rule_version WHERE rule_id = %s", rid)
     base = m(rule_name="x", prefix=cur["prefix"], base=10, seq_len=5)
-    assert api.put(f"/api/rules/{rid}", base | m(base=16), w.admin).code == "RULE_PREFIX_FORMAT_LOCKED"
-    assert api.put(f"/api/rules/{rid}", base | m(seq_len=6), w.admin).code == "RULE_PREFIX_FORMAT_LOCKED"
+    assert api.put(f"/api/rules/{rid}", base | m(base=16), w.admin).code == "RULE_USED_FORMAT_LOCKED"
+    assert api.put(f"/api/rules/{rid}", base | m(seq_len=6), w.admin).code == "RULE_USED_FORMAT_LOCKED"
+    assert api.put(f"/api/rules/{rid}", base | m(prefix=P()), w.admin).code == "RULE_USED_FORMAT_LOCKED"
     r = ok(api.put(f"/api/rules/{rid}", base | m(with_length=True, sep_before="-", suffix="Z"), w.admin))
     assert r["action"] == "NEW_VERSION" and r["rule"]["rule"]["current_version"] == 2
     v2 = r["rule"]["current"]
-    assert v2["prefix"] == cur["prefix"] and v2["claimed_pi"] == pi, "同一前缀仍归属原 PI"
+    assert v2["prefix"] == cur["prefix"] and v2["claimed_pi"] is None and v2["display_version"] == 2
     w.generate(pi, bills=[bill2])
     sns = [x["sn"] for x in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     p = cur["prefix"]
-    assert sns == [f"{p}{i:05d}100" for i in range(1, 5)] + [f"{p}{i:05d}-200Z" for i in (5, 6)], "流水接续"
-    r = ok(api.put(f"/api/rules/{rid}", base | m(prefix=P(), base=16), w.admin))
-    assert r["action"] == "NEW_VERSION" and r["rule"]["rule"]["current_version"] == 3
-    assert r["rule"]["current"]["claimed_pi"] is None, "换新前缀的版本首次生成时归属"
+    assert sns == [f"{p}{i:05d}100" for i in range(1, 5)] + [f"{p}{i:05d}200" for i in (5, 6)], "已用的 PI 不变"
+    # 当前版本还没人用：再改就地修改，不另出版本
+    r = ok(api.put(f"/api/rules/{rid}", base | m(with_length=True, sep_before="-", suffix="Y"), w.admin))
+    assert r["action"] == "UPDATED" and r["rule"]["rule"]["current_version"] == 2
+    _, p2, b3 = mk(w, ("M1", 1, "300"), org=org)
+    ok(w.bind_pi(p2, rid))
+    w.generate(p2)
+    assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s", p2) == f"{p}00007-300Y", "新选它的 PI 用新的当前版本"
     assert (
         ok(
             api.put(
                 f"/api/rules/{rid}",
-                {**base, "prefix": r["rule"]["current"]["prefix"], "base": 16, "rule_name": "y"},
+                {**base, "with_length": True, "sep_before": "-", "suffix": "Y", "rule_name": "y"},
                 w.admin,
             )
         )["action"]
@@ -271,7 +277,8 @@ def test_used_version_format_change_keeps_prefix_unless_serial_changes(w, api, s
 
 
 def test_other_pi_may_change_prefix(w, sql):
-    """别的 PI 用同一条规则：默认共用前缀；也可以填新前缀，按原格式另出属于它的版本。"""
+    """别的 PI 用同一条规则：默认共用前缀；要换前缀即在「自定义」里改前缀
+    （一个前缀一条规则，新前缀生成后存为新规则）。"""
     org, p1, b1 = mk(w, ("M1", 10))
     _, p2, b2 = mk(w, ("M1", 10), org=org)
     rid = w.rule("HX" + uid("").replace("-", "")[-4:], seq_len=6)
@@ -280,11 +287,12 @@ def test_other_pi_may_change_prefix(w, sql):
     r = w.bind_pi(p2, rid)
     assert ok(r)["rule"]["plan"] == "SHARE"
     newp = "HY" + uid("").replace("-", "")[-4:]
-    ok(w.bind_pi(p2, rid, newp))
+    ok(w.select(p2, [(b2, 1)], custom=m(prefix=newp, base=10, seq_len=6, with_length=True)))
     w.generate(p2)
     assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s", p2).startswith(newp)
     v = sql.one("SELECT * FROM sn_rule_version WHERE prefix = %s", newp)
-    assert v["claimed_pi"] == p2 and v["derived_from"] is not None
+    assert v["claimed_pi"] == p2 and v["rule_id"] != rid
+    assert sql.scalar("SELECT rule_code FROM sn_rule WHERE prefix = %s", newp) == f"PI-{p2}-1"
 
 
 def test_lines_with_different_rules_share_one_serial(w, sql):
@@ -315,16 +323,19 @@ def test_custom_rule_saved_only_after_success(w, sql):
 
 
 def test_custom_rule_names_follow_code_number(w, sql):
-    """同一 PI 的第 n 条自定义规则：编码 PI-PI号-n，名称 PI号_vn。一个 PI 只有一个规则前缀：
-    第二条是同前缀、改了后缀的自定义规则（作用于整张 PI，之后生成的号用它）。"""
+    """自定义规则存入规则库：编码 PI-PI号-n，名称 PI号_vn。一个前缀一条规则：同前缀、改了后缀的自定义规则
+    归到这条规则下另出版本（作用于整张 PI，之后生成的号用它），不另建 PI-PI号-2。"""
     org, pi, bill = mk(w, ("M1", 3), ("M2", 3))
     pre = P()
     ok(w.select(pi, [(bill, 1)], custom=m(prefix=pre, base=10, seq_len=6, with_length=True)))
     w.generate(pi, lines=[(bill, 1)])
     ok(w.select(pi, [(bill, 2)], custom=m(prefix=pre, base=10, seq_len=6, with_length=True, suffix="B")))
     w.generate(pi, lines=[(bill, 2)])
-    rows = sql.all("SELECT rule_code, rule_name FROM sn_rule ORDER BY rule_code")
-    assert [(r["rule_code"], r["rule_name"]) for r in rows] == [(f"PI-{pi}-1", f"{pi}_v1"), (f"PI-{pi}-2", f"{pi}_v2")]
+    rows = sql.all("SELECT id, rule_code, rule_name FROM sn_rule ORDER BY rule_code")
+    assert [(r["rule_code"], r["rule_name"]) for r in rows] == [(f"PI-{pi}-1", f"{pi}_v1")]
+    vs = sql.all("SELECT suffix, claimed_pi FROM sn_rule_version WHERE rule_id = %s ORDER BY id", rows[0]["id"])
+    assert [(v["suffix"], v["claimed_pi"]) for v in vs] == [("", pi), ("B", pi)]
+    assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec DESC LIMIT 1", pi).endswith("B")
 
 
 def test_custom_rule_shared_by_lines_generated_separately(w, sql):

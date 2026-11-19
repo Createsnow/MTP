@@ -79,21 +79,19 @@ def test_select_applies_to_whole_pi_and_prefix_locks(w, api, sql):
 
 
 def test_generation_blocked_when_rule_prefix_differs_from_pi(w, api, sql):
-    """本 PI 已用前缀生成过号后，规则在规则库换了新前缀（另出未归属的版本）：选这条规则报前缀锁定；
-    之后同步进来的单据继承 PI 的规则，预演标「与本 PI 已用前缀不同」，不能生成。"""
+    """一个前缀一条规则：规则生成过号后不能在规则库换前缀（RULE_USED_FORMAT_LOCKED）；本 PI 已用前缀生成过号后，
+    选别的前缀的规则报前缀锁定；之后同步进来的单据继承 PI 的规则，照常可生成。"""
     org, pi, b1 = mk(w, ("M1", 2))
     pre = P()
     rid = w.rule(pre, seq_len=5, with_length=False)
     ok(w.select(pi, [(b1, 1)], rule_id=rid))
     w.generate(pi)
     body = {"rule_name": "x", "prefix": P(), "base": 10, "seq_len": 5, "with_length": False}
-    assert ok(api.put(f"/api/rules/{rid}", body, w.admin))["action"] == "NEW_VERSION"
+    assert api.put(f"/api/rules/{rid}", body, w.admin).code == "RULE_USED_FORMAT_LOCKED"
     _, _, b2 = mk(w, ("M1", 3), pi=pi, org=org)
-    # 新单据的物料行还没选规则：选这条规则（当前版本已换前缀）报前缀锁定
-    assert w.select(pi, [(b2, 1)], rule_id=rid).code == "RULE_PI_PREFIX_LOCKED"
-    p = ok(w.preview(pi, bills=[b2]))
-    assert not p["generatable"]
-    assert "RULE_PI_PREFIX" in p["issues"][0]["issues"], str(p)
+    other = w.rule(P(), seq_len=5, with_length=False)
+    assert w.select(pi, [(b2, 1)], rule_id=other).code == "RULE_PI_PREFIX_LOCKED"
+    assert ok(w.preview(pi, bills=[b2]))["generatable"]
 
 
 def test_custom_rule_reuses_same_format_rule_and_continues_serials(w, api, sql):

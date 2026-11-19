@@ -71,6 +71,7 @@ CREATE TABLE sn_rule (
   id              BIGINT       NOT NULL AUTO_INCREMENT,
   rule_code       VARCHAR(64)  NOT NULL,
   rule_name       VARCHAR(128) NOT NULL,
+  prefix          VARCHAR(64)  NOT NULL COMMENT '规则前缀：一个前缀一条规则（带识别码的为前缀层文本）；各 PI 在这个前缀下的版本都挂在这条规则上',
   category_scope  VARCHAR(16)  NOT NULL DEFAULT 'NONE' COMMENT 'NONE 未分类 / CUSTOMER 客户 / PI；只用于筛选和推荐',
   category_value  VARCHAR(64)  NOT NULL DEFAULT '',
   factory_code    VARCHAR(64)  NULL COMMENT '所属生产组织；NULL = 全局规则（只有系统管理员能改、删，普通操作员只能选用）',
@@ -81,6 +82,7 @@ CREATE TABLE sn_rule (
   updated_at      DATETIME     NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY ux_rule_code (rule_code),
+  UNIQUE KEY ux_rule_one_prefix (prefix) COMMENT '一个前缀一条规则',
   KEY ix_rule_category (category_scope, category_value),
   KEY ix_rule_factory (factory_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='SN 规则';

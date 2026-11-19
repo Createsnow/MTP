@@ -98,17 +98,17 @@ def rule_options(cu: OperatorDep, pi: str | None = None, customer: str | None = 
 
 @router.post(
     "/line-select",
-    summary="选定 / 改选本 PI 的规则（一个 PI 一个规则前缀）：规则库（rule_id，必要时 new_prefix）或自定义",
+    summary="选定 / 改选本 PI 的规则（一个 PI 一个规则前缀）：规则库（rule_id）或自定义（前缀已有规则时归到它下面）",
 )
 def rule_line_select(body: LineSelectIn, cu: OperatorDep) -> dict:
     lines = [x.model_dump() for x in body.lines or []]
     custom = None if body.custom is None else body.custom.model_dump()
-    return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom, body.new_prefix)
+    return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom)
 
 
-@router.put("/pi-binding", summary="给 PI 登记规则库规则（已归属别的 PI 时默认共用前缀，可填 new_prefix）")
+@router.put("/pi-binding", summary="给 PI 登记规则库规则（已归属别的 PI 时共用前缀）")
 def rule_pi_bind(body: PiBindIn, cu: OperatorDep) -> dict:
-    return rules.bind_pi(cu, body.pi_no, body.rule_id, body.new_prefix)
+    return rules.bind_pi(cu, body.pi_no, body.rule_id)
 
 
 @router.delete("/pi-binding", summary="解除 PI 的规则登记（本 PI 有号时不能解除）")

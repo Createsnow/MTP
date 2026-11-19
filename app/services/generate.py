@@ -979,7 +979,7 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
                 "version_id": res.version["id"],
                 "custom": res.custom,
                 "rule_label": (
-                    f"{res.rule['rule_code']} v{res.version['version']}" if res.rule is not None else "自定义"
+                    f"{res.rule['rule_code']} v{rules.version_no(res)}" if res.rule is not None else "自定义"
                 )
                 + f"（{rules.format_text(spec)}）",
             }

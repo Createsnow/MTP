@@ -77,8 +77,8 @@ def test_shared_prefix_library_rule_continues_after_other_pi(w, api, sql):
 
 
 def test_shared_prefix_custom_rule_and_format_lock(w, api, sql):
-    """自定义规则用别的 PI 已用的前缀：同格式共用（本 PI 另存自己的自定义规则，流水接在后面）；
-    进制或位数不同报格式锁定；规则库新建同前缀的规则照旧报前缀冲突。"""
+    """自定义规则用别的 PI 已用的前缀：共用前缀，归到这个前缀的规则下（后缀不同时为本 PI 另出版本，不另建规则），
+    流水接在后面；进制或位数不同报格式锁定；规则库新建同前缀的规则照旧报前缀冲突。"""
     _, p1, b1 = mk(w, ("M1", 4))
     _, p2, b2 = mk(w, ("M1", 3))
     pre = P()
@@ -92,8 +92,9 @@ def test_shared_prefix_custom_rule_and_format_lock(w, api, sql):
     assert [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", p2)] == [
         f"{pre}{i:05d}Z" for i in (5, 6, 7)
     ]
-    rid2 = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{p2}-1")
-    assert sql.scalar("SELECT claimed_pi FROM sn_rule_version WHERE rule_id = %s", rid2) == p2
+    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code = %s", f"PI-{p2}-1") == 0, "一个前缀一条规则"
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre)
+    assert sql.scalar("SELECT suffix FROM sn_rule_version WHERE rule_id = %s AND claimed_pi = %s", rid, p2) == "Z"
     body = m(rule_code=uid("R"), rule_name="x", category_value=uid("PI"), prefix=pre, base=10, seq_len=5)
     assert api.post("/api/rules", body, w.admin).code == "RULE_PREFIX_CONFLICT", "规则库保存：前缀不能与已有前缀相同"
 
