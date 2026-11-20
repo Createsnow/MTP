@@ -46,6 +46,7 @@ def typical_item(i: int) -> dict:
         "materialCode": "9148363",
         "length": "100",
         "customerCode": "0001",
+        "sn2": None,
     }
 
 
@@ -65,6 +66,7 @@ def worst_item(rnd: random.Random) -> dict:
         "materialCode": str(rnd.randint(1000000, 9999999)),
         "length": length,
         "customerCode": f"{rnd.randint(1, 9999):04d}",
+        "sn2": f"SDB{length}{s}Z",
     }
 
 

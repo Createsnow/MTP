@@ -38,7 +38,8 @@ ATTACH_ORDER = (
 
 COLS = (
     "i.id, i.sn, i.rule_version_id, i.seq_dec, i.seq_pi_no, i.pi_no, i.bill_no, i.bill_seq, i.material_code, "
-    "i.length_text, i.customer_code, i.factory_code, i.status, i.suspend, i.created_at, i.attach_no"
+    "i.length_text, i.customer_code, i.factory_code, i.status, i.suspend, i.created_at, i.attach_no, "
+    "(SELECT s2.sn2 FROM sn_item_sub s2 WHERE s2.item_id = i.id) sn2"
 )
 
 
@@ -140,11 +141,14 @@ def _where(cu: CurrentUser, f: Filter) -> tuple[str, list, tuple | None]:
         ("i.pi_no", None if f.has_range else f.pi_no),
         ("i.bill_no", f.bill_no),
         ("i.length_text", f.length),
-        ("i.sn", f.sn),
     ):
         if not util.blank(v):
             sql += f" AND {col} = %s"
             args.append(v.strip())
+    if not util.blank(f.sn):
+        # 完整 SN：第一 SN，或双 SN 的第二 SN
+        sql += " AND (i.sn = %s OR i.id = (SELECT s2.item_id FROM sn_item_sub s2 WHERE s2.sn2 = %s))"
+        args += [f.sn.strip(), f.sn.strip()]
     if f.material_code is not None:
         sql += " AND i.material_code = %s"
         args.append(f.material_code.strip())
@@ -215,6 +219,8 @@ def _view(r: dict, bills: BillInfo, s) -> dict:
     return {
         "id": r["id"],
         "sn": r["sn"],
+        # 双 SN：第二 SN（单 SN 为空）
+        "sn2": r.get("sn2") or "",
         "seq_len": None if s is None else s.seq_len,
         "base": None if s is None else s.base,
         "unit": (None if s is None else codec.unit_of(r["sn"], s, r["length_text"])) or "",

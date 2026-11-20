@@ -162,6 +162,13 @@ def import_details(rows: list[dict]) -> dict[int, dict]:
     return sn_import.details(ids)
 
 
+def sn2_details(rows: list[dict]) -> dict[int, str]:
+    """rows 里的号（号池 id 为 id，转出批次的明细为 item_id）的第二 SN：号池 id → 完整第二 SN（双 SN 的 PI 才有）。"""
+    from app.services import dual
+
+    return dual.sn2_of(r.get("item_id", r.get("id")) for r in rows)
+
+
 def imported_item(r: dict, details: dict[int, dict]) -> dict | None:
     """SN 导入的号（没有流水，seq_pi_no 为空串）的明细：结构、字段顺序与生成的号相同，按导入记录填齐：
     serial 为流水号、serialDec 为十进制流水、serialPi 为导入的 PI、billSeq 为行号（r 带非 0 的 bill_seq 时用它——
@@ -184,13 +191,16 @@ def imported_item(r: dict, details: dict[int, dict]) -> dict | None:
         "materialCode": str_or_none(r["material_code"]),
         "length": str_or_none(r["length_text"]),
         "customerCode": str_or_none(r["customer_code"]),
+        # 第二 SN（双 SN）：SN 导入的号没有
+        "sn2": None,
     }
 
 
-def _item_payload(r: dict, details: dict[int, dict]) -> dict:
+def _item_payload(r: dict, details: dict[int, dict], subs: dict[int, str] | None = None) -> dict:
     """批次明细，交付批次与转出批次同一结构。十进制流水、米数按字符串；物料、附件项次为空，规则不带米数时为 null。
     交付批次为号的当前挂靠，MES 逐枚按 rev 新增或覆盖；转出批次为转出前的挂靠，转入组织在批次头 toOrgCode，MES 据此
-    标记已转走（本地没有时按 SN、rev 建一条已转走记录）。"""
+    标记已转走（本地没有时按 SN、rev 建一条已转走记录）。
+    sn2：第二 SN（双 SN 的 PI 每件另有一个，随号走；单 SN 的号为 null），subs 为号池 id → 第二 SN。"""
     imp = imported_item(r, details)
     if imp is not None:
         return imp
@@ -207,6 +217,7 @@ def _item_payload(r: dict, details: dict[int, dict]) -> dict:
         "materialCode": str_or_none(r["material_code"]),
         "length": r["length_text"],
         "customerCode": r["customer_code"],
+        "sn2": (subs or {}).get(int(r.get("item_id", r.get("id")) or 0)),
     }
 
 
@@ -333,7 +344,8 @@ def _deliver(
 ) -> dict:
     """把已加锁的同一类型的号写成一个交付批次，号记上批次号。"""
     details = import_details(items)
-    payload = [_item_payload(r, details) for r in items]
+    subs = sn2_details(items)
+    payload = [_item_payload(r, details, subs) for r in items]
     rows = [
         (
             r["id"],
@@ -443,7 +455,8 @@ def build_transfer_out(cu: CurrentUser, org: str, entries: list[dict], rebuilt_f
     for part in parts:
         pi = part[0]["pi_no"]
         details = import_details(part)
-        payload = [_item_payload(e, details) for e in part]
+        subs = sn2_details(part)
+        payload = [_item_payload(e, details, subs) for e in part]
         rows = [
             (
                 e["item_id"],

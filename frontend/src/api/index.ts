@@ -89,6 +89,8 @@ export const api = {
   genPis: (params?: Q) => get("/generate/pis", params),
   genContext: (params: { pi?: string; bill_no?: string }) => get("/generate/context", params),
   genPreview: (data: Q, silent = false) => post("/generate/preview", data, silent),
+  /** PI 双 SN 开关：本 PI 下有号时不能改（须全部删号后才能修改） */
+  genDual: (pi_no: string, dual: boolean) => post("/generate/dual", { pi_no, dual }),
   genRun: (token: string) => post("/generate/run", { token }),
   genJobs: (pi: string, limit?: number) => get("/generate/jobs", { pi, limit }),
   genProgress: (batch: string) => get(`/generate/batches/${enc(batch)}`),

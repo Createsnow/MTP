@@ -36,6 +36,10 @@
                 <el-tag v-if="row.transferred_in" size="small" type="info" effect="plain" class="ml">{{ t("export.seqOf", { pi: row.seq_pi_no }) }}</el-tag>
               </template>
             </el-table-column>
+            <!-- 双 SN：第二 SN（本页有双 SN 的号时才显示这一列） -->
+            <el-table-column v-if="(sns.items.value || []).some((r: any) => r.sn2)" :label="t('generate.dual.sn2')" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }"><span class="sn-mono">{{ row.sn2 || "—" }}</span></template>
+            </el-table-column>
             <el-table-column :label="t('rules.seqDigits')" min-width="66" align="right"><template #default="{ row }">{{ row.seq_len ?? "—" }}</template></el-table-column>
             <el-table-column :label="t('common.seqBase')" min-width="66" align="right"><template #default="{ row }">{{ row.base ?? "—" }}</template></el-table-column>
             <el-table-column :label="t('rules.seqNo')" min-width="76"><template #default="{ row }"><span class="sn-mono">{{ row.seq_text }}</span></template></el-table-column>

@@ -1,5 +1,5 @@
 <template>
-  <el-dialog :model-value="modelValue" :title="t('generate.rule.dialogTitle')" width="960px" class="rule-dlg"
+  <el-dialog :model-value="modelValue" :title="slot === 2 ? t('generate.dual.ruleTitle') : t('generate.rule.dialogTitle')" width="960px" class="rule-dlg"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)" @open="onOpen">
     <!-- 默认在自定义页签：SN 由组件按顺序拼成，默认「单据编号后 7 位 + 流水」（本 PI 已生成的号还在时沿用已用的前缀）；不放说明文字 -->
     <div class="top">
@@ -288,6 +288,8 @@ type SecKey = "PRE" | "SEQ" | "SUF";
 const props = defineProps<{
   modelValue: boolean; pi: string; lines: OrderLine[]; options: any[]; rulePrefix?: RulePrefix; nextSeq?: number; piQuota?: number;
   prefixLocked?: Record<string, CustomRule>;
+  /** 2 = 第二 SN 的规则（双 SN 的 PI；规则、默认前缀、锁定前缀取 ctx.rule2）；不给为第一 SN */
+  slot?: number;
 }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void; (e: "saved"): void }>();
 const { t } = useI18n();
@@ -475,6 +477,8 @@ const sampleRows = computed(() =>
  *  取不到时用 PI 第一张单据的（同 genScope.defaultRulePrefix）。生成时后台查前缀全局唯一。 */
 function defaultHead(): Part[] {
   if (props.rulePrefix?.custom) return [textPart(props.rulePrefix.prefix)];
+  // 第二 SN 没有默认前缀（取单据编码时与第一 SN 的前缀相同），须手动填写
+  if (props.slot === 2) return [textPart(props.rulePrefix?.prefix ?? "")];
   if ((props.lines[0]?.bill_no ?? "").slice(-7)) return [newPart("BILL")];
   return [textPart(props.rulePrefix?.prefix ?? "")];
 }
@@ -568,7 +572,7 @@ function onOpen() {
   sample.max = null;
   sample.brk = null;
   incPreview.value = null;
-  const cur = props.lines.length === 1 ? props.lines[0].rule : null;
+  const cur = props.lines.length === 1 ? (props.slot === 2 ? props.lines[0].rule2 : props.lines[0].rule) : null;
   const base = props.rulePrefix?.custom ?? (cur?.mode === "CUSTOM" ? cur.custom : null);
   // 起始号带出所选物料行已存的：新前缀的自定义规则，或沿用本 PI 已用前缀时另记的（还没生成过）
   const own = props.rulePrefix?.custom ? cur?.prefix === props.rulePrefix.prefix : cur?.mode === "CUSTOM";
@@ -720,7 +724,7 @@ async function save() {
   if (!(await confirmCustRemoval())) return;
   busy.value = "save";
   try {
-    const body: Record<string, unknown> = { pi_no: props.pi, lines: refs() };
+    const body: Record<string, unknown> = { pi_no: props.pi, lines: refs(), ...(props.slot === 2 ? { slot: 2 } : {}) };
     if (unchanged.value) {
       // 点选的规则没改：按规则库规则登记（别的 PI 已用时共用前缀）
       body.rule_id = fromRule.value.rule_id;

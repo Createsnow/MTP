@@ -191,7 +191,8 @@ def items(
     rows = db.all(
         "SELECT i.sn, i.rule_version_id, i.pi_no, i.factory_code, f.factory_name, i.bill_seq, i.material_code, "
         "i.attach_no, i.length_text, i.seq_pi_no, i.seq_dec, i.status, i.delivery_mode, i.delivery_batch_no, "
-        "i.suspend FROM sn_item i LEFT JOIN sn_factory f ON f.factory_code = i.factory_code"
+        "i.suspend, s2.sn2 FROM sn_item i LEFT JOIN sn_factory f ON f.factory_code = i.factory_code "
+        "LEFT JOIN sn_item_sub s2 ON s2.item_id = i.id"
         + where
         + " ORDER BY "
         + rank
@@ -208,6 +209,8 @@ def items(
             "factory_code": r["factory_code"] or "",
             "factory_name": r["factory_name"] or "",
             "sn": _text(r["sn"]),
+            # 双 SN：第二 SN（单 SN 为空）
+            "sn2": r["sn2"] or "",
             "bill_seq": r["bill_seq"],
             "material_code": r["material_code"],
             "attach_no": _text(r["attach_no"]) or "",
@@ -299,7 +302,8 @@ def _text(v):
 #: 下载文件的列：与 SN 导入模板的列相同（同一份列名、同一顺序，见 sn_import.COLUMNS），下载的文件可直接按模板格式核对；
 #: 与 SN 查询导出不同。列依次为 PI、单据编号、附件项次、物料编码、ERP行号、完整 SN、流水位数、进制位数、流水号、
 #: 十进制流水号、米数、产品单位、生产组织编号、生产组织（表头不带模板里必填列的 *，导入时 * 填不填都认）
-FILE_HEADERS = list(sn_import.HEADERS)
+#: 双 SN：最后另加「第二SN」一列（单 SN 为空）；导入只按列名读模板里的列，下载的文件仍可按模板格式核对
+FILE_HEADERS = [*sn_import.HEADERS, "第二SN"]
 
 
 def _file_row(r: dict) -> list:
@@ -321,6 +325,7 @@ def _file_row(r: dict) -> list:
         (d["unit"] or "") if d else _unit(r),
         r["factory_code"] or "",
         r["factory_name"] or "",
+        r.get("sn2") or "",
     ]
 
 

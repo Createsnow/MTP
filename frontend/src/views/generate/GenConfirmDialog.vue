@@ -69,12 +69,20 @@
             <div v-for="(g, i) in segsOf(row)" :key="i" class="sn-mono">{{ g.end_sn }}</div>
           </template>
         </el-table-column>
+        <!-- 双 SN：第二 SN 的起止号（第二前缀下从最大号之后接着编，同一物料行内第 i 个对第 i 个） -->
+        <el-table-column v-if="preview.dual" :label="t('generate.dual.sn2Range')" min-width="220">
+          <template #default="{ row }">
+            <div v-for="(g, i) in row.sub?.seg_list || []" :key="i" class="sn-mono">{{ g.start_sn }} ~ {{ g.end_sn }}</div>
+          </template>
+        </el-table-column>
       </el-table>
       <el-checkbox v-if="unlockLimit" v-model="unlocked" class="unlock">{{ t("generate.unlock", { limit: num(unlockLimit) }) }}</el-checkbox>
     </template>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">{{ t("common.cancel") }}</el-button>
-      <el-button type="primary" :loading="loading" :disabled="!!unlockLimit && !unlocked" @click="emit('confirm')">{{ t("generate.genBtn", { n: num(preview?.qty || 0) }) }}</el-button>
+      <el-button type="primary" :loading="loading" :disabled="!!unlockLimit && !unlocked" @click="emit('confirm')">
+        {{ preview?.dual ? t("generate.dual.genBtn", { n: num(preview?.qty || 0), m: num((preview?.qty || 0) * 2) }) : t("generate.genBtn", { n: num(preview?.qty || 0) }) }}
+      </el-button>
     </template>
   </el-dialog>
 </template>

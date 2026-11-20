@@ -93,6 +93,17 @@
             <el-tag v-if="piRule" size="small" effect="plain" class="pi-rule">
               {{ t("generate.piRule", { rule: piRule.rule_code || t("generate.piRuleCustom"), prefix: piRule.prefix }) }}
             </el-tag>
+            <!-- 双 SN：第二 SN 的规则与前缀（还没选时不显示） -->
+            <el-tag v-if="dualOn && piRule2" size="small" effect="plain" type="warning" class="pi-rule">
+              {{ t("generate.dual.piRule2", { rule: piRule2.rule_code || t("generate.piRuleCustom"), prefix: piRule2.prefix }) }}
+            </el-tag>
+            <!-- 双 SN 开关（整张 PI，用户判断）：本 PI 下有号时锁定，须全部删号后才能修改 -->
+            <el-tooltip :disabled="!ctx.dual?.locked" :content="t('generate.dual.lockedTip')" placement="bottom">
+              <span class="dual-sw">
+                <el-switch :model-value="dualOn" size="small" :disabled="!!ctx.dual?.locked" :loading="busy === 'dual'"
+                  :active-text="t('generate.dual.label')" @change="(v: any) => toggleDual(!!v)" />
+              </span>
+            </el-tooltip>
             <span class="push" />
             <el-button size="small" type="success" plain :disabled="!ctx.summary.pending_alloc" @click="goAllocate">
               {{ t("generate.goAllocate") }}<el-icon class="el-icon--right"><Right /></el-icon>
@@ -228,10 +239,10 @@
               <template #default="{ row }">
                 <!-- 只显示一个状态，按先后取第一个满足的：待填写 → 需先选规则 → 其他拦截原因 → 可生成 → 已生成 → 已分配（见 stateIssue）；
                      项次拦截：悬停列出挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行），由用户自己去处理 -->
-                <el-tooltip v-if="stateIssue(row)" placement="top" :disabled="stateIssue(row) !== 'ATTACH_ORDER_BLOCKED' || !row.blockers?.length">
+                <el-tooltip v-if="stateIssue(row)" placement="top" :disabled="!blockersOf(row).length">
                   <template #content>
                     <div>{{ t("generate.blockerTitle") }}</div>
-                    <div v-for="b in row.blockers" :key="`${b.bill_no}#${b.seq}`">{{ blockerText(b) }}</div>
+                    <div v-for="b in blockersOf(row)" :key="`${b.bill_no}#${b.seq}`">{{ blockerText(b) }}</div>
                   </template>
                   <el-tag size="small" type="danger" effect="plain">{{ issueText(stateIssue(row)!) }}</el-tag>
                 </el-tooltip>
@@ -273,6 +284,8 @@
           <el-button :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">{{ t("generate.restoreDefault") }}</el-button>
           <!-- 选规则作用于整张 PI：有勾选时按所选行（起始号记在这些行上），没有勾选时按本 PI 全部有效物料行 -->
           <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
+          <!-- 双 SN：第二 SN 的规则（配置方式与第一 SN 相同，作用于整张 PI） -->
+          <el-button v-if="dualOn" :disabled="!ruleLines.length" :loading="busy === 'rule2'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length, 2)">{{ t("generate.dual.ruleBtn") }}</el-button>
           <!-- 删号：所选行中有号时可点，按所选行删（弹窗里可改为按 SN 起止号）；所选行都没号或未勾选时置灰 -->
           <el-button type="danger" plain :disabled="!!running || !deleteRows.length" @click="deleteDlg?.open({ lines: deleteRows })">
             {{ t("generate.deleteMenu") }}
@@ -285,13 +298,16 @@
           <span class="vsep" />
           <SeqSource v-model="seq" :gaps="ctx.gaps" :first="gen.preview?.generatable ? gen.preview.start_seq : null" />
           <el-button type="primary" :loading="gen.loading" :disabled="!canGen" @click="genDlg = true">
-            {{ t("generate.genBtn", { n: num(gen.preview?.generatable ? gen.preview.qty : 0) }) }}
+            {{ dualOn ? t("generate.dual.genBtn", { n: num(gen.preview?.generatable ? gen.preview.qty : 0), m: num(gen.preview?.generatable ? gen.preview.qty * 2 : 0) })
+              : t("generate.genBtn", { n: num(gen.preview?.generatable ? gen.preview.qty : 0) }) }}
           </el-button>
         </div>
       </template>
     </el-drawer>
 
     <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="ctx.rule_prefix" :prefix-locked="ctx.prefix_locked" :next-seq="ctx.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
+    <!-- 双 SN：第二 SN 的规则（同一个对话框，规则选项、默认前缀、锁定前缀取 ctx.rule2） -->
+    <RuleDialog v-if="ctx?.rule2" v-model="ruleDlg.open2" :slot="2" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule2.rule_options" :rule-prefix="ctx.rule2.rule_prefix" :prefix-locked="ctx.rule2.prefix_locked" :next-seq="ctx.rule2.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
 
     <GenConfirmDialog v-model="genDlg" :preview="gen.preview" :unlock-limit="unlockLimit"
       :loading="busy === 'run'" @confirm="runGen" />
@@ -391,6 +407,8 @@ const issueText = (c: string) => t(`generate.issue.${c}`);
 const FILL_ISSUES = ["ATTACH_EMPTY", "LENGTH_EMPTY", "UNIT_EMPTY", "ATTACH_NOT_NUMERIC"];
 /** 重新选规则即可（没有规则、规则须换前缀、与本 PI 已用前缀不同）：状态「需先选规则」（NO_RULE） */
 const RULE_ISSUES = ["NO_RULE", "RULE_PREFIX", "RULE_PI_PREFIX"];
+/** 双 SN：第二 SN 的规则要重新选（没选、须换前缀、与本 PI 已用的第二前缀不同）：状态「需先选第二 SN 规则」（NO_RULE2） */
+const RULE2_ISSUES = ["NO_RULE2", "RULE2_PREFIX", "RULE2_PI_PREFIX"];
 /** 状态列的不能生成原因（只显示一个，按先后取第一个）：待填写 → 需先选规则 → 其他拦截原因（靠前项次未生成完、PI 变更冻结、
  *  失去对应等，按后端给的先后）；没有额度或没有原因时为 null（按 lineState 显示可生成 / 已生成 / 已分配 / 无额度 / 失效）。 */
 function stateIssue(l: OrderLine): string | null {
@@ -398,7 +416,15 @@ function stateIssue(l: OrderLine): string | null {
   if (!is.length) return null;
   if (is.some((i) => FILL_ISSUES.includes(i))) return "FILL";
   if (is.some((i) => RULE_ISSUES.includes(i))) return "NO_RULE";
+  if (is.some((i) => RULE2_ISSUES.includes(i))) return "NO_RULE2";
   return is[0];
+}
+/** 状态悬停列出的挡路物料行：第一前缀（ATTACH_ORDER_BLOCKED）或第二前缀（ATTACH_ORDER_BLOCKED2）的项次拦截 */
+function blockersOf(l: OrderLine): any[] {
+  const s = stateIssue(l);
+  if (s === "ATTACH_ORDER_BLOCKED") return l.blockers || [];
+  if (s === "ATTACH_ORDER_BLOCKED2") return l.blockers2 || [];
+  return [];
 }
 /** 挡路的物料行：PI、单据、行号、附件项次、原因 */
 const blockerText = (b: any) =>
@@ -607,15 +633,38 @@ function closeDetail() {
 
 // ---------------- 规则：物料行
 
-const ruleDlg = reactive({ open: false, lines: [] as OrderLine[] });
+const ruleDlg = reactive({ open: false, open2: false, lines: [] as OrderLine[] });
+
+/** 双 SN：本 PI 是否开启、第二 SN 的规则（PI 级，还没选为 null） */
+const dualOn = computed(() => !!ctx.value?.dual?.dual);
+const piRule2 = computed(() => (ctx.value?.rule2?.rule as any) ?? null);
+
+/** 开 / 关双 SN（作用于整张 PI）：开启前确认（有号后不能关闭）；本 PI 下有号时开关锁定 */
+async function toggleDual(on: boolean) {
+  if (!ctx.value) return;
+  if (on) {
+    try {
+      await ElMessageBox.confirm(t("generate.dual.confirmOn"), t("generate.dual.label"), { type: "warning" });
+    } catch {
+      return;
+    }
+  }
+  busy.value = "dual";
+  try {
+    await api.genDual(ctx.value.pi_no, on);
+    await reloadCtx();
+  } finally {
+    busy.value = "";
+  }
+}
 
 /** 底部「选规则」打开规则对话框（一个 PI 只有一个规则，保存时作用于整张 PI；默认自定义页签，前缀默认点选的第一个单据编码后 7 位，本 PI 已生成的号还在时沿用已用的前缀）。
  *  打开前先查附件项次（只查还有额度、要生成的行；生成时所选物料行不分单据按附件项次从小到大排号）：
  *  1. 有没填的：跳到第一条没填的行（按排号顺序），提示补全，不打开；
  *  2. 有相同的（不分单据）：跳到这些行，提示同一项次内按单据勾选先后、单据内按行号生成，可继续选规则或回去修改。 */
-async function openRuleDialog(lines: OrderLine[], check = true) {
+async function openRuleDialog(lines: OrderLine[], check = true, slot = 1) {
   const keys = lines.map(lineKey);
-  busy.value = "rule";
+  busy.value = slot === 2 ? "rule2" : "rule";
   try {
     // 点选时自动填、还没保存的附件项次先保存（会刷新详情）
     await flushAutoAttach();
@@ -651,7 +700,8 @@ async function openRuleDialog(lines: OrderLine[], check = true) {
     }
   }
   ruleDlg.lines = rows;
-  ruleDlg.open = true;
+  if (slot === 2) ruleDlg.open2 = true;
+  else ruleDlg.open = true;
 }
 
 /** 相同附件项次提示里一组物料行的文字（按生成顺序）：单据 X ERP行号 n、…… */
@@ -1091,6 +1141,7 @@ onUnmounted(() => {
 .dh { display: flex; flex-direction: column; gap: 6px; }
 .dh-title { display: flex; gap: 12px; align-items: center; font-size: 16px; color: var(--app-text); }
 .pi-rule { font-family: var(--sn-mono, monospace); }
+.dual-sw { display: inline-flex; align-items: center; margin-left: 4px; }
 .kv { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; color: var(--app-muted); }
 .kv b { color: var(--app-text); font-weight: 600; }
 .drawer { display: flex; flex-direction: column; gap: 10px; }

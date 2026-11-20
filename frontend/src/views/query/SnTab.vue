@@ -51,6 +51,10 @@
       <el-table-column :label="t('common.sn')" :min-width="w.sn" fixed>
         <template #default="{ row }"><span class="sn-mono">{{ row.sn }}</span></template>
       </el-table-column>
+      <!-- 双 SN：第二 SN（本页有双 SN 的号时才显示这一列） -->
+      <el-table-column v-if="hasSn2" :label="t('generate.dual.sn2')" :min-width="w.sn2">
+        <template #default="{ row }"><span class="sn-mono">{{ row.sn2 || "—" }}</span></template>
+      </el-table-column>
       <el-table-column :label="t('rules.seqDigits')" :min-width="w.seqLen" align="right"><template #default="{ row }">{{ row.seq_len ?? "—" }}</template></el-table-column>
       <el-table-column :label="t('common.seqBase')" :min-width="w.base" align="right"><template #default="{ row }">{{ row.base ?? "—" }}</template></el-table-column>
       <el-table-column :label="t('rules.seqNo')" :min-width="w.seqText"><template #default="{ row }"><span class="sn-mono">{{ row.seq_text }}</span></template></el-table-column>
@@ -180,6 +184,8 @@ const { items, state, load, onSize } = usePaged<any>(async (q) => {
 const TAG_GAP = 4;
 const tagAfter = (text: string | false | null | undefined) => (text ? TAG_GAP + tagWidth(text) : 0);
 
+/** 本页有没有双 SN 的号（有才显示「第二SN」列） */
+const hasSn2 = computed(() => (items.value || []).some((r: any) => r.sn2));
 /** 各列宽度：按本页各行内容量出（PI、完整 SN、生产组织不设上限，保证完整显示）。 */
 const w = computed(() => {
   const rows = items.value;
@@ -189,6 +195,7 @@ const w = computed(() => {
     pi: col("PI", (r) => textWidth(r.pi_no) + tagAfter(r.pi_changed && t("query.piChanged")), 100),
     material: col(t("common.material"), (r) => textWidth(r.material_code || "—")),
     sn: col(t("common.sn"), (r) => mono(r.sn), 140),
+    sn2: col(t("generate.dual.sn2"), (r) => mono(r.sn2 || "—"), 100),
     seqLen: col(t("rules.seqDigits"), (r) => textWidth(String(r.seq_len ?? "—"))),
     base: col(t("common.seqBase"), (r) => textWidth(String(r.base ?? "—"))),
     seqText: col(t("rules.seqNo"), (r) => mono(r.seq_text)),

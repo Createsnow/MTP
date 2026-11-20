@@ -146,7 +146,7 @@ class _ReceiptInResponse(MockMes):
 
 
 #: 需要 ③ 回执的检查项（C01～C04、C19 只看 ① 应答，C07 依赖 C05；C21 未加 --perf 跳过）
-_NEED_RECEIPT = {f"C{i:02d}" for i in range(5, 26)} - {"C19", "C21"}
+_NEED_RECEIPT = {f"C{i:02d}" for i in range(5, 27)} - {"C19", "C21"}
 
 
 @pytest.mark.parametrize(

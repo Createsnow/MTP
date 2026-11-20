@@ -69,4 +69,5 @@ M = {
 "snImport.issue.LINE_VOID": ("单据 {bill_no} ERP行号 {seq} 已失效（SN 生成页的过滤配置），不能导入", "Bill {bill_no} ERP line No. {seq} is void (filter settings on the SN generation page) and cannot be imported", "Chứng từ {bill_no} dòng ERP {seq} đã vô hiệu (cấu hình lọc ở trang Tạo SN), không thể nhập"),
 "snImport.issue.LINE_NO_ATTACH": ("单据 {bill_no} ERP行号 {seq} 没有附件项次（可先在 SN 生成页补填）", "Bill {bill_no} ERP line No. {seq} has no attachment item (fill it on the SN generation page first)", "Chứng từ {bill_no} dòng ERP {seq} không có hạng mục đính kèm (hãy bổ sung ở trang Tạo SN trước)"),
 "snImport.issue.BILL_HAS_SN": ("单据 {bill_no} 在系统中已有生成或已分配的 SN（{count} 枚），不能导入", "Bill {bill_no} already has generated or allocated SNs in the system ({count}), so it cannot be imported", "Chứng từ {bill_no} đã có SN được tạo hoặc đã phân bổ trong hệ thống ({count}), không thể nhập"),
+"snImport.issue.DUAL_PI": ("PI {pi} 已开启双 SN，不支持导入", "PI {pi} has dual SN enabled, so it cannot be imported", "PI {pi} đã bật SN kép, không hỗ trợ nhập"),
 }

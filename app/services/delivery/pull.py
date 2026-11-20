@@ -23,6 +23,7 @@ from app.services.delivery.batches import (
     import_details,
     imported_item,
     must_batch,
+    sn2_details,
     str_or_none,
 )
 from app.services.delivery.receipts import apply_receipt
@@ -293,7 +294,7 @@ _READ_COLS = (
 )
 
 
-def _read_item(r: dict, details: dict[int, dict]) -> dict:
+def _read_item(r: dict, details: dict[int, dict], subs: dict[int, str] | None = None) -> dict:
     imp = imported_item(r, details)
     if imp is not None:
         return {
@@ -315,6 +316,8 @@ def _read_item(r: dict, details: dict[int, dict]) -> dict:
         "materialCode": str_or_none(r["material_code"]),
         "length": r["length_text"],
         "customerCode": r["customer_code"],
+        # 第二 SN（双 SN）；单 SN 的号为 null
+        "sn2": (subs or {}).get(int(r["id"])),
         "status": r["status"],
         "batchNo": r["delivery_batch_no"],
         "deliveredAt": util.mes_fmt(r["delivered_at"]),
@@ -352,8 +355,12 @@ def read_delivered(
     more = len(rows) > n
     rows = rows[:n]
     details = import_details(rows)
+    subs = sn2_details(rows)
     return mes_body(
-        "OK", "成功", items=[_read_item(r, details) for r in rows], nextCursor=str(rows[-1]["id"]) if more else None
+        "OK",
+        "成功",
+        items=[_read_item(r, details, subs) for r in rows],
+        nextCursor=str(rows[-1]["id"]) if more else None,
     )
 
 
@@ -376,10 +383,11 @@ def read_batch_items(cu: CurrentUser, batch_no: str, cursor: str | None, size: i
     more = len(rows) > n
     rows = rows[:n]
     details = import_details(rows)
+    subs = sn2_details(rows)
     return mes_body(
         "OK",
         "成功",
         b["batch_no"],
-        items=[_read_item(r, details) for r in rows],
+        items=[_read_item(r, details, subs) for r in rows],
         nextCursor=str(rows[-1]["id"]) if more else None,
     )

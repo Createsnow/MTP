@@ -240,6 +240,8 @@ class Runner:
             "materialCode": "CT-M1",
             "length": "0100",
             "customerCode": "CT-C1",
+            # 接口文档 V1.3：第二 SN（双 SN）；单 SN 的号为 null
+            "sn2": None,
             **extra,
         }
 
@@ -473,6 +475,14 @@ class Runner:
             self.ok(self.send(b), b)
             c.notes.append(f"请在 MES 侧确认 {self.sn(1)} 仍为 rev = 3、单据行号 2（同 rev 重复覆盖，内容不变）")
 
+        def dual_sn(c: Check) -> None:
+            b = self.batch([self.delivery(k, 1, sn2=f"{self.prefix}B{k:06d}") for k in (201, 202)])
+            self.ok(self.send(b), b)
+            c.notes.append(
+                f"请在 MES 侧确认 {self.sn(201)} 的第二 SN 为 {self.prefix}B000201、{self.sn(202)} 的为 "
+                f"{self.prefix}B000202（与第一 SN 绑定保存，第二 SN 同样全局唯一）"
+            )
+
         def older(c: Check) -> None:
             self.need("rev3" in st, "依赖 C08 未通过")
             b = self.batch([self.delivery(1, 2), self.delivery(4, 1)])
@@ -672,6 +682,7 @@ class Runner:
                 "接口 3.3.6",
                 receipt_retry,
             ),
+            ("C26", "双 SN：明细带第二 SN（sn2），与第一 SN 绑定保存，OK", "接口 3.1（V1.3）", dual_sn),
         ]
         for cid, title, ref, fn in cases:
             self.case(cid, title, ref, fn)

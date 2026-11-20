@@ -72,6 +72,7 @@ M = {
 "rules.withUnitHint": ("SN 中带物料行的产品单位（金蝶 FProductUnit 原样写入；为空的物料行不能生成）", "SN contains the material line's product unit (Kingdee FProductUnit as is; lines without a unit cannot be generated)", "SN chứa đơn vị sản phẩm của dòng vật tư (FProductUnit của Kingdee giữ nguyên; dòng không có đơn vị thì không tạo được)"),
 "rules.sampleUnit": ("示例单位", "Sample unit", "Đơn vị mẫu"),
 "rules.used": ("生成过号", "Used", "Đã tạo số"),
+"rules.roleSecond": ("第二 SN 用", "For second SN", "Dùng cho SN thứ hai"),
 "rules.prefix": ("前缀", "Prefix", "Tiền tố"),
 "rules.prefixHint": ("必填，不限制字符（区分大小写）；一个前缀一条规则，不能与已有规则的前缀相同，也不能一个是另一个的开头（如 SD 与 SDD）",
   "Required, any characters (case-sensitive). One prefix has one rule: it must not equal an existing rule's prefix, and neither may start with the other (e.g. SD and SDD)",

@@ -70,6 +70,7 @@ E = {
 "LINE_EDIT_ALLOCATED": ("Material line {bill_no} / {seq} has allocated SNs; attachment item, length and unit cannot be changed. Delete the line's SNs first", "Dòng vật tư {bill_no} / {seq} có SN đã phân bổ, không thể sửa hạng mục đính kèm, chiều dài và đơn vị; hãy xóa SN của dòng trước"),
 "ALERT_NOT_FOUND": ("Order change alert not found or already handled", "Không tìm thấy cảnh báo thay đổi lệnh hoặc đã xử lý"),
 "ALERT_ACTION_INVALID": ("This alert cannot be handled this way", "Không thể xử lý cảnh báo theo cách này"),
+"ALERT_DUAL_MISMATCH": ("Old PI {pi} and new PI {new_pi} have different dual-SN settings; please check the Kingdee order", "PI cũ {pi} và PI mới {new_pi} có thiết lập SN kép khác nhau; vui lòng kiểm tra đơn hàng Kingdee"),
 "ALERT_MAP_TARGET_INVALID": ("The target material line must be another line of this bill in the snapshot: {seq}", "Dòng vật tư đích phải là một dòng khác của chứng từ này trong ảnh chụp: {seq}"),
 "ALERT_MAP_FROZEN": ("{count} SNs of the lost material line are in unconfirmed or failed batches; confirm the mapping after those batches are confirmed", "{count} SN của dòng vật tư bị mất đang trong lô chưa xác nhận hoặc thất bại; hãy xác nhận ánh xạ sau khi các lô được xác nhận"),
 # ---------- 规则 ----------
@@ -101,6 +102,13 @@ E = {
 "RULE_GLOBAL_READONLY": ("Only the system administrator can modify or delete global rules: {rule_code}", "Chỉ quản trị hệ thống mới được sửa, xóa quy tắc dùng chung: {rule_code}"),
 "RULE_FACTORY_REQUIRED": ("Please choose the production org the rule belongs to", "Vui lòng chọn tổ chức sản xuất sở hữu quy tắc"),
 "RULE_SEQ_START_INVALID": ("Start number must be a positive integer not greater than the rule's max serial {max}", "Số bắt đầu phải là số nguyên dương và không vượt quá tuần tự tối đa {max} của quy tắc"),
+# ---------- 双 SN ----------
+"DUAL_LOCKED": ("PI {pi} has {count} SNs, so its dual-SN switch cannot be changed; delete all SNs first", "PI {pi} có {count} SN nên không thể đổi công tắc SN kép; hãy xóa hết SN trước"),
+"DUAL_PI_NOT_FOUND": ("PI {pi} is not in the order snapshot", "PI {pi} không có trong ảnh chụp đơn hàng"),
+"DUAL_NOT_ENABLED": ("PI {pi} has not enabled dual SN, so a second-SN rule cannot be selected", "PI {pi} chưa bật SN kép, không thể chọn quy tắc SN thứ hai"),
+"RULE_PREFIX_ROLE_SECOND": ("Prefix {prefix} is used for second SNs and cannot be used for first SNs; please change it", "Tiền tố {prefix} đã dùng cho SN thứ hai, không thể dùng cho SN thứ nhất; vui lòng đổi"),
+"RULE_PREFIX_ROLE_FIRST": ("Prefix {prefix} is used for first SNs and cannot be used for second SNs; please change it", "Tiền tố {prefix} đã dùng cho SN thứ nhất, không thể dùng cho SN thứ hai; vui lòng đổi"),
+"RULE2_SAME_PREFIX": ("Second-SN prefix {prefix} equals or overlaps (one starts with the other) the PI's first-SN prefix {first}; please change it", "Tiền tố SN thứ hai {prefix} trùng hoặc là phần đầu của tiền tố SN thứ nhất {first} của PI (hoặc ngược lại); vui lòng đổi"),
 # ---------- 识别码 ----------
 "RULE_INC_RANGE_INVALID": ("ID code accepts digits only: start and end are 0–999, and start cannot exceed end", "Mã nhận dạng chỉ nhận chữ số: giá trị đầu, cuối từ 0–999 và giá trị đầu không lớn hơn giá trị cuối"),
 "RULE_INC_EXHAUSTED": ("ID codes ({start}~{end}) of prefix {prefix} are used up; please change the prefix", "Mã nhận dạng ({start}~{end}) của tiền tố {prefix} đã dùng hết, vui lòng đổi tiền tố"),
@@ -188,6 +196,7 @@ E = {
 "TR_TARGET_LINE_INVALID": ("Target ERP line No. {seq} is not in the target bill", "Số dòng ERP đích {seq} không thuộc chứng từ đích"),
 "TR_RANGE_INVALID": ("Range {start_sn} ~ {end_sn} is not within the selected bill, material code and attachment item, or spans different serial PIs", "Khoảng {start_sn} ~ {end_sn} không thuộc chứng từ, mã vật tư và hạng mục phụ kiện đã chọn, hoặc không cùng PI tuần tự"),
 "TR_FROZEN": ("{count} SNs cannot be transferred: {detail}", "{count} SN không thể chuyển: {detail}"),
+"TR_DUAL_MISMATCH": ("PI {pi} and target PI {to_pi} have different dual-SN settings: SNs cannot be transferred between single-SN and dual-SN PIs", "PI {pi} và PI đích {to_pi} có thiết lập SN kép khác nhau: không thể chuyển chứng từ giữa PI SN đơn và PI SN kép"),
 "TR_LOCATE_NOT_FOUND": ("{q} not found: enter a full SN, bill No. or PI (only allocated SNs of your authorized orgs are searched)", "Không tìm thấy {q}: hãy nhập SN đầy đủ, số chứng từ hoặc PI (chỉ tìm SN đã phân bổ của tổ chức được ủy quyền)"),
 # ---------- 查询 / 审计 ----------
 "QUERY_PI_REQUIRED": ("A PI is required to view SNs of the same PI across production orgs", "Phải chỉ định PI khi xem SN của cùng PI ở các tổ chức sản xuất"),

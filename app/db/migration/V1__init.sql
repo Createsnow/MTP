@@ -531,6 +531,75 @@ CREATE TABLE sn_item_deleted (
   KEY ix_item_deleted_line (bill_no, bill_seq) COMMENT '删过号的物料行不挡后面项次（generate 项次拦截）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='删号存档';
 
+-- 双 SN（PI 级开关，用户在生成页手动开启）：开启的 PI 每件同时生成第一 SN（号池 sn_item）与第二 SN（sn_item_sub）。
+-- 本 PI 下有号（自己生成的、转入的、导入的）时开关锁定，须全部删号后才能开 / 关；没有记录 = 单 SN
+CREATE TABLE sn_pi_dual (
+  pi_no   VARCHAR(64) NOT NULL,
+  set_by  VARCHAR(32) NOT NULL,
+  set_at  DATETIME    NOT NULL,
+  PRIMARY KEY (pi_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='双 SN 的 PI';
+
+-- 第二 SN 规则登记：结构同 sn_pi_rule（一个 PI 一个第二前缀；规则库规则记 rule_id，自定义规则记 custom_json，生成成功后存入规则库）
+CREATE TABLE sn_pi_rule2 (
+  pi_no       VARCHAR(64)  NOT NULL,
+  prefix      VARCHAR(64)  NOT NULL COMMENT '本 PI 的第二 SN 规则前缀（不能与第一前缀相同，前缀用途须为第二 SN，见 sn_prefix_role）',
+  rule_id     BIGINT       NULL COMMENT '规则库规则；自定义规则生成前为空',
+  custom_json VARCHAR(4000) NULL COMMENT '自定义规则参数（生成前）',
+  seq_start   BIGINT       NULL COMMENT '起始号（十进制流水）：下次生成第一个第二 SN 不小于它，生成后清掉',
+  bound_by    VARCHAR(32)  NOT NULL,
+  bound_at    DATETIME     NOT NULL,
+  PRIMARY KEY (pi_no),
+  KEY ix_pi_rule2_prefix (prefix),
+  KEY ix_pi_rule2_rule (rule_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN 规则登记';
+
+-- 前缀用途：第二 SN 用的前缀（规则前缀，带识别码的为前缀层文本）在第一次被选作第二 SN 时登记，之后不变；
+-- 没有记录的前缀为第一 SN 用（已被用过）或还没用过。一个前缀只能当第一 SN 或第二 SN 中的一种
+CREATE TABLE sn_prefix_role (
+  prefix      VARCHAR(64) NOT NULL,
+  role        TINYINT     NOT NULL COMMENT '2 = 第二 SN',
+  created_by  VARCHAR(32) NOT NULL,
+  created_at  DATETIME    NOT NULL,
+  PRIMARY KEY (prefix)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='前缀用途（第二 SN）';
+
+-- 第二 SN：一件一行，挂在号池记录上（item_id = sn_item.id），随号分配、交付、转单、转组织，与号一起删除。
+-- 流水按第二前缀排号（同前缀各 PI 共用一套流水，sn_prefix_counter）；同一物料行内第 i 个第一 SN 对第 i 个第二 SN
+CREATE TABLE sn_item_sub (
+  item_id          BIGINT      NOT NULL COMMENT '号池 id（sn_item.id）',
+  sn2              VARCHAR(64) NOT NULL COMMENT '完整第二 SN，写出后不再修改',
+  seq_pi_no        VARCHAR(64) NOT NULL COMMENT '流水归属 PI',
+  seq_dec          BIGINT      NOT NULL COMMENT '十进制流水',
+  seq_prefix       VARCHAR(64) NOT NULL COMMENT '第二 SN 规则前缀',
+  rule_version_id  BIGINT      NOT NULL,
+  gen_batch        VARCHAR(40) NOT NULL,
+  created_at       DATETIME    NOT NULL,
+  PRIMARY KEY (item_id),
+  UNIQUE KEY ux_item_sub_sn (sn2) COMMENT '第二 SN 全局唯一（与第一 SN 的前缀用途分开，见 sn_prefix_role）',
+  UNIQUE KEY ux_item_sub_prefix_seq (seq_prefix, seq_dec),
+  UNIQUE KEY ux_item_sub_seq (seq_pi_no, seq_dec)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN';
+
+-- 第二 SN 删号存档（随号删除，del_no 同 sn_item_deleted）
+CREATE TABLE sn_item_sub_deleted (
+  item_id          BIGINT      NOT NULL COMMENT '原号池 id',
+  del_no           VARCHAR(40) NOT NULL,
+  sn2              VARCHAR(64) NOT NULL,
+  seq_pi_no        VARCHAR(64) NOT NULL,
+  seq_dec          BIGINT      NOT NULL,
+  seq_prefix       VARCHAR(64) NOT NULL,
+  rule_version_id  BIGINT      NOT NULL,
+  gen_batch        VARCHAR(40) NOT NULL,
+  created_at       DATETIME    NOT NULL COMMENT '生成时间',
+  deleted_by       VARCHAR(32) NOT NULL,
+  deleted_at       DATETIME    NOT NULL,
+  PRIMARY KEY (item_id),
+  KEY ix_item_sub_deleted_no (del_no),
+  KEY ix_item_sub_deleted_sn (sn2),
+  KEY ix_item_sub_deleted_prefix (seq_prefix, seq_dec)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN 删号存档';
+
 -- SN 导入记录：本系统之外已有的 SN 按导入模板（PI、单据编号、行号、完整 SN、物料编码、附件项次、米数、流水号、进制位数、
 -- 流水位数、产品单位、生产组织编号、客户编码）一次导入一个导入单号，逐枚记在这里；导入功能自成一套，只用这张表：
 -- 号同时写入号池（sn_item.origin = 'IMPORT'，号池结构不变：挂在单据序号 0 上，号池的 seq_dec 即本表 id，seq_pi_no 为空串），

@@ -99,6 +99,7 @@ class ErrorCode(Enum):
     LINE_VOID_RULE_INVALID = (400, "过滤配置的业务状态、领料状态只能选金蝶的状态值")
     ALERT_NOT_FOUND = (404, "订单变更提醒不存在或已处理")
     ALERT_ACTION_INVALID = (400, "该提醒不能这样处理")
+    ALERT_DUAL_MISMATCH = (409, "原 PI {pi} 与新 PI {new_pi} 的双 SN 设置不同，请核对金蝶订单")
     ALERT_MAP_TARGET_INVALID = (400, "确认对应的目标物料行须是该单据快照中的另一行：{seq}")
     ALERT_MAP_FROZEN = (409, "失去对应的物料行有 {count} 枚号在未确认或失败的批次中，须等批次确认后再确认对应")
     # ---------- 规则 ----------
@@ -140,6 +141,16 @@ class ErrorCode(Enum):
     RULE_GLOBAL_READONLY = (403, "全局规则只有系统管理员能修改、删除：{rule_code}")
     RULE_FACTORY_REQUIRED = (400, "请选择规则所属的生产组织")
     RULE_SEQ_START_INVALID = (400, "起始号须为正整数，且不超过规则的最大流水 {max}")
+    # ---------- 双 SN（PI 级开关；第二 SN 规则另登记，见 rules 的第二 SN 上下文） ----------
+    DUAL_LOCKED = (409, "PI {pi} 下有 {count} 枚号，双 SN 开关不能修改；须全部删号后才能修改")
+    DUAL_PI_NOT_FOUND = (404, "PI {pi} 不在订单快照中")
+    DUAL_NOT_ENABLED = (409, "PI {pi} 没有开启双 SN，不能选第二 SN 规则")
+    RULE_PREFIX_ROLE_SECOND = (409, "前缀 {prefix} 已用于第二 SN，不能用作第一 SN，请更换")
+    RULE_PREFIX_ROLE_FIRST = (409, "前缀 {prefix} 已用于第一 SN，不能用作第二 SN，请更换")
+    RULE2_SAME_PREFIX = (
+        409,
+        "第二 SN 前缀 {prefix} 与本 PI 的第一 SN 前缀 {first} 相同或一个是另一个的开头，请更换",
+    )
     # ---------- 识别码（前缀 + 自增值为一张 PI 独占的号段，见 rules.Inc） ----------
     RULE_INC_RANGE_INVALID = (400, "识别码只能填数字：起始值、结束值为 0–999，起始值不能大于结束值")
     RULE_INC_EXHAUSTED = (409, "前缀 {prefix} 的识别码（{start}~{end}）已用完，请更改前缀")
@@ -253,6 +264,7 @@ class ErrorCode(Enum):
         "起止号 {start_sn} ~ {end_sn} 不在所选单据、物料编码和附件项次下，或不在同一流水归属 PI 内",
     )
     TR_FROZEN = (409, "有 {count} 枚号不能转移：{detail}")
+    TR_DUAL_MISMATCH = (400, "PI {pi} 与目标 PI {to_pi} 的双 SN 设置不同：单 SN 与双 SN 的 PI 之间不能转单")
     TR_LOCATE_NOT_FOUND = (404, "没有找到 {q}：请输入完整 SN、单据编号或 PI（只查授权组织内分配成功的号）")
     # ---------- 查询 / 审计 ----------
     QUERY_PI_REQUIRED = (400, "查看同一 PI 各生产组织的号时必须指定 PI")

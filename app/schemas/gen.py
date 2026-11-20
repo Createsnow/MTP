@@ -49,3 +49,10 @@ class VoidRuleIn(In):
     enabled: bool | None = None
     biz_status: list[str] | None = None
     pick_status: list[str] | None = None
+
+
+class DualIn(In):
+    """PI 双 SN 开关：本 PI 下有号时不能改（须全部删号后才能修改）。"""
+
+    pi_no: str | None = None
+    dual: bool | None = None

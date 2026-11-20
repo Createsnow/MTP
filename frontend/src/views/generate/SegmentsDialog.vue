@@ -77,10 +77,14 @@
     </div>
 
     <!-- SN 明细：只有一列 SN，按流水排、分页 -->
-    <el-dialog v-model="sns.open" :title="snsTitle" width="min(380px, 96vw)" append-to-body>
+    <el-dialog v-model="sns.open" :title="snsTitle" :width="sns.sn2.some((x) => x) ? 'min(600px, 96vw)' : 'min(380px, 96vw)'" append-to-body>
       <el-table v-loading="sns.loading" :data="sns.items" size="small" :max-height="440" :empty-text="t('common.empty')">
         <el-table-column label="SN">
-          <template #default="{ row }"><span class="sn-mono">{{ row }}</span></template>
+          <template #default="{ $index }"><span class="sn-mono">{{ sns.items[$index] }}</span></template>
+        </el-table-column>
+        <!-- 双 SN：第二 SN（与 SN 一一对应） -->
+        <el-table-column v-if="sns.sn2.some((x: any) => x)" :label="t('generate.dual.sn2')">
+          <template #default="{ $index }"><span class="sn-mono">{{ sns.sn2[$index] || "—" }}</span></template>
         </el-table-column>
       </el-table>
       <el-pagination class="pager" small layout="total, prev, pager, next" :total="sns.total" :page-size="SN_PAGE"
@@ -161,13 +165,13 @@ function use(row: { start_seq: number; end_seq: number }) {
   visible.value = false;
 }
 
-const sns = reactive({ open: false, loading: false, seg: null as any, items: [] as string[], total: 0, page: 1 });
+const sns = reactive({ open: false, loading: false, seg: null as any, items: [] as string[], sn2: [] as (string | null)[], total: 0, page: 1 });
 const snsTitle = computed(() =>
   sns.seg ? t("generate.snDetailTitle", { start: sns.seg.start_seq, end: sns.seg.end_seq, n: num(sns.seg.qty) }) : "",
 );
 
 function openSns(seg: any) {
-  Object.assign(sns, { open: true, seg, items: [], total: seg.qty, page: 1 });
+  Object.assign(sns, { open: true, seg, items: [], sn2: [], total: seg.qty, page: 1 });
   loadSns(1);
 }
 
@@ -179,7 +183,7 @@ async function loadSns(page: number) {
       pi: props.pi, bill_no: bill.value, bill_seq: seg.bill_seq, seq_pi: seg.seq_pi_no, start: seg.start_seq, end: seg.end_seq,
       page, size: SN_PAGE,
     });
-    Object.assign(sns, { items: r.items, total: r.total, page: r.page });
+    Object.assign(sns, { items: r.items, sn2: r.sn2 || [], total: r.total, page: r.page });
   } finally {
     sns.loading = false;
   }

@@ -834,6 +834,13 @@ def _plan(cu: CurrentUser, kind: str, r: TransferRequest, lock: bool = False) ->
     if not items:
         raise biz(ErrorCode.TR_NOTHING)
     targets, mapping = _targets(items, d, src, r)
+    # 双 SN：单 SN 与双 SN 的 PI 之间不能转单（第二 SN 随号走，目标 PI 须同样是双 SN）；转组织不换 PI，不受影响
+    others = sorted({x["pi_no"] for x in items} - {d.pi})
+    if others:
+        duals = rules.dual_pis([*others, d.pi])
+        bad = next((p for p in others if (p in duals) != (d.pi in duals)), None)
+        if bad is not None:
+            raise biz(ErrorCode.TR_DUAL_MISMATCH, pi=bad, to_pi=d.pi)
     if kind == KIND_BILL:
         # 转单：号现在所在的组织须在授权范围内；目标单据的组织不限（来源组织在 _from_factory 校验）
         cu.check_write(*{x["factory_code"] for x in items})
@@ -1532,6 +1539,8 @@ def _serial_of(r: dict, imports: dict[int, dict]) -> tuple[str, str, str]:
 OUT_LIST_HEADERS = [
     "序号",
     "完整SN",
+    # 双 SN：第二 SN（单 SN 为空），现场两张标签一起作废
+    "第二SN",
     "进制流水",
     "十进制流水",
     "流水归属PI",
@@ -1561,8 +1570,8 @@ def out_list(cu: CurrentUser, tid: int):
         no = 0
         while True:
             page = db.all(
-                "SELECT t.*, i.rule_version_id, i.attach_no, i.length_text FROM sn_transfer_item t "
-                "LEFT JOIN sn_item i ON i.id = t.item_id "
+                "SELECT t.*, i.rule_version_id, i.attach_no, i.length_text, s.sn2 FROM sn_transfer_item t "
+                "LEFT JOIN sn_item i ON i.id = t.item_id LEFT JOIN sn_item_sub s ON s.item_id = t.item_id "
                 "WHERE t.kind = 'ORG' AND t.transfer_id = %s AND t.item_id > %s AND t.to_factory IS NOT NULL "
                 "AND t.to_factory <> t.from_factory ORDER BY t.item_id LIMIT 5000",
                 tid,
@@ -1578,6 +1587,7 @@ def out_list(cu: CurrentUser, tid: int):
                 yield [
                     no,
                     r["sn"],
+                    r["sn2"] or "",
                     text,
                     dec,
                     seq_pi,

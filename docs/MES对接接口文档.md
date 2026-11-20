@@ -1,13 +1,13 @@
-# SN 防重管控系统 · MES 对接接口规范 V1.2
+# SN 防重管控系统 · MES 对接接口规范 V1.3
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.2 |
+| 文档版本 | V1.3 |
 | 协议版本 | `schemaVersion = 1.0` |
-| 更新日期 | 2026-10-30 |
+| 更新日期 | 2026-11-20 |
 | 适用对象 | MES 方开发人员、SN 系统对接人员 |
 | 相关文档 | [MES 业务接口逻辑](MES业务接口逻辑.md)：各接口的业务逻辑、异常与重试、人工处理；[MES 对接说明](MES对接说明.md)：MES 收到批次后的处理规则 |
-| 修订记录 | V1.2（2026-10-30）：拉取接口、查询接口的 gzip 请求体解压后不超过 1 MB，超过返回 400 `INVALID_REQUEST`；3.2 按代码更正：失败批次照常返回、只挡它所在的 PI，回执 `OK` 后推送自动续推<br />V1.2（2026-10-29）：按代码校对——拉取接口 `pi`、`billNo`、`batchNo` 不是字符串返回 400 `INVALID_REQUEST`；查询接口 `cursor` 不是上一页的 `nextCursor` 返回 400（不再当作首页）；3.1.4 示例字段更正为 `receivedAt`；3.2 未确认批次补「已收到、等回执的」<br />V1.1（2026-10-29）：推送接口应答码统一为 `OK`（连接测试相同）；新增 3.3.6 回执送达确认；回执接口补充失败批次再次提交的返回；全文改用接口名称（推送接口、拉取接口、回执接口、查询接口） |
+| 修订记录 | V1.3（2026-11-20）：双 SN——SN 明细在 `customerCode` 之后新增 `sn2`（第二 SN，`String(64)\|null`；单 SN 的号为 `null`），推送接口、拉取接口（全部批次类型，含 `TRANSFER_OUT`）与两个查询接口的明细都带；原有字段、顺序、`schemaVersion`（仍为 `1.0`）、回执接口不变（见 3.1.1「双 SN」）<br />V1.2（2026-10-30）：拉取接口、查询接口的 gzip 请求体解压后不超过 1 MB，超过返回 400 `INVALID_REQUEST`；3.2 按代码更正：失败批次照常返回、只挡它所在的 PI，回执 `OK` 后推送自动续推<br />V1.2（2026-10-29）：按代码校对——拉取接口 `pi`、`billNo`、`batchNo` 不是字符串返回 400 `INVALID_REQUEST`；查询接口 `cursor` 不是上一页的 `nextCursor` 返回 400（不再当作首页）；3.1.4 示例字段更正为 `receivedAt`；3.2 未确认批次补「已收到、等回执的」<br />V1.1（2026-10-29）：推送接口应答码统一为 `OK`（连接测试相同）；新增 3.3.6 回执送达确认；回执接口补充失败批次再次提交的返回；全文改用接口名称（推送接口、拉取接口、回执接口、查询接口） |
 | MES 接口负责人 | MES 侧填写：姓名、联系方式 |
 |                |                                 |
 
@@ -161,7 +161,7 @@ SN 系统 ──推送接口：下一批──▶ MES …
 
 **请求体结构**
 
-各类批次（`batchType`，附录 A）共用同一个请求体，`items[]` 每条都带下列 12 个字段。批次头的 `toOrgCode` 只有跨组织转出批次（`TRANSFER_OUT`）有值（一批只转到一个组织），其他批次为 `null`；`count` 为 `items` 条数，MES 核对不符时整批退回；测试批次（`PING`，连接测试时发送）不带 `pi`，`count` 为 0，`items` 为 `[]`。
+各类批次（`batchType`，附录 A）共用同一个请求体，`items[]` 每条都带下列 13 个字段（12 个原有字段 + V1.3 新增的 `sn2`）。批次头的 `toOrgCode` 只有跨组织转出批次（`TRANSFER_OUT`）有值（一批只转到一个组织），其他批次为 `null`；`count` 为 `items` 条数，MES 核对不符时整批退回；测试批次（`PING`，连接测试时发送）不带 `pi`，`count` 为 0，`items` 为 `[]`。
 
 ```jsonc
 {
@@ -187,13 +187,21 @@ SN 系统 ──推送接口：下一批──▶ MES …
       "attachNo": "A01",                     // String(64)|null  必填  附件项次，生成时写定，转单、转组织不变
       "materialCode": "9148363",             // String(64)|null  必填  物料编码
       "length": "0100",                      // String(64)|null  必填  米数，原样保存（未补 0）
-      "customerCode": "0001"                 // String(64)       必填  客户编码
+      "customerCode": "0001",                // String(64)       必填  客户编码
+      "sn2": null                            // String(64)|null  必填  第二 SN（双 SN，V1.3 新增）；单 SN 的号为 null
     }
   ]
 }
 ```
 
-**SN 导入的号**：本系统之外已有、经 SN 导入进来的号，与本系统生成的号字段、顺序、格式完全相同，12 个字段都有值，只是取值来源不同：`serial` 为导入时填的流水号；`serialDec` 为按进制换算的十进制流水；`serialPi` 为导入时的 PI；`billSeq` 为导入时填的行号，转移后为转到的行号。其余字段与生成的号一样。导入的号与生成的号不会出现在同一个批次里。MES 不需要区分处理。
+**双 SN（V1.3）**：用户在 SN 系统上按整张 PI 开启双 SN 后，这张 PI 每件产品有两个 SN：`sn` 为第一 SN，`sn2` 为第二 SN（规则、前缀与第一 SN 各自独立，格式同 2.2 的 SN）。一件仍是一条明细（`count` 为件数），两个 SN 一一绑定、始终一起下发：
+
+- `sn2` 与 `sn` 同样**全局唯一**（第一 SN 与第二 SN 之间也不重复），MES 须把 `sn2` 当作独立的 SN 去重，并与 `sn` 绑定保存；
+- 逐枚按 `sn`、`rev` 新增或覆盖时 `sn2` 一起新增或覆盖；转出批次（`TRANSFER_OUT`）两个 SN 一起标记已转走；
+- 单 SN 的号、SN 导入的号 `sn2` 为 `null`；`itemsDigest` 照常对含 `sn2` 的 `items` 计算；
+- V1.3 之前已建好的批次报文不变（不含 `sn2`），重送时逐字节相同。
+
+**SN 导入的号**：本系统之外已有、经 SN 导入进来的号，与本系统生成的号字段、顺序、格式完全相同，原有 12 个字段都有值（`sn2` 为 `null`，双 SN 的 PI 不支持导入），只是取值来源不同：`serial` 为导入时填的流水号；`serialDec` 为按进制换算的十进制流水；`serialPi` 为导入时的 PI；`billSeq` 为导入时填的行号，转移后为转到的行号。其余字段与生成的号一样。导入的号与生成的号不会出现在同一个批次里。MES 不需要区分处理。
 
 **响应体结构**
 
@@ -236,7 +244,7 @@ X-Request-Id: 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed
     {
       "sn": "HX100000001A", "rev": 1, "serial": "000001", "serialDec": "1", "serialPi": "000001",
       "pi": "000001", "billNo": "VT2026090001", "billSeq": 1, "attachNo": "A01", "materialCode": "9148363",
-      "length": "0100", "customerCode": "0001"
+      "length": "0100", "customerCode": "0001", "sn2": null
     }
   ]
 }
@@ -393,7 +401,7 @@ X-Request-ID: 7d3e9a10-5c2b-4f8e-b1a4-0c6d2e8f9b57
       {
         "sn": "HX100005001A", "rev": 1, "serial": "005001", "serialDec": "5001", "serialPi": "000001",
         "pi": "000001", "billNo": "VT2026090001", "billSeq": 1, "attachNo": "A01", "materialCode": "9148363",
-        "length": "0100", "customerCode": "0001"
+        "length": "0100", "customerCode": "0001", "sn2": null
       }
     ]
   },
@@ -642,7 +650,7 @@ MES 调回执接口后，**以回执接口的响应判断回执是否送达 SN �
   "timestamp": "2026-10-26 12:00:00.512",    // String           总是    响应时间
   "items": [                                 // Array            仅成功  本页 SN；无数据时为 []
     {
-      "sn": "HX100000001A",                  // …                必有    批次明细的 12 个字段（3.1.1），此处从略
+      "sn": "HX100000001A",                  // …                必有    批次明细的 13 个字段（3.1.1，含 `sn2`），此处从略
       "status": "PUSHED",                    // String           必有    SN 状态（附录 A）
       "batchNo": "PS-110-20261026-000123",   // String|null      必有    当前所在批次
       "deliveredAt": "2026-10-26 11:47:07.000" // String|null    必有    确认已下发的时间
@@ -686,7 +694,7 @@ X-Request-ID: 2e9b6d3a-8c1f-4a75-b0e6-4d3c2b1a0f98
     {
       "sn": "HX100000001A", "rev": 2, "serial": "000001", "serialDec": "1", "serialPi": "000001",
       "pi": "000001", "billNo": "VT2026090001", "billSeq": 1, "attachNo": "A01", "materialCode": "9148363",
-      "length": "0100", "customerCode": "0001",
+      "length": "0100", "customerCode": "0001", "sn2": null,
       "status": "PUSHED", "batchNo": "PS-110-20261026-000123", "deliveredAt": "2026-10-26 11:47:07.000"
     }
   ],
@@ -783,7 +791,7 @@ X-Request-ID: 3b8e5a2c-9d1f-4c64-a7b3-6e5d4c3b2a19
     {
       "sn": "HX100000001A", "rev": 2, "serial": "000001", "serialDec": "1", "serialPi": "000001",
       "pi": "000001", "billNo": "VT2026090001", "billSeq": 1, "attachNo": "A01", "materialCode": "9148363",
-      "length": "0100", "customerCode": "0001",
+      "length": "0100", "customerCode": "0001", "sn2": null,
       "status": "PUSHED", "batchNo": "PS-110-20261026-000123", "deliveredAt": "2026-10-26 11:47:07.000"
     }
   ],
@@ -844,6 +852,8 @@ X-Request-ID: 6d3a0f8c-2e5b-4a71-9c46-1b0a9f8e7d52
 | --- | --- |
 | `SUCCESS` | 成功（回执 `OK`） |
 | `FAILED` | 失败（回执 `NG`） |
+
+**sn2 第二 SN**（V1.3）：双 SN 的 PI 每件的第二 SN，与 `sn` 一一绑定、同样全局唯一；单 SN 的号、SN 导入的号为 `null`
 
 **status SN 状态**（查询接口响应）
 

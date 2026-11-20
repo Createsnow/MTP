@@ -220,6 +220,7 @@ M = {
 "actions.RULE_LINE_SELECT": ("物料行选规则", "Line rule selected", "Chọn quy tắc cho dòng"),
 "actions.LINE_CONFIG_REVOKE": ("物料行恢复默认值", "Line defaults restored", "Khôi phục mặc định dòng"),
 "actions.LINE_VOID_RULE": ("生成页过滤配置", "Generation filter settings", "Cấu hình lọc trang tạo"),
+"actions.PI_DUAL_SET": ("双 SN 开关", "Dual-SN switch", "Công tắc SN kép"),
 "actions.RULE_PREFIX_VERSION": ("换前缀另出版本", "New prefix version", "Phiên bản tiền tố mới"),
 "actions.RULE_DELETE": ("删除规则", "Rule deleted", "Xóa quy tắc"),
 "actions.SN_GENERATE": ("生成", "Generate", "Tạo"),

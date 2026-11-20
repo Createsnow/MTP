@@ -693,6 +693,15 @@ def handle(cu: CurrentUser, alert_id: int, action: str | None, note: str | None,
             if act == CONFIRM:
                 col = {PI: "pi", CUSTOMER: "customer_code"}.get(a["alert_type"])
                 snap = db.one("SELECT * FROM sn_prd_mo WHERE bill_no = %s LIMIT 1", no)
+                if a["alert_type"] == PI:
+                    # 双 SN 防呆：业务上不会出现单 SN 与双 SN 的 PI 之间改 PI；万一金蝶数据出错，不能确认
+                    # （否则同一张单据里有带第二 SN 和不带第二 SN 的号）
+                    old = (ledger(no) or {}).get("pi") or a["before_value"]
+                    new = snap["pi"] if snap else a["after_value"]
+                    from app.services import rules
+
+                    if old != new and rules.is_dual(old) != rules.is_dual(new):
+                        raise biz(ErrorCode.ALERT_DUAL_MISMATCH, pi=old, new_pi=new)
                 if col is not None:
                     db.exec(
                         f"UPDATE sn_bill_ledger SET {col} = %s, updated_at = %s WHERE bill_no = %s",

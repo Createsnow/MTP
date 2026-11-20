@@ -96,11 +96,15 @@ class LineSelectIn(In):
     rule_id: int | None = None
     #: 自定义规则（二选一）
     custom: CustomRuleIn | None = None
+    #: 2 = 第二 SN 的规则（双 SN 的 PI）；不填为第一 SN
+    slot: int | None = None
 
 
 class PiBindIn(In):
     pi_no: str | None = None
     rule_id: int | None = None
+    #: 2 = 第二 SN 的规则（双 SN 的 PI）；不填为第一 SN
+    slot: int | None = None
 
 
 class IncCustomersIn(In):

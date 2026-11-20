@@ -112,8 +112,9 @@ def rule_preview(body: RulePreviewIn, cu: OperatorDep) -> dict:
 
 
 @router.get("/options", summary="生成页规则库选项：推荐的排前面；给出本 PI 用这条规则时的版本与是否须换前缀")
-def rule_options(cu: OperatorDep, pi: str | None = None, customer: str | None = None) -> list:
-    return rules.options(pi, customer, cu.read_factories(None))
+def rule_options(cu: OperatorDep, pi: str | None = None, customer: str | None = None, slot: int | None = None) -> list:
+    with rules.use_slot(slot or rules.SLOT1):
+        return rules.options(pi, customer, cu.read_factories(None))
 
 
 @router.post(
@@ -123,14 +124,17 @@ def rule_options(cu: OperatorDep, pi: str | None = None, customer: str | None = 
 def rule_line_select(body: LineSelectIn, cu: OperatorDep) -> dict:
     lines = [x.model_dump() for x in body.lines or []]
     custom = None if body.custom is None else body.custom.model_dump()
-    return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom)
+    with rules.use_slot(body.slot or rules.SLOT1):
+        return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom)
 
 
 @router.put("/pi-binding", summary="给 PI 登记规则库规则（已归属别的 PI 时共用前缀）")
 def rule_pi_bind(body: PiBindIn, cu: OperatorDep) -> dict:
-    return rules.bind_pi(cu, body.pi_no, body.rule_id)
+    with rules.use_slot(body.slot or rules.SLOT1):
+        return rules.bind_pi(cu, body.pi_no, body.rule_id)
 
 
 @router.delete("/pi-binding", summary="解除 PI 的规则登记（本 PI 有号时不能解除）")
-def rule_pi_unbind(cu: OperatorDep, pi: str | None = None) -> dict:
-    return rules.unbind_pi(cu, pi)
+def rule_pi_unbind(cu: OperatorDep, pi: str | None = None, slot: int | None = None) -> dict:
+    with rules.use_slot(slot or rules.SLOT1):
+        return rules.unbind_pi(cu, pi)

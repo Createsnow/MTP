@@ -16,7 +16,7 @@ from datetime import datetime
 from app.core import utils as util
 from app.core.security import CurrentUser
 from app.db.session import db, marks
-from app.services import changes, factories, generate, line_void, orders, rules
+from app.services import changes, dual, factories, generate, line_void, orders, rules
 
 #: 列表一次最多取的 PI 数；逐行判断「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行做
 LIST_LIMIT = 500
@@ -345,6 +345,19 @@ def pis(
     }
 
 
+def _rule2_context(pi: str, customer: str, facs: tuple[str, ...] | None, prefix2: str | None, last2: int) -> dict:
+    """生成页第二 SN 的「选规则」：规则库选项（只列第二 SN 用的和还没用过的前缀）、默认前缀（第二 SN 没有默认值）、
+    本 PI 已占用的第二前缀及锁定的格式、第二前缀的最大号与下一个号。"""
+    with rules.second():
+        return {
+            "rule_options": rules.options(pi, customer, facs),
+            "rule_prefix": rules.pi_prefix(pi),
+            "prefix_locked": rules.pi_prefix_locked(pi),
+            "rule": rules.info(rules.pi_default(pi)),
+            "counter": {"prefix": prefix2, "last_seq_dec": last2, "next_seq": last2 + 1},
+        }
+
+
 def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> dict:
     """生成详情：PI 头、各单据（含已离开快照的已出号单据）及物料行、规则选项、计数、生成任务、空号段。
     普通操作员只看授权组织的单据（每张单据只属于一个生产组织），计数、任务、号段也只含这些单据的。"""
@@ -370,6 +383,11 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
     # 接号的最大号：本 PI 规则前缀的最大号（同一前缀各 PI 共用一套流水）；没选规则为 0
     prefix = generate.prefix_of(pi)
     last = rules.prefix_last(prefix)
+    # 双 SN：第二 SN 的前缀与最大号
+    is_dual = rules.is_dual(pi)
+    with rules.second():
+        prefix2 = generate.prefix_of(pi) if is_dual else None
+    last2 = rules.prefix_last(prefix2)
     ls = {(x.bill_no, x.seq): x for x in generate._load_lines(pi, keys)}
     bills: dict[str, dict] = {}
     for r in snap:
@@ -400,6 +418,9 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
         v["issues"] = x.issues
         # 项次拦截（ATTACH_ORDER_BLOCKED）：挡住本行的物料行
         v["blockers"] = x.blockers
+        # 双 SN：第二 SN 的规则（单 SN 为 None）与第二前缀的项次拦截
+        v["rule2"] = rules.info(x.res2, x.length, last2 + 1, x.unit) if is_dual else None
+        v["blockers2"] = x.blockers2
         # 物料行失效（line_void）：整行置灰、不能勾选，不计订单数、可生成
         v["void"] = x.void
         # 金蝶业务状态、领料状态（状态码，空 = 未取到）：生成页「业务状态」列显示
@@ -499,6 +520,9 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
             "quota": sum(b["quota"] for b in bills.values()),
             "suspended": stats.get("suspended", 0),
         },
+        # 双 SN 开关（有号时锁定）与第二 SN 的规则选项、默认前缀、锁定的前缀、前缀最大号（单 SN 时 rule2 为 None）
+        "dual": dual.view(pi),
+        "rule2": None if not is_dual else _rule2_context(pi, customer, facs, prefix2, last2),
         "rule_options": rules.options(pi, customer, facs),
         # 「选规则」的默认前缀：本 PI 已生成的号还在时为已用的前缀及其格式（见 rules.pi_prefix）
         "rule_prefix": rules.pi_prefix(pi),

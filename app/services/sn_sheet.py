@@ -14,6 +14,8 @@ from app.services import rules
 HEADERS = [
     "序号",
     "完整SN",
+    # 双 SN：第二 SN（单 SN 为空）
+    "第二SN",
     "进制流水",
     "十进制流水",
     "组织编号",
@@ -33,6 +35,7 @@ HEADERS = [
 KEYS = (
     "line_no",
     "sn",
+    "sn2",
     "seq_text",
     "seq_dec",
     "factory_code",
@@ -51,16 +54,18 @@ KEYS = (
 _COLS = (
     "i.id, i.sn, i.rule_version_id, i.seq_dec, i.seq_pi_no, {org} factory_code, {name} factory_name, "
     "i.customer_code, i.pi_no, i.bill_no, i.bill_seq, i.material_code, i.attach_no, i.length_text, i.status, "
-    "i.delivery_mode, i.delivery_batch_no"
+    "i.delivery_mode, i.delivery_batch_no, s2.sn2"
 )
 #: 号池 i 关联生产组织 f（取中文名称）；生产组织取号上的（分配后才有）
-FROM = "sn_item i LEFT JOIN sn_factory f ON f.factory_code = i.factory_code"
+#: 第二 SN（s2，双 SN 的号才有）
+_SUB = " LEFT JOIN sn_item_sub s2 ON s2.item_id = i.id"
+FROM = "sn_item i LEFT JOIN sn_factory f ON f.factory_code = i.factory_code" + _SUB
 COLS = _COLS.format(org="i.factory_code", name="f.factory_name")
 #: SN 查询导出：待分配的号还没有生产组织（号上为空），取所在单据的组织（已出号单据台账 bl，
 #: 与可看范围 factories.item_scope_sql 同口径）；已分配的号仍取号上的组织
 QUERY_FROM = (
     "sn_item i LEFT JOIN sn_bill_ledger bl ON i.factory_code IS NULL AND bl.bill_no = i.bill_no "
-    "LEFT JOIN sn_factory f ON f.factory_code = COALESCE(i.factory_code, bl.org_code)"
+    "LEFT JOIN sn_factory f ON f.factory_code = COALESCE(i.factory_code, bl.org_code)" + _SUB
 )
 QUERY_COLS = _COLS.format(
     org="COALESCE(i.factory_code, NULLIF(bl.org_code, ''))", name="COALESCE(f.factory_name, NULLIF(bl.org_name, ''))"
@@ -73,6 +78,7 @@ def row(no: int, r: dict) -> list:
     return [
         no,
         r["sn"],
+        r.get("sn2") or "",
         imp["serial_text"] if imp else rules.seq_text(r["rule_version_id"], r["seq_dec"]),
         str(imp["seq_dec"]) if imp else util.seq_dec_text(r["seq_pi_no"], r["seq_dec"]),
         r["factory_code"] or "",

@@ -49,7 +49,7 @@ from app.core import utils as util
 from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, is_duplicate, marks
-from app.services import audit, bill_stats, changes, generate, line_void, locks, orders
+from app.services import audit, bill_stats, changes, generate, line_void, locks, orders, rules
 
 #: 单个文件上限
 MAX_MB = 20
@@ -190,6 +190,8 @@ SERIAL_DEC_MISMATCH = "SERIAL_DEC_MISMATCH"
 LINE_NO_ATTACH = "LINE_NO_ATTACH"
 LINE_VOID = "LINE_VOID"
 BILL_HAS_SN = "BILL_HAS_SN"
+#: 双 SN 的 PI 不支持导入
+DUAL_PI = "DUAL_PI"
 
 
 @dataclass
@@ -491,7 +493,9 @@ def _used_bills(bills: list[str]) -> dict[str, int]:
     return out
 
 
-def _check_order(cu: CurrentUser, r: Row, b: dict, line: dict | None, used: dict[str, int]) -> None:
+def _check_order(
+    cu: CurrentUser, r: Row, b: dict, line: dict | None, used: dict[str, int], duals: set[str] | None = None
+) -> None:
     """与订单快照对照：PI、生产组织（名称必填、编号选填），行号对应的物料行的物料编码、附件项次（须与该行
     生效的附件项次相同，该行没有附件项次不能导入）、米数；授权范围；该单据在本系统已有生成或已分配的号不能导入。"""
     r.factory = b["org_code"] or ""
@@ -513,6 +517,8 @@ def _check_order(cu: CurrentUser, r: Row, b: dict, line: dict | None, used: dict
     n = used.get(r.bill, 0)
     if n:
         r.issues.append((BILL_HAS_SN, {"bill_no": r.bill, "count": n}))
+    if duals and b["pi"] in duals:
+        r.issues.append((DUAL_PI, {"pi": b["pi"]}))
     if r.seq is None:
         return
     if line is None:
@@ -548,6 +554,7 @@ def _validate(cu: CurrentUser, rows: list[Row]) -> None:
     heads, lines = _snapshot(bills)
     # 确定导入时已持有这些 PI 的操作锁（生成、分配、转移同一把锁），读到的已生成 / 已分配不会在导入中途变
     used = _used_bills(sorted(heads))
+    duals = rules.dual_pis(b["pi"] for b in heads.values())
     for r in rows:
         if not r.bill or len(r.bill) > CODE_MAX:
             continue
@@ -555,13 +562,20 @@ def _validate(cu: CurrentUser, rows: list[Row]) -> None:
         if b is None:
             r.issues.append((BILL_NOT_FOUND, {"bill_no": r.bill}))
             continue
-        _check_order(cu, r, b, None if r.seq is None else lines.get((r.bill, r.seq)), used)
+        _check_order(cu, r, b, None if r.seq is None else lines.get((r.bill, r.seq)), used, duals)
     # 与号池、已导入的号重复
     sns = sorted(first)
     pool: dict[str, str] = {}
     done: dict[str, str] = {}
     for part in _chunks(sns):
         for x in db.all(f"SELECT sn, pi_no FROM sn_item WHERE sn IN ({marks(len(part))})", *part):
+            pool[x["sn"]] = x["pi_no"]
+        # 双 SN：第二 SN 同样全局唯一
+        for x in db.all(
+            "SELECT s.sn2 sn, i.pi_no FROM sn_item_sub s JOIN sn_item i ON i.id = s.item_id "
+            f"WHERE s.sn2 IN ({marks(len(part))})",
+            *part,
+        ):
             pool[x["sn"]] = x["pi_no"]
         for x in db.all(
             f"SELECT sn, import_no FROM sn_import_item WHERE sn IN ({marks(len(part))}) AND deleted_at IS NULL",
@@ -634,8 +648,12 @@ def run(cu: CurrentUser, content: bytes, file_name_in: str | None) -> dict:
         raise biz(ErrorCode.FORBIDDEN)
     rows = parse(content)
     file_name = util.cut(util.trim(file_name_in), 255) or ""
+    # 第二 SN 的前缀锁：导入的号以第二 SN 用的前缀开头时，与这些前缀的生成排队（第二 SN 与号池的号分在两张表，
+    # 唯一键管不到两表之间：生成写第二 SN 时查号池，导入时查第二 SN，前缀锁保证两边看到对方已提交的号）
+    seconds = rules.second_prefixes_of(r.sn for r in rows if r.sn)
     # 与生成、删号、分配、转移共用 PI 操作锁（PI 正在生成时拿不到，提示稍后再试）
     with locks.with_pi_lock(*sorted({r.pi for r in rows if r.pi})), db.tx():
+        locks.hold_prefixes(seconds)
         _validate(cu, rows)
         bad = sum(1 for r in rows if r.issues)
         if bad:

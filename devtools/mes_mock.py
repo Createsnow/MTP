@@ -269,6 +269,8 @@ class MesSim:
                         "materialCode": x.get("materialCode"),
                         "customerCode": x["customerCode"],
                         "length": x.get("length"),
+                        # 第二 SN（双 SN；单 SN 的号为 null）：与第一 SN 绑定保存
+                        "sn2": x.get("sn2"),
                         # 记下最近一次的批次类型备查；处理只看 rev
                         "batchType": batch["batchType"],
                     }

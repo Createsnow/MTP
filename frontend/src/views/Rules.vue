@@ -26,6 +26,8 @@
           <div v-for="g in paged" :key="g.prefix" class="pitem" :class="{ on: cur?.prefix === g.prefix }" @click="pick(g)">
             <div class="pitem-top">
               <b class="sn-mono pfx">{{ g.prefix }}</b>
+              <!-- 前缀用途：第二 SN 用的前缀标出（一个前缀只能当第一 SN 或第二 SN 中的一种） -->
+              <el-tag v-if="g.role === 2" size="small" type="warning" effect="plain">{{ t("rules.roleSecond") }}</el-tag>
               <span class="dot" :class="g.used ? 'ok' : ''">{{ g.used ? t("rules.used") : t("rules.unused") }}</span>
             </div>
             <div class="pitem-meta">
@@ -51,6 +53,7 @@
               <span class="sn-mono big">{{ cur.prefix }}</span>
               <el-tag effect="plain">{{ t("rules.seqFormatVal", { base: cur.base, n: cur.seq_len }) }}</el-tag>
               <el-tag :type="cur.used ? 'success' : 'info'" effect="light">{{ cur.used ? t("rules.used") : t("rules.unused") }}</el-tag>
+              <el-tag v-if="cur.role === 2" type="warning" effect="plain">{{ t("rules.roleSecond") }}</el-tag>
               <el-tooltip v-if="cur.inc" placement="bottom" :content="t('generate.rule.incTip')">
                 <el-tag type="success" effect="plain">{{ incTagText(cur.inc) }}</el-tag>
               </el-tooltip>

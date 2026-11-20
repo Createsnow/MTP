@@ -32,9 +32,12 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import re
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
 from app.core import encoding as codec
@@ -115,6 +118,173 @@ VERSION_FIELDS = (
 
 #: 识别码结束值上限（最多 3 位）
 INC_MAX = 999
+
+
+# ================================================================== 第一 SN / 第二 SN（双 SN）
+#
+# 双 SN 的 PI（dual 开关，sn_pi_dual）每件另有一个第二 SN：第二 SN 的规则与第一 SN 同一套规则库、同一套能力
+# （自定义、规则库、起始号、上限自动突破、识别码、项次拦截），登记在 sn_pi_rule2，号在 sn_item_sub。
+# 本模块的 PI 级函数（登记、前缀锁定、选规则、生成落库）按当前上下文 slot() 作用于第一或第二 SN：
+# 默认第一 SN；`with rules.second():` 内为第二 SN。规则库、版本、前缀计数（sn_rule / sn_rule_version /
+# sn_prefix_counter）两者共用；前缀用途分开（sn_prefix_role）：一个前缀只能当第一 SN 或第二 SN 中的一种，
+# 两边的前缀又不能一个是另一个的开头，第一 SN 与第二 SN 不会编出相同的号。
+
+SLOT1 = 1
+SLOT2 = 2
+_SLOT: contextvars.ContextVar[int] = contextvars.ContextVar("sn_rule_slot", default=SLOT1)
+#: 两张登记表合在一起（列相同）：按前缀、规则看全部登记时用
+REG_ALL = "(SELECT * FROM sn_pi_rule UNION ALL SELECT * FROM sn_pi_rule2)"
+
+
+def slot() -> int:
+    return _SLOT.get()
+
+
+@contextmanager
+def use_slot(s: int) -> Iterator[None]:
+    tok = _SLOT.set(SLOT2 if s == SLOT2 else SLOT1)
+    try:
+        yield
+    finally:
+        _SLOT.reset(tok)
+
+
+def second():
+    """第二 SN 上下文。"""
+    return use_slot(SLOT2)
+
+
+def reg_table(s: int | None = None) -> str:
+    """PI 规则登记表：第一 SN sn_pi_rule / 第二 SN sn_pi_rule2。"""
+    return "sn_pi_rule2" if (s or slot()) == SLOT2 else "sn_pi_rule"
+
+
+def slot_text(s: int | None = None) -> str:
+    """留痕里区分第二 SN 的前缀（第一 SN 不加，与原来相同）。"""
+    return "第二SN " if (s or slot()) == SLOT2 else ""
+
+
+def second_prefixes() -> set[str]:
+    """登记为第二 SN 用的前缀（规则前缀，带识别码的为前缀层文本）。"""
+    return set(db.column("SELECT prefix FROM sn_prefix_role WHERE role = %s", SLOT2))
+
+
+def second_prefixes_of(sns) -> set[str]:
+    """第二 SN 用的完整前缀（前缀计数里登记的，带识别码的为号段前缀）中，是 sns 里某个号开头的。"""
+    heads = second_prefixes()
+    if not heads:
+        return set()
+    full = [p for p in db.column("SELECT prefix FROM sn_prefix_counter") if any(p.startswith(h) for h in heads)]
+    xs = list(sns)
+    return {p for p in full if any(x.startswith(p) for x in xs)}
+
+
+def _used_as_first(key: str, inc: bool) -> bool:
+    """前缀（规则前缀 key）已被第一 SN 用过：有 PI 登记过、前缀已登记计数，或规则下有已归属 PI 的版本。
+    带识别码（inc）时按前缀层文本：号段前缀为 key + 识别码 + 固定字符。"""
+    like = util.like_prefix(key)
+    cond = "prefix = %s" + (" OR prefix LIKE %s" if inc else "")
+    args = (key, like) if inc else (key,)
+    return (
+        db.exists(f"SELECT EXISTS(SELECT 1 FROM sn_pi_rule WHERE {cond})", *args)
+        or db.exists(f"SELECT EXISTS(SELECT 1 FROM sn_prefix_counter WHERE {cond})", *args)
+        or db.exists(
+            "SELECT EXISTS(SELECT 1 FROM sn_rule r JOIN sn_rule_version v ON v.rule_id = r.id "
+            "WHERE r.prefix = %s AND v.claimed_pi IS NOT NULL)",
+            key,
+        )
+    )
+
+
+def prefix_role(key: str | None, inc: bool = False) -> int | None:
+    """前缀用途：SLOT2 第二 SN / SLOT1 已被第一 SN 用过 / None 还没用过（两边都能选）。"""
+    if not key:
+        return None
+    if db.exists("SELECT EXISTS(SELECT 1 FROM sn_prefix_role WHERE prefix = %s AND role = %s)", key, SLOT2):
+        return SLOT2
+    return SLOT1 if _used_as_first(key, inc) else None
+
+
+def check_role(key: str | None, inc: bool = False) -> None:
+    """当前上下文（第一 / 第二 SN）能否用这个前缀：第一 SN 不能用第二 SN 的前缀，第二 SN 不能用第一 SN 用过的前缀。"""
+    if not key:
+        return
+    second_ = db.exists("SELECT EXISTS(SELECT 1 FROM sn_prefix_role WHERE prefix = %s AND role = %s)", key, SLOT2)
+    if slot() == SLOT1:
+        if second_:
+            raise biz(ErrorCode.RULE_PREFIX_ROLE_SECOND, prefix=key)
+        return
+    if not second_ and _used_as_first(key, inc):
+        raise biz(ErrorCode.RULE_PREFIX_ROLE_FIRST, prefix=key)
+
+
+def is_dual(pi: str | None) -> bool:
+    """PI 开启了双 SN（sn_pi_dual）。"""
+    return bool(pi) and db.exists("SELECT EXISTS(SELECT 1 FROM sn_pi_dual WHERE pi_no = %s)", pi)
+
+
+def dual_pis(pis) -> set[str]:
+    xs = sorted({p for p in pis if p})
+    if not xs:
+        return set()
+    return set(db.column(f"SELECT pi_no FROM sn_pi_dual WHERE pi_no IN ({marks(len(xs))})", *xs))
+
+
+def role_key(res: Resolved) -> str:
+    """规则的前缀（前缀用途按它登记）：规则库规则为规则前缀，自定义规则带识别码时为前缀层文本，否则为前缀。"""
+    if res.rule is not None:
+        return res.rule["prefix"]
+    if res.inc is not None:
+        return res.inc.head
+    return res.version["prefix"] if res.version is not None else ""
+
+
+def check_slot_use(pi: str, res: Resolved) -> None:
+    """选规则 / 生成落库时：前缀用途与当前上下文相符；第二 SN 须 PI 已开启双 SN，前缀与第一前缀不相同、不互为开头。"""
+    if slot() == SLOT2 and not is_dual(pi):
+        raise biz(ErrorCode.DUAL_NOT_ENABLED, pi=pi)
+    key = role_key(res)
+    check_role(key, res.inc is not None)
+    if res.version is not None:
+        check_pair(pi, key, res.version["prefix"])
+
+
+def mark_second(cu: CurrentUser, key: str) -> None:
+    """前缀登记为第二 SN 用（第一次被选作第二 SN 时；之后不变）。"""
+    db.exec(
+        "INSERT IGNORE INTO sn_prefix_role(prefix, role, created_by, created_at) VALUES (%s,%s,%s,%s)",
+        key,
+        SLOT2,
+        cu.emp_no,
+        util.now(),
+    )
+
+
+def _overlap(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and (a.startswith(b) or b.startswith(a))
+
+
+def check_pair(pi: str, key: str, prefix: str) -> None:
+    """双 SN 的 PI：本 PI 第一、第二 SN 的前缀（规则前缀 key、完整前缀 prefix）不能相同或一个是另一个的开头
+    （与另一个 SN 已登记的前缀比）。"""
+    other = SLOT1 if slot() == SLOT2 else SLOT2
+    first = db.one(f"SELECT prefix, rule_id, custom_json FROM {reg_table(other)} WHERE pi_no = %s", pi)
+    if first is None:
+        return
+    heads = {first["prefix"]}
+    if first["rule_id"] is not None:
+        r = db.one("SELECT prefix FROM sn_rule WHERE id = %s", first["rule_id"])
+        if r is not None:
+            heads.add(r["prefix"])
+    else:
+        c = json.loads(first["custom_json"] or "{}")
+        if util.trim(c.get("prefix")):
+            heads.add(util.trim(c.get("prefix")))
+    for h in sorted(heads):
+        if _overlap(h, key) or _overlap(h, prefix):
+            if other == SLOT1:
+                raise biz(ErrorCode.RULE2_SAME_PREFIX, prefix=key, first=first["prefix"])
+            raise biz(ErrorCode.RULE2_SAME_PREFIX, prefix=first["prefix"], first=key)
 
 
 @dataclass(frozen=True)
@@ -459,7 +629,9 @@ def _live(prefix: str, memo: dict[str, bool] | None = None) -> bool:
     """这个完整前缀（号段）上现在还有号（不论号已转到哪张 PI）。"""
     if memo is not None and prefix in memo:
         return memo[prefix]
-    hit = db.exists("SELECT EXISTS(SELECT 1 FROM sn_item WHERE seq_prefix = %s)", prefix)
+    hit = db.exists("SELECT EXISTS(SELECT 1 FROM sn_item WHERE seq_prefix = %s)", prefix) or db.exists(
+        "SELECT EXISTS(SELECT 1 FROM sn_item_sub WHERE seq_prefix = %s)", prefix
+    )
     if memo is not None:
         memo[prefix] = hit
     return hit
@@ -738,7 +910,14 @@ def grow_version(cu: CurrentUser, pi: str, base: dict, width: int) -> dict:
 
 
 def _pi_used_version(pi: str) -> dict | None:
-    """本 PI 已生成、还在的号（流水归属本 PI，含已转到别的单据 / PI 的）里流水最小的那枚所在的版本；没有为 None。"""
+    """本 PI 已生成、还在的号（流水归属本 PI，含已转到别的单据 / PI 的）里流水最小的那枚所在的版本；没有为 None。
+    第二 SN 上下文按第二 SN（sn_item_sub）。"""
+    if slot() == SLOT2:
+        return db.one(
+            "SELECT v.* FROM sn_item_sub i JOIN sn_rule_version v ON v.id = i.rule_version_id "
+            "WHERE i.seq_pi_no = %s ORDER BY i.seq_dec LIMIT 1",
+            pi,
+        )
     return db.one(
         "SELECT v.* FROM sn_item i JOIN sn_rule_version v ON v.id = i.rule_version_id "
         "WHERE i.seq_pi_no = %s AND i.origin = 'GEN' ORDER BY i.seq_dec LIMIT 1",
@@ -779,6 +958,9 @@ def pi_prefix(pi: str) -> dict:
         d = _customer_inc_default(pi)
         if d is not None:
             return d
+        if slot() == SLOT2:
+            # 第二 SN 没有默认前缀（默认取「第一前缀 + 字符」时第一前缀正是它的开头），须手动填写
+            return {"prefix": "", "custom": None, "seq_grow": True, "registered": False}
         first = db.scalar("SELECT MIN(bill_no) FROM sn_prd_mo WHERE pi = %s", pi) or ""
         p = first[-7:]
         return {"prefix": p, "custom": None, "seq_grow": prefix_grow(p) if p else True, "registered": False}
@@ -817,9 +999,12 @@ def _customer_inc_default(pi: str) -> dict | None:
     customer = _customer(pi)
     if not customer:
         return None
+    # 只带出同一用途（第一 / 第二 SN）的识别码前缀
+    role = "EXISTS" if slot() == SLOT2 else "NOT EXISTS"
     last = db.one(
         "SELECT v.* FROM sn_rule_version v JOIN sn_rule r ON r.id = v.rule_id WHERE r.inc_customers LIKE %s "
-        "AND v.inc_head IS NOT NULL ORDER BY v.id DESC LIMIT 1",
+        f"AND v.inc_head IS NOT NULL AND {role} (SELECT 1 FROM sn_prefix_role pr WHERE pr.prefix = r.prefix) "
+        "ORDER BY v.id DESC LIMIT 1",
         util.like_any("," + customer + ","),
     )
     if last is None:
@@ -845,7 +1030,11 @@ def pi_prefix_locked(pi: str) -> dict[str, dict]:
     memo: dict[str, bool] = {}
     for v in db.all(
         "SELECT v.* FROM sn_rule_version v LEFT JOIN sn_rule_version p ON p.id = v.derived_from "
-        "AND p.prefix = v.prefix AND p.seq_len <> v.seq_len WHERE v.claimed_pi = %s AND p.id IS NULL ORDER BY v.id",
+        "AND p.prefix = v.prefix AND p.seq_len <> v.seq_len JOIN sn_rule r ON r.id = v.rule_id "
+        "WHERE v.claimed_pi = %s AND p.id IS NULL "
+        # 只列当前用途（第一 / 第二 SN）的前缀
+        f"AND {'EXISTS' if slot() == SLOT2 else 'NOT EXISTS'} "
+        "(SELECT 1 FROM sn_prefix_role pr WHERE pr.prefix = r.prefix) ORDER BY v.id",
         pi,
     ):
         inc = inc_of(v)
@@ -997,7 +1186,10 @@ def _views(rs: list[dict]) -> list[dict]:
     """规则库列表与详情：每条规则的版本、用过的 PI、PI 绑定（一次取齐，不逐条查）。"""
     ids = [r["id"] for r in rs]
     versions = _versions_by_rule(ids)
-    pi_bind = _column_by_rule("SELECT rule_id, pi_no v FROM sn_pi_rule WHERE rule_id IN ({}) ORDER BY pi_no", ids)
+    pi_bind = _column_by_rule(
+        "SELECT rule_id, pi_no v FROM " + REG_ALL + " b WHERE rule_id IN ({}) ORDER BY pi_no", ids
+    )
+    seconds = second_prefixes()
     out = []
     for r in rs:
         vs = versions.get(r["id"], [])
@@ -1009,6 +1201,8 @@ def _views(rs: list[dict]) -> list[dict]:
                 "used": any(v["used"] for v in vs),
                 "pis": sorted({v["claimed_pi"] for v in vs if v["claimed_pi"]}),
                 "bindings": {"pi": pi_bind.get(r["id"], [])},
+                # 前缀用途：2 = 第二 SN 用，1 = 第一 SN（含还没用过的）
+                "role": SLOT2 if r["prefix"] in seconds else SLOT1,
             }
         )
     return out
@@ -1118,7 +1312,7 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
     picked: dict[int, set[str]] = {}
     if ids:
         m = marks(len(ids))
-        for row in db.all(f"SELECT rule_id, pi_no FROM sn_pi_rule WHERE rule_id IN ({m})", *ids):
+        for row in db.all(f"SELECT rule_id, pi_no FROM {REG_ALL} b WHERE rule_id IN ({m})", *ids):
             picked.setdefault(row["rule_id"], set()).add(row["pi_no"])
     groups: dict[str, dict] = {}
     for r in rs:
@@ -1224,6 +1418,7 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
             )
         }
     res = []
+    seconds = second_prefixes()
     for g in sorted(out, key=lambda x: (x["last_at"], x["prefix"]), reverse=True):
         c = counters.get(g["prefix"])
         top = 0 if c is None else int(c["last_seq_dec"] or 0)
@@ -1244,6 +1439,8 @@ def prefix_archive(q: str | None = None, pi: str | None = None, facs: tuple[str,
                 "top_text": _seq_text_of(top, spec),
                 # 流水上限自动突破（按前缀；前缀还没登记时默认开启）
                 "seq_grow": True if c is None else bool(c["seq_grow"]),
+                # 前缀用途：2 = 第二 SN 用，1 = 第一 SN（含还没用过的）
+                "role": SLOT2 if g["prefix"] in seconds else SLOT1,
                 # 识别码前缀：{head, start, end, width, rule_id, customers,
                 #   values: [{value, text, pi_no, prefix, customer, status}]}；
                 # 各 PI 的号段各自排号（最大号、自动突破按各号段），组上不给 top_seq
@@ -1302,6 +1499,8 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         )
     }
     pis = sorted({v["claimed_pi"] for v in every if v["claimed_pi"]})
+    role = SLOT2 if prefix in second_prefixes() else SLOT1
+    items = "sn_item_sub" if role == SLOT2 else "sn_item"
     out = []
     if pis:
         vids = [v["id"] for v in every]
@@ -1309,7 +1508,7 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         used = {
             row["seq_pi_no"]: row
             for row in db.all(
-                f"SELECT seq_pi_no, MIN(seq_dec) lo, MAX(seq_dec) hi, COUNT(*) n FROM sn_item "
+                f"SELECT seq_pi_no, MIN(seq_dec) lo, MAX(seq_dec) hi, COUNT(*) n FROM {items} "
                 f"WHERE seq_pi_no IN ({m}) AND rule_version_id IN ({marks(len(vids))}) GROUP BY seq_pi_no",
                 *pis,
                 *vids,
@@ -1352,6 +1551,7 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         "top_text": _seq_text_of(prefix_last(prefix), spec),
         "seq_grow": prefix_grow(prefix),
         "inc": _inc_json(inc_of(base), None) if col == "inc_head" else None,
+        "role": role,
     }
 
 
@@ -1634,7 +1834,7 @@ def delete(cu: CurrentUser, rule_id: int) -> dict:
         vs = db.all("SELECT * FROM sn_rule_version WHERE rule_id = %s FOR UPDATE", r["id"])
         if any(v["used"] for v in vs):
             raise biz(ErrorCode.RULE_IN_USE, rule_code=r["rule_code"])
-        pi = db.scalar("SELECT pi_no FROM sn_pi_rule WHERE rule_id = %s LIMIT 1", r["id"]) or next(
+        pi = db.scalar(f"SELECT pi_no FROM {REG_ALL} b WHERE rule_id = %s LIMIT 1", r["id"]) or next(
             (v["claimed_pi"] for v in vs if v["claimed_pi"]), None
         )
         if pi is not None:
@@ -1905,13 +2105,13 @@ def _custom_dict(spec: codec.Spec, inc: Inc | None = None, customers=None) -> di
 
 def pi_rule(pi: str) -> dict | None:
     """PI 规则登记（sn_pi_rule）：前缀、规则库规则或自定义规则参数、起始号；没选过为 None。"""
-    return db.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s", pi)
+    return db.one(f"SELECT * FROM {reg_table()} WHERE pi_no = %s", pi)
 
 
 def pi_rules(pis: list[str]) -> dict[str, dict]:
     if not pis:
         return {}
-    return {r["pi_no"]: r for r in db.all(f"SELECT * FROM sn_pi_rule WHERE pi_no IN ({marks(len(pis))})", *pis)}
+    return {r["pi_no"]: r for r in db.all(f"SELECT * FROM {reg_table()} WHERE pi_no IN ({marks(len(pis))})", *pis)}
 
 
 def prefix_row(prefix: str) -> dict | None:
@@ -1954,7 +2154,7 @@ def set_prefix_grow(cu: CurrentUser, prefix_in: str | None, grow: bool) -> dict:
     with db.tx():
         locks.hold_prefix(prefix)
         vs = db.all("SELECT * FROM sn_rule_version WHERE prefix = %s ORDER BY id", prefix) if prefix else []
-        regs = db.all("SELECT * FROM sn_pi_rule WHERE prefix = %s", prefix) if prefix else []
+        regs = db.all(f"SELECT * FROM {REG_ALL} b WHERE prefix = %s", prefix) if prefix else []
         if not vs and not regs:
             raise biz(ErrorCode.RULE_NOT_FOUND)
         if vs:
@@ -2185,14 +2385,18 @@ def _register(
     """登记本 PI 的规则（覆盖原登记；之后同步进来的单据也用它），前缀第一次被选时登记前缀与自动突破开关。
     改选（原来登记的是别的规则）作用于整张 PI，须对本 PI 全部单据的生产组织都有授权。"""
     prefix = res.version["prefix"]
-    prev = db.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s FOR UPDATE", pi)
+    check_slot_use(pi, res)
+    if slot() == SLOT2:
+        mark_second(cu, role_key(res))
+    table = reg_table()
+    prev = db.one(f"SELECT * FROM {table} WHERE pi_no = %s FOR UPDATE", pi)
     ident = ("R", int(rule_id)) if rule_id is not None else ("C", json.dumps(custom, sort_keys=True))
     if prev is not None and _row_ident(prev) != ident:
         _check_pi_scope(cu, pi)
     ensure_prefix(cu, prefix, grow)
     now = util.now()
     db.exec(
-        "INSERT INTO sn_pi_rule(pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
+        f"INSERT INTO {table}(pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
         "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE prefix = VALUES(prefix), rule_id = VALUES(rule_id), "
         "custom_json = VALUES(custom_json), seq_start = VALUES(seq_start), bound_by = VALUES(bound_by), "
         "bound_at = VALUES(bound_at)",
@@ -2208,7 +2412,9 @@ def _register(
         cu,
         audit.entry(audit.RULE_PI_BIND)
         .pi(pi)
-        .info(label + ("" if prev is None else f" (was {prev['prefix']} rule_id={prev['rule_id'] or '-'})")),
+        .info(
+            slot_text() + label + ("" if prev is None else f" (was {prev['prefix']} rule_id={prev['rule_id'] or '-'})")
+        ),
     )
 
 
@@ -2289,7 +2495,12 @@ def select_for_lines(
 def _resume_released(prefix: str) -> None:
     """改选已释放的识别码号段：这个号段的前缀最大号补到原 PI 删掉的号的最大流水（删光号时前缀最大号会退回），
     默认接着原最大号编，原 PI 删掉的流水作为空号段可在「流水」里手动选用（与别的 PI 共用前缀时的空号段相同）。"""
-    mx = db.scalar("SELECT MAX(seq_dec) FROM sn_item_deleted WHERE seq_prefix = %s", prefix)
+    mx = db.scalar(
+        "SELECT GREATEST(COALESCE((SELECT MAX(seq_dec) FROM sn_item_deleted WHERE seq_prefix = %s), 0), "
+        "COALESCE((SELECT MAX(seq_dec) FROM sn_item_sub_deleted WHERE seq_prefix = %s), 0))",
+        prefix,
+        prefix,
+    )
     if mx:
         db.exec(
             "UPDATE sn_prefix_counter SET last_seq_dec = GREATEST(last_seq_dec, %s), updated_at = %s WHERE prefix = %s",
@@ -2375,16 +2586,23 @@ def unbind_pi(cu: CurrentUser, pi_in: str | None) -> dict:
     pi = util.trim(pi_in)
     _check_pi_scope(cu, pi)
     with db.tx():
-        b = db.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s FOR UPDATE", pi)
+        b = db.one(f"SELECT * FROM {reg_table()} WHERE pi_no = %s FOR UPDATE", pi)
         if b is not None:
             used = pi_used_prefix(pi)
             if used is not None:
                 raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=used, new="-")
-            db.exec("DELETE FROM sn_pi_rule WHERE pi_no = %s", pi)
+            db.exec(f"DELETE FROM {reg_table()} WHERE pi_no = %s", pi)
             audit.record(
-                cu, audit.entry(audit.RULE_PI_UNBIND).pi(pi).info(f"{b['prefix']} rule_id={b['rule_id'] or '-'}")
+                cu,
+                audit.entry(audit.RULE_PI_UNBIND)
+                .pi(pi)
+                .info(f"{slot_text()}{b['prefix']} rule_id={b['rule_id'] or '-'}"),
             )
     return {"pi_no": pi}
+
+
+def _is_inc_rule(r: dict, versions: dict[int, list[dict]]) -> bool:
+    return any(v.get("inc_head") is not None for v in versions.get(r["id"], []))
 
 
 def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None = None) -> list[dict]:
@@ -2395,7 +2613,29 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
     out = []
     versions = _versions_by_rule()
     vsql, vargs = _visible_sql(facs)
+    # 前缀用途：第一 SN 不列第二 SN 用的前缀；第二 SN 只列第二 SN 用的和还没用过的前缀
+    seconds = second_prefixes()
+    firsts: set[str] = set()
+    if slot() == SLOT2:
+        firsts = set(db.column("SELECT prefix FROM sn_prefix_counter")) | set(
+            db.column("SELECT prefix FROM sn_pi_rule")
+        )
+        firsts |= set(
+            db.column(
+                "SELECT DISTINCT r.prefix FROM sn_rule r JOIN sn_rule_version v ON v.rule_id = r.id "
+                "WHERE v.claimed_pi IS NOT NULL"
+            )
+        )
+        firsts |= set(db.column("SELECT DISTINCT r.prefix FROM sn_rule r JOIN sn_pi_rule b ON b.rule_id = r.id"))
     for r in db.all("SELECT * FROM sn_rule WHERE 1=1" + vsql + " ORDER BY rule_code", *vargs):
+        if slot() == SLOT1 and r["prefix"] in seconds:
+            continue
+        if (
+            slot() == SLOT2
+            and r["prefix"] not in seconds
+            and (r["prefix"] in firsts or any(f.startswith(r["prefix"]) for f in firsts if _is_inc_rule(r, versions)))
+        ):
+            continue
         vs = versions.get(r["id"], [])
         res = _resolve_in(r, vs, pi, SRC_LINE) if pi else None
         # 推荐：本 PI 已用过的规则（有版本归属本 PI），以及早先分类为本 PI / 本 PI 客户的规则
@@ -2462,7 +2702,7 @@ def _custom_names(pi: str) -> tuple[str, str]:
 
 def _bind_rule(pi: str, rule_id: int) -> None:
     """自定义规则存入规则库后：PI 登记改记为这条规则（前缀、起始号不变）。"""
-    db.exec("UPDATE sn_pi_rule SET rule_id = %s, custom_json = NULL WHERE pi_no = %s", rule_id, pi)
+    db.exec(f"UPDATE {reg_table()} SET rule_id = %s, custom_json = NULL WHERE pi_no = %s", rule_id, pi)
 
 
 def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
@@ -2473,6 +2713,9 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
     带识别码的规则：这时才占用本 PI 的自增值（见 _realize_inc）。"""
     if res.fail is not None:
         raise res.fail
+    check_slot_use(pi, res)
+    if slot() == SLOT2:
+        mark_second(cu, role_key(res))
     if res.inc is not None and res.plan in (PLAN_NEW, PLAN_INC):
         return _realize_inc(cu, pi, res, lines)
     if res.plan == PLAN_NEW:
@@ -2686,11 +2929,21 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
 # ================================================================== 识别码适用客户
 
 
+def _role_of_key(key: str) -> int:
+    """规则前缀的用途（没登记为第二 SN 的按第一 SN）。"""
+    return SLOT2 if prefix_role(key) == SLOT2 else SLOT1
+
+
+def _reg_of_key(key: str) -> str:
+    """登记了这个规则前缀的登记表（按前缀用途）。"""
+    return reg_table(_role_of_key(key))
+
+
 def _inc_regs(rule: dict) -> list[dict]:
     """登记在这个识别码前缀上的 PI（规则库规则登记为这条规则，或自定义规则的前缀层是它）。"""
     head = rule["prefix"]
     out = []
-    for r in db.all("SELECT * FROM sn_pi_rule WHERE prefix LIKE %s", util.like_prefix(head)):
+    for r in db.all(f"SELECT * FROM {_reg_of_key(head)} WHERE prefix LIKE %s", util.like_prefix(head)):
         if r["rule_id"] is not None:
             if int(r["rule_id"]) == int(rule["id"]):
                 out.append(r)
@@ -2731,7 +2984,9 @@ def _customer_impact(rule: dict, before: list[str], after: list[str], by_pi: str
         if p == by_pi:
             continue
         cust = _customer(p) or ""
-        if cust in removed and pi_used_prefix(p) is None:
+        with use_slot(_role_of_key(head)):
+            free = pi_used_prefix(p) is None
+        if cust in removed and free:
             x = out.setdefault(p, {"pi_no": p, "customer": cust, "prefix": reg["prefix"], "actions": []})
             x["actions"].append("UNBIND")
     return [x for x in sorted(out.values(), key=lambda x: x["pi_no"]) if x["actions"]]
@@ -2754,7 +3009,7 @@ def _apply_customers(
             )
             released.append(f"{x['pi_no']}({x['prefix']})")
         if "UNBIND" in x["actions"]:
-            db.exec("DELETE FROM sn_pi_rule WHERE pi_no = %s", x["pi_no"])
+            db.exec(f"DELETE FROM {_reg_of_key(head)} WHERE pi_no = %s", x["pi_no"])
             unbound.append(x["pi_no"])
             audit.record(
                 cu,

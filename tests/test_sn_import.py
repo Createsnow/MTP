@@ -197,7 +197,7 @@ def test_template_marks_required_columns(w, api, sql):
         "生产组织编号",
         "生产组织",
     ]
-    assert FULL == sn_export.FILE_HEADERS, "模板的列与分配页「已分配」下载的列相同"
+    assert [*FULL, "第二SN"] == sn_export.FILE_HEADERS, "模板的列与分配页「已分配」下载的列相同（下载另在最后加第二SN）"
 
 
 def test_check_lists_every_bad_row_and_import_is_all_or_nothing(w, api, sql):

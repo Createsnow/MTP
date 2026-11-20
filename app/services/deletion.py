@@ -16,6 +16,8 @@
 - 与生成、分配、转移共用 PI 操作锁（号现在的 PI 与流水归属 PI 都锁）；PI 正在生成时不能删。
   另拿被删号所在前缀的前缀锁（与生成同序：先 PI 操作锁、再前缀锁），同前缀别的 PI 的生成与之串行，退回最大号时
   不会漏算别的 PI 正在写的号。
+- 双 SN：号的第二 SN（sn_item_sub）随号一起删除，存入 sn_item_sub_deleted（同一删除单号）；第二前缀的最大号按同样的
+  规则退回（删的是第二前缀最后一段时退回到现存第二 SN 的最大流水），删中间的留下空号段。删号范围只按第一 SN。
 - 只删本系统生成的号：SN 导入的号只能分配，不在删号范围内（按单据、物料行删时略过，按 SN 删时视为不存在）。
 """
 
@@ -27,6 +29,8 @@ from app.core.security import CurrentUser
 from app.db.session import db, marks
 from app.services import audit, bill_stats, changes, delivery, generate, locks, orders, rules
 
+#: 第二 SN 存档的列（sn_item_sub 与 sn_item_sub_deleted 同名）
+_SUB_COLS = "item_id, sn2, seq_pi_no, seq_dec, seq_prefix, rule_version_id, gen_batch, created_at"
 #: 删号原因选填，不填记这个默认原因
 DEFAULT_REASON = "生成页删除 SN"
 CHUNK = 2000
@@ -108,6 +112,35 @@ def _prefix_after(tpl: str, args: list, prefixes: list[str]) -> list[dict]:
     return out
 
 
+def _prefix2_after(tpl: str, args: list, prefixes: list[str]) -> list[dict]:
+    """双 SN：删掉范围内的号（连同它们的第二 SN）之后各第二前缀的最大号（同 _prefix_after，只列会退回的）。"""
+    where = tpl.format(t="i.")
+    out = []
+    for p in sorted(x for x in prefixes if x):
+        last = rules.prefix_last(p)
+        keep = int(
+            db.scalar(
+                "SELECT COALESCE(MAX(s.seq_dec), 0) FROM sn_item_sub s JOIN sn_item i ON i.id = s.item_id "
+                f"WHERE s.seq_prefix = %s AND NOT IFNULL(({where}), FALSE)",
+                p,
+                *args,
+            )
+            or 0
+        )
+        if keep < last:
+            out.append({"prefix": p, "last_seq": last, "new_last": keep, "next_seq": keep + 1})
+    return out
+
+
+def _prefixes2(tpl: str, args: list) -> list[str]:
+    """范围内的号的第二 SN 所在的第二前缀（单 SN 的号没有）。"""
+    return db.column(
+        "SELECT DISTINCT s.seq_prefix FROM sn_item_sub s JOIN sn_item i ON i.id = s.item_id "
+        f"WHERE {tpl.format(t='i.')}",
+        *args,
+    )
+
+
 def _summary(tpl: str, args: list) -> dict:
     """范围内的号：枚数、各状态枚数、涉及的生产组织、物料行、要作废的批次、转入号（流水属别的 PI）枚数。"""
     where = tpl.format(t="")
@@ -146,6 +179,7 @@ def _summary(tpl: str, args: list) -> dict:
     )
     seq_pis = db.column(f"SELECT DISTINCT seq_pi_no FROM sn_item WHERE {where}", *args)
     prefixes = db.column(f"SELECT DISTINCT seq_prefix FROM sn_item WHERE {where} AND seq_prefix IS NOT NULL", *args)
+    prefixes2 = _prefixes2(tpl, args)
     return {
         "qty": sum(by_status.values()),
         "by_status": by_status,
@@ -156,6 +190,9 @@ def _summary(tpl: str, args: list) -> dict:
         "prefixes": sorted(prefixes),
         # 删后前缀最大号会退回的前缀（删的是前缀最后一段）：确认框提示「最大号从 X 退回到 Y，下次从 Y+1 生成」
         "prefix_rollback": _prefix_after(tpl, args, prefixes),
+        # 双 SN：第二 SN 随号一起删除；第二前缀与删后会退回的第二前缀最大号（单 SN 时为空）
+        "prefixes2": sorted(prefixes2),
+        "prefix_rollback2": _prefix2_after(tpl, args, prefixes2),
         "transferred_in": db.count(f"SELECT COUNT(*) FROM sn_item WHERE {where} AND seq_pi_no <> pi_no", *args),
     }
 
@@ -203,6 +240,7 @@ def delete(
     prefixes = set(
         db.column(f"SELECT DISTINCT seq_prefix FROM sn_item WHERE {where} AND seq_prefix IS NOT NULL", *args)
     )
+    prefixes2 = set(_prefixes2(tpl, args))
     voided: list[tuple[dict, set[str]]] = []
     rebuilt: list[str] = []
     with locks.with_pi_lock(pi, *seq_pis), db.tx():
@@ -212,11 +250,11 @@ def delete(
         ):
             raise biz(ErrorCode.GEN_BUSY, pi="、".join(sorted(held)))
         # 前缀锁在锁号之前拿（与生成同序）：之后同前缀别的 PI 的生成等本次提交，退回最大号时读到的是全部已提交的号
-        locks.hold_prefixes(prefixes)
+        locks.hold_prefixes(prefixes | prefixes2)
         s = _summary(tpl, args)
         if not s["qty"]:
             raise biz(ErrorCode.DELETE_NOTHING)
-        if not set(s["seq_pis"]) <= held or not set(s["prefixes"]) <= prefixes:
+        if not set(s["seq_pis"]) <= held or not set(s["prefixes"]) <= prefixes or not set(s["prefixes2"]) <= prefixes2:
             raise biz(ErrorCode.CONFLICT_RETRY)
         if s["orgs"]:
             cu.check_write(*s["orgs"])
@@ -249,6 +287,17 @@ def delete(
                 reason,
                 *part,
             )
+            if prefixes2:
+                # 双 SN：第二 SN 随号一起删除并存档（同一删除单号）
+                db.exec(
+                    f"INSERT INTO sn_item_sub_deleted({_SUB_COLS}, del_no, deleted_by, deleted_at) "
+                    f"SELECT {_SUB_COLS}, %s, %s, %s FROM sn_item_sub WHERE item_id IN ({marks(len(part))})",
+                    del_no,
+                    cu.emp_no,
+                    now,
+                    *part,
+                )
+                db.exec(f"DELETE FROM sn_item_sub WHERE item_id IN ({marks(len(part))})", *part)
             db.exec(f"DELETE FROM sn_item WHERE id IN ({marks(len(part))})", *part)
         for r in per_line:
             n, a = int(r["n"]), int(r["a"] or 0)
@@ -282,6 +331,15 @@ def delete(
                 now,
                 x["prefix"],
             )
+        for x in s["prefix_rollback2"]:
+            db.exec(
+                "UPDATE sn_prefix_counter SET last_seq_dec = LEAST(last_seq_dec, "
+                "(SELECT COALESCE(MAX(seq_dec), 0) FROM sn_item_sub WHERE seq_prefix = %s)), updated_at = %s "
+                "WHERE prefix = %s",
+                x["prefix"],
+                now,
+                x["prefix"],
+            )
         # 流水归属 PI 自己生成到的最大号（统计用）同样按该 PI 现存号的最大流水退回
         for r in per_pi:
             db.exec(
@@ -292,7 +350,9 @@ def delete(
                 now,
                 r["seq_pi_no"],
             )
-        rollback = ";".join(f"{x['prefix']}:{x['last_seq']}->{x['new_last']}" for x in s["prefix_rollback"])
+        rollback = ";".join(
+            f"{x['prefix']}:{x['last_seq']}->{x['new_last']}" for x in s["prefix_rollback"] + s["prefix_rollback2"]
+        )
         bills_hit = {r["bill_no"] for r in per_line}
         changes.refresh_items(bills_hit)
         for b in batches:
@@ -330,6 +390,7 @@ def delete(
         "voided": [b["batch_no"] for b, _ in voided],
         "rebuilt": rebuilt,
         "prefix_rollback": s["prefix_rollback"],
+        "prefix_rollback2": s["prefix_rollback2"],
         "gaps": generate.gaps_of(pi),
     }
 

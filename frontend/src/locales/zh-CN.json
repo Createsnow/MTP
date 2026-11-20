@@ -247,6 +247,7 @@
     "RULE_LINE_SELECT": "物料行选规则",
     "LINE_CONFIG_REVOKE": "物料行恢复默认值",
     "LINE_VOID_RULE": "生成页过滤配置",
+    "PI_DUAL_SET": "双 SN 开关",
     "RULE_PREFIX_VERSION": "换前缀另出版本",
     "RULE_DELETE": "删除规则",
     "SN_GENERATE": "生成",
@@ -708,6 +709,10 @@
       "NO_RULE": "需先选规则",
       "RULE_PREFIX": "规则须换前缀",
       "RULE_PI_PREFIX": "与本 PI 已用前缀不同",
+      "NO_RULE2": "需先选第二 SN 规则",
+      "RULE2_PREFIX": "第二 SN 规则须换前缀",
+      "RULE2_PI_PREFIX": "与本 PI 已用第二前缀不同",
+      "ATTACH_ORDER_BLOCKED2": "第二前缀靠前项次未生成完",
       "ATTACH_ORDER_BLOCKED": "靠前项次未生成完",
       "ATTACH_NOT_NUMERIC": "附件项次须为数字",
       "LENGTH_EMPTY": "米数待填写",
@@ -715,6 +720,17 @@
       "FILL": "待填写",
       "ATTACH_EMPTY": "附件项次待填写",
       "QUOTA_EMPTY": "没有可生成额度"
+    },
+    "dual": {
+      "label": "双 SN",
+      "lockedTip": "本 PI 已有号，须全部删号后才能修改",
+      "confirmOn": "开启后本 PI 每件生成两个 SN；有号后不能关闭",
+      "ruleBtn": "选第二 SN 规则",
+      "ruleTitle": "选第二 SN 规则",
+      "piRule2": "第二 SN 规则 {rule} · 前缀 {prefix}",
+      "genBtn": "生成 {n} 件（{m} 个 SN）",
+      "sn2": "第二SN",
+      "sn2Range": "第二 SN（起 ~ 止）"
     },
     "blockerTitle": "同前缀下这些物料行须先生成完（或处理后）：",
     "blocker": "PI {pi} · {bill} 行 {seq} · 项次 {attach} · {reason}",
@@ -1197,6 +1213,7 @@
     "withUnitHint": "SN 中带物料行的产品单位（金蝶 FProductUnit 原样写入；为空的物料行不能生成）",
     "sampleUnit": "示例单位",
     "used": "生成过号",
+    "roleSecond": "第二 SN 用",
     "prefix": "前缀",
     "prefixHint": "必填，不限制字符（区分大小写）；一个前缀一条规则，不能与已有规则的前缀相同，也不能一个是另一个的开头（如 SD 与 SDD）",
     "formatLocked": "规则已用于生成：前缀、进制、流水位数、字符表不能改，要换请新建规则",
@@ -1299,7 +1316,8 @@
       "SERIAL_DEC_MISMATCH": "流水号 {serial} 换算成十进制是 {dec}，与十进制流水号不符",
       "LINE_VOID": "单据 {bill_no} ERP行号 {seq} 已失效（SN 生成页的过滤配置），不能导入",
       "LINE_NO_ATTACH": "单据 {bill_no} ERP行号 {seq} 没有附件项次（可先在 SN 生成页补填）",
-      "BILL_HAS_SN": "单据 {bill_no} 在系统中已有生成或已分配的 SN（{count} 枚），不能导入"
+      "BILL_HAS_SN": "单据 {bill_no} 在系统中已有生成或已分配的 SN（{count} 枚），不能导入",
+      "DUAL_PI": "PI {pi} 已开启双 SN，不支持导入"
     }
   },
   "tabs": {

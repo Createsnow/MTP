@@ -127,7 +127,11 @@ def test_allocate_pushes_in_batches_and_receipts_confirm(w, sql):
         "materialCode",
         "length",
         "customerCode",
+        # 接口文档 V1.3：第二 SN（双 SN），单 SN 的号为 null
+        "sn2",
     }
+    assert item["sn2"] is None, "单 SN 的号 sn2 为 null"
+    assert list(item)[-1] == "sn2", "sn2 加在 customerCode 之后，原有字段与顺序不变"
     assert body["batchType"] == "NEW" and body["toOrgCode"] is None, "明细与转移明细同一结构，交付批次头不带转入组织"
     assert item["billNo"] == bill and item["billSeq"] == 1 and item["pi"] == pi and item["serialPi"] == pi
     assert isinstance(item["serialDec"], str) and item["length"] == "0100"

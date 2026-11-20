@@ -4,8 +4,8 @@ from fastapi import APIRouter
 
 from app.api.deps import OperatorDep, page_of
 from app.schemas.common import OptInt
-from app.schemas.gen import DeleteIn, PreviewIn, RevokeConfigIn, RunIn, VoidRuleIn
-from app.services import deletion, generate, line_void, orders, workbench
+from app.schemas.gen import DeleteIn, DualIn, PreviewIn, RevokeConfigIn, RunIn, VoidRuleIn
+from app.services import deletion, dual, generate, line_void, orders, workbench
 
 router = APIRouter(prefix="/generate", tags=["generate"])
 
@@ -32,6 +32,15 @@ def gen_pis(
 @router.get("/context", summary="生成详情（只给单据时取其 PI）：单据与物料行、规则、生成任务、空号段")
 def gen_context(cu: OperatorDep, pi: str | None = None, bill_no: str | None = None) -> dict:
     return workbench.context(cu, pi, bill_no)
+
+
+@router.post(
+    "/dual",
+    summary="PI 双 SN 开关（作用于整张 PI）：开启后每件同时生成第一 SN 与第二 SN；"
+    "本 PI 下有号时不能改，须全部删号后才能修改",
+)
+def gen_dual(body: DualIn, cu: OperatorDep) -> dict:
+    return dual.set_dual(cu, body.pi_no, bool(body.dual))
 
 
 @router.post(

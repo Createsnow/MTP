@@ -247,6 +247,7 @@
     "RULE_LINE_SELECT": "Chọn quy tắc cho dòng",
     "LINE_CONFIG_REVOKE": "Khôi phục mặc định dòng",
     "LINE_VOID_RULE": "Cấu hình lọc trang tạo",
+    "PI_DUAL_SET": "Công tắc SN kép",
     "RULE_PREFIX_VERSION": "Phiên bản tiền tố mới",
     "RULE_DELETE": "Xóa quy tắc",
     "SN_GENERATE": "Tạo",
@@ -708,6 +709,10 @@
       "NO_RULE": "Chưa có quy tắc",
       "RULE_PREFIX": "Quy tắc cần tiền tố mới",
       "RULE_PI_PREFIX": "Khác tiền tố PI đã dùng",
+      "NO_RULE2": "Chưa có quy tắc SN thứ hai",
+      "RULE2_PREFIX": "Quy tắc SN thứ hai cần tiền tố mới",
+      "RULE2_PI_PREFIX": "Khác tiền tố SN thứ hai PI đã dùng",
+      "ATTACH_ORDER_BLOCKED2": "Hạng mục trước chưa tạo xong (tiền tố thứ hai)",
       "ATTACH_ORDER_BLOCKED": "Hạng mục trước chưa tạo xong",
       "ATTACH_NOT_NUMERIC": "Hạng mục đính kèm phải là số",
       "LENGTH_EMPTY": "Chiều dài chờ điền",
@@ -715,6 +720,17 @@
       "FILL": "Chờ điền",
       "ATTACH_EMPTY": "Hạng mục đính kèm chờ điền",
       "QUOTA_EMPTY": "Không còn hạn mức"
+    },
+    "dual": {
+      "label": "SN kép",
+      "lockedTip": "PI này đã có SN; hãy xóa hết SN trước khi sửa",
+      "confirmOn": "Sau khi bật, mỗi sản phẩm của PI này có hai SN; khi đã có SN thì không thể tắt",
+      "ruleBtn": "Quy tắc SN thứ hai",
+      "ruleTitle": "Chọn quy tắc SN thứ hai",
+      "piRule2": "Quy tắc SN thứ hai {rule} · tiền tố {prefix}",
+      "genBtn": "Tạo {n} sản phẩm ({m} SN)",
+      "sn2": "SN thứ hai",
+      "sn2Range": "SN thứ hai (đầu ~ cuối)"
     },
     "blockerTitle": "Các dòng cùng tiền tố sau phải tạo xong (hoặc xử lý) trước:",
     "blocker": "PI {pi} · {bill} dòng {seq} · hạng mục {attach} · {reason}",
@@ -1197,6 +1213,7 @@
     "withUnitHint": "SN chứa đơn vị sản phẩm của dòng vật tư (FProductUnit của Kingdee giữ nguyên; dòng không có đơn vị thì không tạo được)",
     "sampleUnit": "Đơn vị mẫu",
     "used": "Đã tạo số",
+    "roleSecond": "Dùng cho SN thứ hai",
     "prefix": "Tiền tố",
     "prefixHint": "Bắt buộc, không giới hạn ký tự (phân biệt hoa thường). Mỗi tiền tố một quy tắc: không được trùng tiền tố của quy tắc đã có, cũng không được cái này là phần đầu của cái kia (ví dụ SD và SDD)",
     "formatLocked": "Quy tắc đã dùng để tạo số: không đổi được tiền tố, hệ cơ số, số chữ số, bộ ký tự; muốn đổi hãy tạo quy tắc mới",
@@ -1299,7 +1316,8 @@
       "SERIAL_DEC_MISMATCH": "Số thứ tự {serial} đổi ra thập phân là {dec}, không khớp với số thứ tự thập phân",
       "LINE_VOID": "Chứng từ {bill_no} dòng ERP {seq} đã vô hiệu (cấu hình lọc ở trang Tạo SN), không thể nhập",
       "LINE_NO_ATTACH": "Chứng từ {bill_no} dòng ERP {seq} không có hạng mục đính kèm (hãy bổ sung ở trang Tạo SN trước)",
-      "BILL_HAS_SN": "Chứng từ {bill_no} đã có SN được tạo hoặc đã phân bổ trong hệ thống ({count}), không thể nhập"
+      "BILL_HAS_SN": "Chứng từ {bill_no} đã có SN được tạo hoặc đã phân bổ trong hệ thống ({count}), không thể nhập",
+      "DUAL_PI": "PI {pi} đã bật SN kép, không hỗ trợ nhập"
     }
   },
   "tabs": {
