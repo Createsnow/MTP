@@ -45,10 +45,10 @@
       <section class="side">
         <h5 class="side__t">{{ t("transfer.target") }}</h5>
         <el-form label-position="top" class="form">
-          <el-form-item label="PI" required>
+          <el-form-item required>
+            <template #label>PI<HelpTip :content="t('transfer.toPiDefault')" /></template>
             <el-autocomplete v-model="tf.to_pi" class="full sn-mono" :fetch-suggestions="suggestPi" :trigger-on-focus="false" clearable
               @select="loadTargets" @change="loadTargets" />
-            <div class="hint">{{ t("transfer.toPiDefault") }}</div>
           </el-form-item>
           <el-form-item :label="t('common.billNo')" required>
             <el-select v-model="tf.to_bill" class="full sn-mono" filterable :disabled="!toBills.length" @change="onTargetBill">
@@ -58,7 +58,8 @@
             </el-select>
             <div v-if="tf.to_pi && targetsLoaded && !toBills.length" class="hint warn-text">{{ t("transfer.noBillInPi") }}</div>
           </el-form-item>
-          <el-form-item :label="t('common.factory')" required>
+          <el-form-item required>
+            <template #label>{{ t("common.factory") }}<HelpTip :content="t('transfer.orgDefault')" /></template>
             <el-select v-model="tf.to_factory" filterable class="full">
               <el-option v-for="x in factories" :key="x.factory_code" :value="x.factory_code" :label="orgLabel(x.factory_code)"
                 :disabled="!x.enabled && x.factory_code !== toHead?.org_code">
@@ -69,7 +70,6 @@
               </el-option>
             </el-select>
             <div v-if="orgDiff" class="hint wt">{{ t("transfer.orgDiff") }}</div>
-            <div v-else class="hint">{{ t("transfer.orgDefault") }}</div>
             <div v-if="outOfScope" class="hint warn-text">{{ t("transfer.targetOutOfScope") }}</div>
           </el-form-item>
         </el-form>
@@ -82,7 +82,7 @@
     <section class="lines">
       <div class="lines__t">
         <span>{{ t("transfer.linesTitle") }}</span>
-        <span class="hint inline">{{ t("transfer.sameKeyHint") }}</span>
+        <HelpTip :content="t('transfer.sameKeyHint')" />
       </div>
       <el-table :data="groups" size="small" border :empty-text="t('transfer.noLines')" max-height="340" :row-class-name="rowClass">
         <el-table-column v-if="tf.scope === 'MATERIAL'" width="40" align="center">
@@ -200,6 +200,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "@/api";
 import { useFactories } from "@/composables/useFactories";
 import { scopeLabel } from "@/constants";
+import HelpTip from "@/components/HelpTip.vue";
 import { useAuthStore } from "@/stores/auth";
 import {
   LINE_MODES, activeGroups, autoSeq, candidates, defaultCfg, groupKey, groupsOf, lengthBad, lineIssue, linesBody,
@@ -466,7 +467,6 @@ defineExpose({ open });
 .ml { margin-left: 6px; }
 .grow { flex: 1; }
 .hint { width: 100%; margin-top: 4px; line-height: 1.5; color: var(--app-muted); font-size: 12px; }
-.hint.inline { width: auto; margin: 0 0 0 12px; font-weight: 400; }
 .lines { margin-top: 12px; border: 1px solid var(--app-line); border-radius: 8px; padding: 10px 16px 12px; background: var(--app-surface); }
 .lines__t { display: flex; align-items: baseline; flex-wrap: wrap; font-size: 13px; font-weight: 600; color: var(--app-text); margin-bottom: 6px; }
 .lines :deep(.el-input-number) { width: 130px; }

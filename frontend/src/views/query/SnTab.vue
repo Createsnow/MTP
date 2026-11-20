@@ -19,7 +19,7 @@
     <el-input v-model="f.material_code" :placeholder="t('common.material')" clearable @keyup.enter="load(1)" />
     <el-input v-model="f.length" :placeholder="t('common.length')" clearable class="w120" @keyup.enter="load(1)" />
     <div class="seq-range">
-      <span class="seq-range__label">{{ t("query.seqRange") }}</span>
+      <span class="seq-range__label">{{ t("query.seqRange") }}<HelpTip :content="t('query.seqRangeTip')" /></span>
       <el-input v-model="f.seq_from" :placeholder="t('query.seqFrom')" clearable class="sn-mono" @keyup.enter="load(1)" />
       <span>–</span>
       <el-input v-model="f.seq_to" :placeholder="t('query.seqTo')" clearable class="sn-mono" @keyup.enter="load(1)" />
@@ -27,7 +27,6 @@
     <el-switch v-if="store.isOperator" v-model="f.pi_all" :active-text="t('query.piAll')" :disabled="!f.pi.trim()" />
   </div>
   <el-alert v-if="f.pi_all" type="info" :closable="false" show-icon :title="t('query.piAllTip')" class="mb" />
-  <el-alert v-if="hasRange" type="info" :closable="false" show-icon :title="t('query.seqRangeTip')" class="mb" />
   <div v-if="range" class="range-sum mb">
     <span>{{ t("query.rangeFound", { n: range.found }) }}</span>
     <span v-for="(n, s) in range.by_status" :key="s"><StatusTag :status="String(s)" /> <b>{{ n }}</b></span>
@@ -153,6 +152,7 @@ import { copyText } from "@/utils/clipboard";
 import { colWidth, tagWidth, textWidth } from "@/colWidth.js";
 import FactorySelect from "@/components/FactorySelect.vue";
 import StatusTag from "@/components/StatusTag.vue";
+import HelpTip from "@/components/HelpTip.vue";
 import { trimmed } from "./filters";
 
 const props = defineProps<{ init: { factory_code: string; pi: string; bill_no: string } }>();
@@ -172,7 +172,6 @@ const params = () => ({ ...trimmed(f), pi_all: f.pi_all || undefined });
 
 type RangeSummary = { found: number; expected: number | null; missing: number | null; by_status: Record<string, number> };
 const range = ref<RangeSummary | null>(null);
-const hasRange = computed(() => !!(f.seq_from.trim() || f.seq_to.trim()));
 const { items, state, load, onSize } = usePaged<any>(async (q) => {
   range.value = null;
   const r = await api.items({ ...params(), ...q });

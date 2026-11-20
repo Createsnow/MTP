@@ -97,7 +97,7 @@
         </el-collapse-item>
         <el-collapse-item name="history">
           <template #title>
-            <span class="fold-title">{{ t("k3.history") }}<span v-if="cfg?.history?.length" class="muted">（{{ cfg.history.length }}）</span></span>
+            <span class="fold-title">{{ t("k3.history") }}<span v-if="cfg?.history?.length" class="muted">（{{ cfg.history.length }}）</span><HelpTip :content="t('k3.historyHint')" /></span>
           </template>
           <ul v-if="cfg?.history?.length" class="history">
             <li v-for="(item, i) in cfg.history" :key="i">
@@ -106,7 +106,6 @@
             </li>
           </ul>
           <div v-else class="muted">{{ t("k3.historyEmpty") }}</div>
-          <div class="muted note">{{ t("k3.historyHint") }}</div>
         </el-collapse-item>
       </el-collapse>
     </div>
@@ -140,6 +139,7 @@ import { QuestionFilled } from "@element-plus/icons-vue";
 import { api } from "@/api";
 import { useTime } from "@/composables/useTime";
 import SyncConfigPanel from "./SyncConfigPanel.vue";
+import HelpTip from "@/components/HelpTip.vue";
 
 /** tab：打开时显示哪个页签（conn 连接参数 / sync 自动同步）；paused：自动同步已暂停（页签上的红点） */
 const props = defineProps<{ modelValue: boolean; tab?: "conn" | "sync"; paused?: boolean }>();
@@ -317,7 +317,6 @@ async function save() {
 .history li { display: flex; gap: 12px; font-size: 13px; padding: 6px 0; border-bottom: 1px dashed var(--app-line); }
 .history li:last-child { border-bottom: none; }
 .history .when { flex: none; width: 190px; white-space: nowrap; color: var(--app-muted); font-variant-numeric: tabular-nums; }
-.note { margin-top: 8px; }
 .foot { display: flex; justify-content: flex-end; align-items: center; }
 .reset { margin-right: auto; }
 </style>

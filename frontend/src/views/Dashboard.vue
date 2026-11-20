@@ -19,7 +19,6 @@
         <div class="l">{{ k.label }}</div>
       </div>
     </div>
-    <p class="muted delay">{{ t("dashboard.delayNote") }}</p>
 
     <el-row :gutter="16">
       <el-col :md="12" :xs="24">
@@ -160,7 +159,8 @@ const data = ref<any>(null);
 const loading = ref(false);
 
 const num = (n: number | null | undefined) => (n ?? 0).toLocaleString();
-const scopeDesc = computed(() => (store.bound ? t("dashboard.scopeFactory", { f: store.scopeNames }) : t("dashboard.scopeAll")));
+// 统计范围与「在途数字可能有延迟」一起收进标题旁的问号
+const scopeDesc = computed(() => `${store.bound ? t("dashboard.scopeFactory", { f: store.scopeNames }) : t("dashboard.scopeAll")}\n${t("dashboard.delayNote")}`);
 
 type Kpi = { key: string; label: string; value: number | undefined; to?: string; alarm?: boolean };
 const kpis = computed<Kpi[]>(() => {
@@ -224,7 +224,6 @@ onMounted(load);
 .shortcuts .el-button { margin: 0; }
 .shortcuts span { margin-left: 4px; }
 .mt { margin-top: 12px; }
-.delay { margin: -8px 0 0; }
 .kpi.link { cursor: pointer; transition: border-color 0.15s; }
 .kpi.link:hover { border-color: var(--el-color-primary); }
 .kpi.alarm .v { color: var(--el-color-danger); }

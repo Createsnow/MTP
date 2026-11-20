@@ -1,17 +1,9 @@
 <template>
   <div class="page page--fill">
     <!-- 页头：说明收进标题旁的问号，悬停显示 -->
-    <div class="page__head">
-      <h2 class="page__title title-q">
-        {{ t("rules.title") }}
-        <el-tooltip placement="bottom-start" :content="t('rules.desc')" popper-class="rules-desc-pop">
-          <el-icon class="q"><QuestionFilled /></el-icon>
-        </el-tooltip>
-      </h2>
-      <div class="page__actions">
-        <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon><span>{{ t("rules.create") }}</span></el-button>
-      </div>
-    </div>
+    <PageHead :title="t('rules.title')" :desc="t('rules.desc')">
+      <el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon><span>{{ t("rules.create") }}</span></el-button>
+    </PageHead>
     <!-- 左右分栏：左侧前缀清单（一个前缀一项），右侧所选前缀的 SN 组成、规则、使用的 PI、示例号 -->
     <div class="split fill">
       <div class="surface side">
@@ -95,8 +87,8 @@
               </div>
               <div class="samples">
                 <span v-for="x in detail.items" :key="x.seq_dec" class="sn-mono chip" :class="{ max: x.max }">{{ x.sn }}</span>
+                <HelpTip :content="t('rules.detailNote')" />
               </div>
-              <div class="muted">{{ t("rules.detailNote") }}</div>
             </template>
             <span v-else-if="detail.error" class="err">{{ detail.error }}</span>
           </div>
@@ -172,16 +164,18 @@
         </el-form-item>
         <el-form-item :label="t('rules.name')" required><el-input v-model="form.rule_name" maxlength="128" /></el-form-item>
         <!-- 所属组织：系统管理员可不选（全局规则）；普通操作员须选授权组织（只授权一个时固定为它）；建好后不能改 -->
-        <el-form-item v-if="!editing" :label="t('rules.owner')" :required="!store.isAdmin">
+        <el-form-item v-if="!editing" :required="!store.isAdmin">
+          <template #label>{{ t("rules.owner") }}<HelpTip :content="store.isAdmin ? t('rules.ownerHint') : t('rules.ownerOperatorHint')" /></template>
           <FactorySelect v-model="form.factory_code" scoped :clearable="store.isAdmin" :disabled="!!store.boundFactory"
             :placeholder="store.isAdmin ? t('rules.ownerGlobal') : t('rules.owner')" />
-          <div class="muted hint">{{ store.isAdmin ? t("rules.ownerHint") : t("rules.ownerOperatorHint") }}</div>
         </el-form-item>
         <!-- 不填 PI：一条规则可给多张 PI 用，用在哪些 PI 由生成页选规则决定，规则库只显示 -->
         <!-- 一个前缀一条规则：已用于生成的规则前缀、进制、流水位数、字符表锁定（要换须新建规则） -->
-        <el-form-item :label="t('rules.prefix')" required>
+        <!-- 前缀规则说明收进问号；「已用于生成、格式锁定」是当前状态，仍直接显示 -->
+        <el-form-item required>
+          <template #label>{{ t("rules.prefix") }}<HelpTip :content="t('rules.prefixHint')" /></template>
           <el-input v-model.trim="form.prefix" class="sn-mono" :disabled="formatLocked" />
-          <div class="muted hint">{{ formatLocked ? t("rules.formatLocked") : t("rules.prefixHint") }}</div>
+          <div v-if="formatLocked" class="muted hint">{{ t("rules.formatLocked") }}</div>
         </el-form-item>
         <!-- 按 SN 的组成顺序：前缀 → 流水 → 米数前分隔符 + 米数 + 米数后分隔符 → 单位 → 后缀 -->
         <el-form-item :label="t('rules.base')">
@@ -190,34 +184,35 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item :label="t('rules.seqLen')"><el-input-number v-model="form.seq_len" :min="1" :max="12" :disabled="formatLocked" /></el-form-item>
-        <el-form-item :label="t('rules.charset')">
+        <el-form-item>
+          <template #label>{{ t("rules.charset") }}<HelpTip :content="t('rules.charsetHint')" /></template>
           <el-input v-model.trim="form.charset" :placeholder="defaultCharset" class="sn-mono" :disabled="formatLocked" />
-          <div class="muted hint">{{ t("rules.charsetHint") }}</div>
         </el-form-item>
-        <el-form-item :label="t('rules.withLength')">
+        <el-form-item>
+          <template #label>{{ t("rules.withLength") }}<HelpTip :content="t('rules.withLengthHint')" /></template>
           <el-switch v-model="form.with_length" />
-          <span class="muted ml">{{ t("rules.withLengthHint") }}</span>
         </el-form-item>
         <template v-if="form.with_length">
-          <el-form-item :label="t('rules.sepBefore')">
+          <el-form-item>
+            <template #label>{{ t("rules.sepBefore") }}<HelpTip :content="t('rules.sepHint')" /></template>
             <el-input v-model.trim="form.sep_before" class="w160 sn-mono" maxlength="16" :placeholder="t('common.optional')" />
-            <span class="muted ml">{{ t("rules.sepHint") }}</span>
           </el-form-item>
-          <el-form-item :label="t('rules.lengthPad')">
+          <el-form-item>
+            <template #label>{{ t("rules.lengthPad") }}<HelpTip :content="t('rules.lengthPadHint')" /></template>
             <el-input-number v-model="form.length_pad" :min="0" :max="32" />
-            <div class="muted hint">{{ t("rules.lengthPadHint") }}</div>
           </el-form-item>
-          <el-form-item :label="t('rules.sepAfter')">
+          <el-form-item>
+            <template #label>{{ t("rules.sepAfter") }}<HelpTip :content="t('rules.sepHint')" /></template>
             <el-input v-model.trim="form.sep_after" class="w160 sn-mono" maxlength="16" :placeholder="t('common.optional')" />
           </el-form-item>
         </template>
-        <el-form-item :label="t('rules.withUnit')">
+        <el-form-item>
+          <template #label>{{ t("rules.withUnit") }}<HelpTip :content="t('rules.withUnitHint')" /></template>
           <el-switch v-model="form.with_unit" />
-          <span class="muted ml">{{ t("rules.withUnitHint") }}</span>
         </el-form-item>
-        <el-form-item :label="t('rules.suffix')">
+        <el-form-item>
+          <template #label>{{ t("rules.suffix") }}<HelpTip :content="t('rules.suffixHint')" /></template>
           <el-input v-model.trim="form.suffix" class="sn-mono" :placeholder="t('common.optional')" />
-          <div class="muted hint">{{ t("rules.suffixHint") }}</div>
         </el-form-item>
         <el-form-item v-if="form.with_length" :label="t('rules.sampleLength')">
           <el-input v-model.trim="sampleLength" class="w160" placeholder="100" />
@@ -263,6 +258,8 @@ import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "@/api";
 import FactorySelect from "@/components/FactorySelect.vue";
+import HelpTip from "@/components/HelpTip.vue";
+import PageHead from "@/components/PageHead.vue";
 import { BASES, CHARSETS } from "@/constants";
 import { useFactories } from "@/composables/useFactories";
 import { useAuthStore } from "@/stores/auth";
@@ -571,9 +568,6 @@ onMounted(load);
 
 <style scoped>
 .ml { margin-left: 6px; }
-.title-q { display: flex; align-items: center; gap: 6px; }
-.q { font-size: 16px; color: var(--app-muted); cursor: help; }
-.q:hover { color: var(--el-color-primary); }
 .mb { margin-bottom: 12px; }
 .hint { width: 100%; line-height: 1.5; margin-top: 2px; }
 .full { width: 100%; }
@@ -630,8 +624,4 @@ onMounted(load);
   .plist { max-height: 320px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-</style>
-<style>
-/* 问号说明的气泡（挂在 body 下，不能用 scoped） */
-.rules-desc-pop { max-width: 520px; line-height: 1.7; }
 </style>

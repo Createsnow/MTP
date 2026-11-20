@@ -71,31 +71,31 @@
 
     <el-dialog v-model="dialog" :title="dialogTitle" width="560px">
       <el-form label-width="120px">
-        <el-form-item :label="t('users.empNo')" required>
+        <el-form-item required>
+          <template #label>{{ t("users.empNo") }}<HelpTip v-if="!editing" :content="t('users.empNoHint')" /></template>
           <el-input v-model.trim="form.emp_no" :disabled="!!editing" maxlength="32" />
-          <div v-if="!editing" class="muted hint">{{ t("users.empNoHint") }}</div>
         </el-form-item>
         <el-form-item :label="t('users.name')" required><el-input v-model="form.name" maxlength="64" /></el-form-item>
         <template v-if="isMes">
-          <el-form-item :label="t('common.factory')" required>
+          <el-form-item required>
+            <template #label>{{ t("common.factory") }}<HelpTip :content="t('users.mesFactoryHint')" /></template>
             <el-select v-model="form.factory_code" filterable class="w100" :placeholder="t('users.mesFactoryPlaceholder')">
               <el-option v-for="x in mesFactories" :key="x.factory_code" :value="x.factory_code"
                 :label="`${x.factory_name}（${x.factory_code}）${x.mes_enabled ? ' · MES' : t('users.mesOff')}${x.enabled ? '' : t('common.disabledSuffix')}`" />
             </el-select>
-            <div class="muted hint">{{ t("users.mesFactoryHint") }}</div>
           </el-form-item>
-          <el-form-item :label="t('users.ipWhitelist')">
+          <el-form-item>
+            <template #label>{{ t("users.ipWhitelist") }}<HelpTip :content="t('users.ipHint')" /></template>
             <el-input v-model="form.ip_whitelist" type="textarea" :rows="2" placeholder="10.0.0.5, 10.1.0.0/16" />
-            <div class="muted hint">{{ t("users.ipHint") }}</div>
           </el-form-item>
           <el-alert v-if="!editing" type="info" :closable="false" show-icon :title="t('users.secretWillShow')" />
         </template>
         <template v-else>
-          <el-form-item :label="t('users.role')" required>
+          <el-form-item required>
+            <template #label>{{ t("users.role") }}<HelpTip :content="t(`users.roleHint.${form.role}`)" /></template>
             <el-radio-group v-model="form.role" :disabled="!!editing?.super_admin">
               <el-radio-button v-for="r in editing?.super_admin ? ['admin'] : roleCodes" :key="r" :value="r">{{ roleLabel(r) }}</el-radio-button>
             </el-radio-group>
-            <div class="muted hint">{{ t(`users.roleHint.${form.role}`) }}</div>
           </el-form-item>
           <el-form-item v-if="isScoped" :label="t('users.queryFactories')" required>
             <div class="query-factories">
@@ -146,6 +146,7 @@ import { usePaged } from "@/composables/usePaged";
 import { useTime } from "@/composables/useTime";
 import { ROLE_CODES, roleLabel } from "@/constants";
 import PageHead from "@/components/PageHead.vue";
+import HelpTip from "@/components/HelpTip.vue";
 import FactorySelect from "@/components/FactorySelect.vue";
 import { useFactories } from "@/composables/useFactories";
 import { copyText } from "@/utils/clipboard";

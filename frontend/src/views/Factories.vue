@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHead :title="t('factories.title')" :desc="t('factories.desc')">
+    <PageHead :title="t('factories.title')" :desc="`${t('factories.desc')}\n${t('factories.disableHint')}`">
       <el-button type="primary" :loading="syncing" @click="sync(false)"><el-icon><Refresh /></el-icon><span>{{ t("factories.sync") }}</span></el-button>
     </PageHead>
     <div class="surface">
@@ -38,7 +38,6 @@
           </template>
         </el-table-column>
       </el-table>
-      <p class="muted hint">{{ t("factories.disableHint") }}</p>
     </div>
 
     <el-dialog v-model="cfgOpen" :title="t('factories.configTitle', { name: editing?.factory_name, code: editing?.factory_code })" width="620px">
@@ -47,40 +46,40 @@
         <el-form-item :label="t('factories.mesUrl')" required>
           <el-input v-model.trim="form.mes_url" placeholder="https://mes.example.com/sn/batches" />
         </el-form-item>
-        <el-form-item :label="t('factories.authType')" required>
+        <el-form-item required>
+          <template #label>{{ t("factories.authType") }}<HelpTip v-if="form.mes_auth_type === 'NONE'" :content="t('factories.authNoneHint')" /></template>
           <el-radio-group v-model="form.mes_auth_type">
             <el-radio-button value="TOKEN">{{ t("factories.authTOKEN") }}</el-radio-button>
             <el-radio-button value="HMAC">{{ t("factories.authHMAC") }}</el-radio-button>
             <el-radio-button value="NONE">{{ t("factories.authNONE") }}</el-radio-button>
           </el-radio-group>
-          <div v-if="form.mes_auth_type === 'NONE'" class="muted hint">{{ t("factories.authNoneHint") }}</div>
         </el-form-item>
-        <el-form-item v-if="form.mes_auth_type !== 'NONE'" :label="t('factories.credential')" :required="!editing?.credential_set">
+        <el-form-item v-if="form.mes_auth_type !== 'NONE'" :required="!editing?.credential_set">
+          <template #label>{{ t("factories.credential") }}<HelpTip :content="t('factories.credentialHint')" /></template>
           <el-input v-model="form.mes_credential" type="password" show-password autocomplete="new-password"
             :placeholder="editing?.credential_set ? t('factories.credentialKeep') : ''" />
-          <div class="muted hint">{{ t("factories.credentialHint") }}</div>
         </el-form-item>
-        <el-form-item :label="t('factories.gzip')">
+        <el-form-item>
+          <template #label>{{ t("factories.gzip") }}<HelpTip :content="t('factories.gzipHint')" /></template>
           <el-switch v-model="form.mes_gzip" />
-          <div class="muted hint">{{ t("factories.gzipHint") }}</div>
         </el-form-item>
-        <el-form-item :label="t('factories.batchSize')">
+        <el-form-item>
+          <template #label>{{ t("factories.batchSize") }}<HelpTip :content="t('factories.batchSizeHint')" /></template>
           <el-input-number v-model="form.batch_size" :min="1" :max="50000" :step="500" />
-          <span class="muted ml">{{ t("factories.batchSizeHint") }}</span>
         </el-form-item>
         <el-form-item :label="t('factories.timeout')">
           <el-input-number v-model="form.push_timeout_sec" :min="5" :max="600" />
           <span class="muted ml">{{ t("factories.seconds") }}</span>
         </el-form-item>
-        <el-form-item :label="t('factories.concurrency')">
+        <el-form-item>
+          <template #label>{{ t("factories.concurrency") }}<HelpTip :content="t('factories.concurrencyHint')" /></template>
           <el-input-number v-model="form.push_concurrency" :min="1" :max="20" />
-          <span class="muted ml">{{ t("factories.concurrencyHint") }}</span>
         </el-form-item>
-        <el-form-item :label="t('factories.tz')">
+        <el-form-item>
+          <template #label>{{ t("factories.tz") }}<HelpTip :content="t('factories.tzHint')" /></template>
           <el-select v-model="form.tz_offset_min" filterable class="w200">
             <el-option v-for="o in TZ_OPTIONS" :key="o" :value="o" :label="tzLabel(o)" />
           </el-select>
-          <div class="muted hint">{{ t("factories.tzHint") }}</div>
         </el-form-item>
         <el-form-item v-if="testResult" :label="t('factories.testResult')">
           <el-alert :type="testResult.ok ? 'success' : 'error'" :closable="false" show-icon
@@ -137,6 +136,7 @@ import { batchResultLabel, cfgStatusLabel } from "@/constants";
 import { tzLabel } from "@/utils/time";
 import type { Factory } from "@/types/api";
 import PageHead from "@/components/PageHead.vue";
+import HelpTip from "@/components/HelpTip.vue";
 
 const { t } = useI18n();
 const { fmt } = useTime();
@@ -247,7 +247,6 @@ onMounted(() => sync(true));
 </script>
 
 <style scoped>
-.hint { margin: 8px 0 0; line-height: 1.5; width: 100%; }
 .ml { margin-left: 6px; }
 .mb { margin-bottom: 12px; }
 .w200 { width: 200px; }

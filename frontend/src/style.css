@@ -2,7 +2,6 @@
 .page { display: flex; flex-direction: column; gap: 16px; }
 .page__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .page__title { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--app-text); }
-.page__desc { margin: 6px 0 0; color: var(--app-muted); font-size: 13px; max-width: 880px; line-height: 1.6; }
 .page__actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .surface { background: var(--app-surface); border: 1px solid var(--app-line); border-radius: 10px; padding: 16px 20px; }
 .surface__title { font-size: 15px; font-weight: 600; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; justify-content: space-between; }
@@ -34,3 +33,8 @@
   .page--fill { height: auto; }
   .page--fill .fill-body { flex: none; height: 520px; }
 }
+/* 说明性提示语：问号图标 + 悬停显示（HelpTip），不占页面 */
+.help-tip { color: var(--app-muted); cursor: help; margin-left: 4px; vertical-align: -2px; font-size: 14px; outline: none; flex: none; align-self: center; }
+.help-tip:hover, .help-tip:focus-visible { color: var(--el-color-primary); }
+.help-tip-pop { max-width: 520px; line-height: 1.7; white-space: pre-line; }
+.page__title .help-tip { font-size: 16px; vertical-align: -1px; }

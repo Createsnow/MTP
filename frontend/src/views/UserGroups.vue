@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <PageHead :title="t('groups.title')" :desc="t('groups.desc')">
+    <PageHead :title="t('groups.title')" :desc="`${t('groups.desc')}\n${t('groups.note')}`">
       <el-button @click="router.push('/users')"><el-icon><User /></el-icon><span>{{ t("groups.toUsers") }}</span></el-button>
     </PageHead>
 
@@ -34,7 +34,6 @@
           </template>
         </el-table-column>
       </el-table>
-      <p class="muted note">{{ t("groups.note") }}</p>
     </div>
   </div>
 </template>
@@ -79,5 +78,4 @@ onMounted(async () => {
 .hint { margin: 0; line-height: 1.6; font-size: 12px; }
 .yes { color: var(--el-color-success); font-size: 16px; }
 .ml { margin-left: 6px; }
-.note { margin: 12px 0 0; }
 </style>
