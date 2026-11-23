@@ -87,6 +87,9 @@ class CustomRuleIn(In):
     inc_customers: list[str] | None = None
     #: 改选的已释放识别码号段（值）；不传 = 取下一个值
     inc_pick: int | None = None
+    #: 规则编码（选填，字母、数字、_、-，最长 64 位；生成页默认 8 位时间哈希）：前缀是新的、生成成功存入规则库时
+    #: 用它；不填按 8 位时间哈希；与已有编码相同时自动加 -v1、-v2…（不拦截）。前缀已有规则时用那条规则，不起作用
+    rule_code: str | None = None
 
 
 class LineSelectIn(In):

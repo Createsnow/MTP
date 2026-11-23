@@ -95,9 +95,9 @@
 
           <div class="sec">{{ t("rules.rulesTitle") }}</div>
           <el-table :data="cur.rules" size="small" :row-key="(x: any) => x.rule.id">
-            <!-- 只列规则编码（唯一、建好后不能改，生成页与「使用的 PI」都按编码）；名称悬停显示，在修改弹窗里改 -->
+            <!-- 只用规则编码（唯一、建好后不能改，生成页与「使用的 PI」都按编码），不再有名称 -->
             <el-table-column :label="t('rules.code')" min-width="140">
-              <template #default="{ row }"><span class="sn-mono" :title="row.rule.rule_name">{{ row.rule.rule_code }}</span></template>
+              <template #default="{ row }"><span class="sn-mono">{{ row.rule.rule_code }}</span></template>
             </el-table-column>
             <el-table-column :label="t('rules.format')" min-width="260">
               <template #default="{ row }">
@@ -162,7 +162,6 @@
         <el-form-item v-if="!editing" :label="t('rules.code')" required>
           <el-input v-model.trim="form.rule_code" :placeholder="t('rules.codeHint')" />
         </el-form-item>
-        <el-form-item :label="t('rules.name')" required><el-input v-model="form.rule_name" maxlength="128" /></el-form-item>
         <!-- 所属组织：系统管理员可不选（全局规则）；普通操作员须选授权组织（只授权一个时固定为它）；建好后不能改 -->
         <el-form-item v-if="!editing" :required="!store.isAdmin">
           <template #label>{{ t("rules.owner") }}<HelpTip :content="store.isAdmin ? t('rules.ownerHint') : t('rules.ownerOperatorHint')" /></template>
@@ -289,7 +288,7 @@ const sampleLength = ref("");
 const sampleUnit = ref("");
 /** 规则库流水位数默认 5（自定义规则默认 4，在生成页）。 */
 const EMPTY = {
-  rule_code: "", rule_name: "", factory_code: "", prefix: "", suffix: "", base: 10, seq_len: 5, charset: "",
+  rule_code: "", factory_code: "", prefix: "", suffix: "", base: 10, seq_len: 5, charset: "",
   with_length: true, length_pad: 0, sep_before: "", sep_after: "", with_unit: false,
 };
 const form = reactive({ ...EMPTY });
@@ -384,8 +383,7 @@ const editHint = computed(() => {
     || c.charset !== charset || !!c.with_length !== len || !!c.with_unit !== form.with_unit
     || (c.length_pad || 0) !== (len ? form.length_pad || 0 : 0)
     || (c.length_sep_before || "") !== (len ? form.sep_before : "") || (c.length_sep_after || "") !== (len ? form.sep_after : "");
-  const used = !!editing.value?.rule_used;
-  if (!changed) return used ? "USED" : "";
+  if (!changed) return "";
   // 当前版本已用于生成或已归属 PI：另出一版；否则（含规则库改版后还没人用的当前版本）就地修改
   return c.used || c.claimed_pi ? "NEW_VERSION" : "IN_PLACE";
 });
@@ -415,7 +413,6 @@ function openEdit(row: any) {
   editing.value = row;
   const c = row.current;
   Object.assign(form, {
-    rule_name: row.rule.rule_name,
     prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len, with_length: !!c.with_length,
     length_pad: c.length_pad || 0, sep_before: c.length_sep_before || "", sep_after: c.length_sep_after || "", with_unit: !!c.with_unit,
     charset: c.charset === CHARSETS[c.base] ? "" : c.charset,
@@ -535,10 +532,10 @@ async function save() {
   try {
     if (editing.value) {
       // 不传 PI：规则原有的分类与 PI 不变
-      const r: any = await api.updateRule(editing.value.rule.id, { rule_name: form.rule_name, ...spec() });
+      const r: any = await api.updateRule(editing.value.rule.id, spec());
       ElMessage.success(t(`rules.result${r.action}`, { v: r.rule?.current?.display_version ?? r.rule?.rule?.current_version }));
     } else {
-      await api.createRule({ rule_code: form.rule_code, rule_name: form.rule_name, factory_code: form.factory_code || null, ...spec() });
+      await api.createRule({ rule_code: form.rule_code, factory_code: form.factory_code || null, ...spec() });
       ElMessage.success(t("common.saved"));
     }
     dialog.value = false;
@@ -555,7 +552,7 @@ const deletable = (row: any) => !row.rule_used && !row.pis.length && !row.bindin
 
 async function remove(row: any) {
   const r = row.rule;
-  await ElMessageBox.confirm(t("rules.deleteConfirm", { code: r.rule_code, name: r.rule_name }), t("common.delete"), {
+  await ElMessageBox.confirm(t("rules.deleteConfirm", { code: r.rule_code }), t("common.delete"), {
     type: "warning", confirmButtonText: t("common.delete"), cancelButtonText: t("common.cancel"), confirmButtonClass: "el-button--danger",
   });
   await api.deleteRule(r.id);

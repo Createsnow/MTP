@@ -17,7 +17,8 @@
 
 自定义规则（前缀、进制、位数、米数及其补 0 位数与前后分隔符、是否带单位、后缀、起始号）：只登记在 PI 上，
 生成成功后才落库，PI 登记改记为规则：前缀已有规则时归到那条规则下（见 _attach），前缀是新的才新建规则
-（编码 PI-PI号-n，名称 PI号_vn）；生成失败或取消不留规则。起始号只管下一次生成（生成后清掉）。
+（编码为生成页填的规则编码，不填为 8 位时间哈希；名称与编码相同）；生成失败或取消不留规则。
+起始号只管下一次生成（生成后清掉）。
 
 流水上限自动突破按前缀统一设置（sn_prefix_counter.seq_grow，默认开启）：第一张 PI 选这个前缀时按这次的选择定下，
 之后在规则库改（set_prefix_grow），已突破过规则位数后不能关闭。开启时流水用完规则位数后自动加位（最多 12 位），
@@ -33,9 +34,11 @@
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import re
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -970,6 +973,8 @@ def pi_prefix(pi: str) -> dict:
         "custom": _custom_dict(spec_of(v)),
         "seq_grow": prefix_grow(row["prefix"]),
         "registered": True,
+        # 登记的自定义规则（还没存入规则库）填的规则编码；没填或已是规则库规则时为空
+        "rule_code": (res.custom or {}).get("rule_code") if res.plan == PLAN_NEW else None,
     }
 
 
@@ -1691,8 +1696,9 @@ def create(
         c = util.trim(code)
         if not _CODE.match(c):
             raise biz(ErrorCode.RULE_CODE_INVALID)
-        n = util.trim(name)
-        if not n or len(n) > 128:
+        # 页面只用规则编码：名称不填时与编码相同
+        n = util.trim(name) or c
+        if len(n) > 128:
             raise biz(ErrorCode.RULE_NAME_REQUIRED)
         # PI 选填（一条规则可给多张 PI 用，用在哪些 PI 由生成页选规则决定）：不填为未分类；
         # 填了仍记为 PI 分类（只用于推荐）
@@ -1729,8 +1735,9 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
     with db.tx():
         r = get_rule(rule_id, lock=True)
         check_editable(cu, r)
-        n = util.trim(name)
-        if not n or len(n) > 128:
+        # 页面只用规则编码：名称不传时不变
+        n = util.trim(name) or r["rule_name"]
+        if len(n) > 128:
             raise biz(ErrorCode.RULE_NAME_REQUIRED)
         cur = db.one(
             "SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = %s FOR UPDATE",
@@ -2008,6 +2015,10 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
     start = check_seq_start(c.get("seq_start"), spec, grow)
     inc = _inc_of_custom(c, spec.prefix)
     custom = _custom_dict(spec, inc)
+    code = custom_code(c)
+    if code:
+        # 规则编码（选填）：只在前缀是新的、生成成功存入规则库时用（见 _custom_names）
+        custom["rule_code"] = code
     extra: dict = {}
     scope = None
     if inc is not None:
@@ -2678,26 +2689,77 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
                 None if res is None or res.version is None else res.version.get("inc_value"),
             ),
             "inc_error": None if res is None else _err_json(res.fail),
+            # 开始 SN、当前最大 SN 用（见 _fill_sn_range，填完去掉）
+            "_sn_prefix": None if use is None else use["prefix"],
+            "_sn_spec": None if use is None else spec_of(use),
         }
         out.append(item)
+    _fill_sn_range(out)
     out.sort(key=lambda x: (not x["recommended"], x["rule_code"]))
     return out
+
+
+def _fill_sn_range(items: list[dict]) -> None:
+    """规则库选项的开始 SN、当前最大 SN：按本 PI 用它时的前缀（带识别码的为本 PI 的号段前缀），取号池里这个前缀
+    下流水最小、最大的号（第二 SN 的选项查 sn_item_sub.sn2）。还没有号时 max_sn 为空，start_sn 为按本 PI 用它时的
+    配置从流水 1 起的示例号（米数、单位用示例值），start_sample 为 True。"""
+    table, col = ("sn_item_sub", "sn2") if slot() == SLOT2 else ("sn_item", "sn")
+    ps = sorted({x["_sn_prefix"] for x in items if x["_sn_prefix"]})
+    found: dict[str, tuple[str | None, str | None]] = {}
+    if ps:
+        rows = db.all(
+            f"SELECT i.seq_prefix, i.seq_dec, i.{col} AS sn, g.mn, g.mx FROM {table} i JOIN ("
+            f"SELECT seq_prefix, MIN(seq_dec) mn, MAX(seq_dec) mx FROM {table} WHERE seq_prefix IN ({marks(len(ps))}) "
+            "GROUP BY seq_prefix) g ON i.seq_prefix = g.seq_prefix AND (i.seq_dec = g.mn OR i.seq_dec = g.mx)",
+            *ps,
+        )
+        for r in rows:
+            lo, hi = found.get(r["seq_prefix"], (None, None))
+            found[r["seq_prefix"]] = (
+                r["sn"] if r["seq_dec"] == r["mn"] else lo,
+                r["sn"] if r["seq_dec"] == r["mx"] else hi,
+            )
+    for x in items:
+        p = x.pop("_sn_prefix")
+        spec = x.pop("_sn_spec")
+        lo, hi = found.get(p, (None, None)) if p else (None, None)
+        x["start_sample"] = lo is None
+        if lo is None and spec is not None:
+            try:
+                lo = codec.format_sn(1, spec, SAMPLE_LENGTH, SAMPLE_UNIT)
+            except (codec.SeqOverflow, ValueError):
+                lo = None
+        x["start_sn"] = lo
+        x["max_sn"] = hi
 
 
 # ================================================================== 生成事务内落库
 
 
-_CODE_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+def time_code() -> str:
+    """默认规则编码：8 位时间哈希（当前时间纳秒的 SHA-256 前 8 位，大写十六进制）。"""
+    return hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:8].upper()
 
 
-def _custom_names(pi: str) -> tuple[str, str]:
-    """自定义规则：编码 PI-PI号-n，名称 PI号_vn（n 为本 PI 第几条自定义规则，两者一致）。"""
-    stem = "PI-" + _CODE_UNSAFE.sub("_", pi)[:50] + "-"
-    taken = set(db.column("SELECT rule_code FROM sn_rule WHERE rule_code LIKE %s", util.like_prefix(stem)))
-    k = 1
-    while f"{stem}{k}" in taken:
+def custom_code(c: dict | None) -> str:
+    """自定义规则参数里的规则编码（选填）：格式不符报 RULE_CODE_INVALID；不填为空串。"""
+    code = util.trim((c or {}).get("rule_code"))
+    if code and not _CODE.match(code):
+        raise biz(ErrorCode.RULE_CODE_INVALID)
+    return code
+
+
+def _custom_names(res: Resolved) -> tuple[str, str]:
+    """自定义规则存入规则库时的编码与名称（名称与编码相同，页面只显示编码）：按生成页填的规则编码，不填为
+    8 位时间哈希；与已有编码相同时不拦截，自动加 -v1、-v2…（规则编码唯一）。"""
+    stem = custom_code(res.custom) or time_code()
+    code = stem
+    k = 0
+    while db.exists("SELECT EXISTS(SELECT 1 FROM sn_rule WHERE rule_code = %s)", code):
         k += 1
-    return f"{stem}{k}", util.cut(f"{pi}_v{k}", 128)
+        tail = f"-v{k}"
+        code = stem[: 64 - len(tail)] + tail
+    return code, code
 
 
 def _bind_rule(pi: str, rule_id: int) -> None:
@@ -2731,7 +2793,7 @@ def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]
         found = _rule_of_prefix_latest(spec.prefix)
         if found is not None:
             return _attach(cu, pi, found["id"], spec, orgs)
-        code, name = _custom_names(pi)
+        code, name = _custom_names(res)
         # 自定义规则归属本 PI 的生产组织（一个 PI 一个规则，全部物料行都用它；都在同一个组织时归该组织，
         # 否则为全局规则，各组织都能看到）
         owner = next(iter(orgs)) if len(orgs) == 1 else None
@@ -2832,7 +2894,8 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
     一个前缀一条规则：这个识别码前缀已有规则时，本 PI 待生效的适用客户增删这时叠加到最新的清单上
     （见 _apply_customers），
     再在它下面为本 PI 另出版本（不改当前版本，当前版本即第一张 PI 的配置）；还没有时（第一张 PI，自定义规则）存入规则库
-    （编码 PI-PI号-n），适用客户为本 PI 定的清单，当前版本即本 PI 的版本。改选已释放号段时原 PI 的号段写入释放标记。
+    （编码见 _custom_names），适用客户为本 PI 定的清单，当前版本即本 PI 的版本。
+    改选已释放号段时原 PI 的号段写入释放标记。
     PI 登记改记为这条规则。"""
     from app.services import orders
 
@@ -2849,7 +2912,7 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
     orgs = {r["org_code"] for r in _pi_lines(pi)} | (orders.bill_orgs(no for no, _ in lines) - {"-"})
     found = _rule_of_prefix_latest(inc.head)
     if found is None:
-        code, name = _custom_names(pi)
+        code, name = _custom_names(res)
         owner = next(iter(orgs)) if len(orgs) == 1 else None
         rid = _insert_rule(
             cu,

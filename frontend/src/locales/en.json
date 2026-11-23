@@ -544,10 +544,19 @@
       "incPickNext": "Next value",
       "incImpactTitle": "After this PI generates, these PIs will be affected",
       "pickedFill": "Filled from rule {code}; edit it here",
+      "ruleCode": "Rule code",
+      "ruleCodePh": "Blank = 8-char time hash",
+      "baseN": "Base {n}",
+      "listCol": {
+        "code": "Code",
+        "start": "First SN",
+        "max": "Current max SN",
+        "startSample": "No SNs yet: sample from serial 1 (sample length and unit)"
+      },
       "outcome": {
-        "USE": "Will use rule {code}",
-        "ATTACH": "Prefix {prefix} already has rule {code}; a version for this PI will be added under {code}",
-        "NEW": "New prefix {prefix}; saved as a new rule after generation"
+        "USE": "Uses this rule",
+        "ATTACH": "Prefix {prefix} already has this rule; a version for this PI will be added under it",
+        "NEW": "New prefix {prefix}; saved as a new rule with this code after generation"
       },
       "base": "Base",
       "seqLen": "Serial digits",
@@ -1150,7 +1159,7 @@
     "globalReadonly": "Only the system administrator can modify or delete global rules; operators can only use them",
     "editTitle": "Edit rule {code}",
     "filterPi": "Pick PI",
-    "search": "Prefix / code / name / PI",
+    "search": "Prefix / code / PI",
     "colPrefix": "Prefix",
     "seqFormat": "Serial format",
     "seqFormatVal": "Base {base} · {n} digits",
@@ -1227,14 +1236,13 @@
     "maxSeq": "Max serial {n}",
     "hintIN_PLACE": "The current version has never generated SNs: saving edits it in place",
     "hintNEW_VERSION": "The rule has generated SNs: changing length, unit or suffix creates a new current version, used only by PIs that pick it later; PIs that already have their own version keep it",
-    "hintUSED": "The rule has generated SNs: changing only the name keeps the version",
     "resultUPDATED": "Updated in place",
     "resultNEW_VERSION": "New version v{v} created",
     "resultRENAMED": "Renamed",
     "resultRECATEGORIZED": "PI changed",
     "resultUNCHANGED": "Nothing changed",
     "deleteBlocked": "Rules that generated SNs or are assigned to a PI cannot be deleted",
-    "deleteConfirm": "Delete rule {code} ({name}) and all its versions?",
+    "deleteConfirm": "Delete rule {code} and all its versions?",
     "deleted": "Rule {code} deleted"
   },
   "snImport": {

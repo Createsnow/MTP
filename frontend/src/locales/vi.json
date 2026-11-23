@@ -544,10 +544,19 @@
       "incPickNext": "Giá trị kế tiếp",
       "incImpactTitle": "Sau khi PI này tạo số, các PI sau sẽ bị ảnh hưởng",
       "pickedFill": "Đã điền theo quy tắc {code}, có thể sửa tại đây",
+      "ruleCode": "Mã quy tắc",
+      "ruleCodePh": "Để trống = mã băm thời gian 8 ký tự",
+      "baseN": "Cơ số {n}",
+      "listCol": {
+        "code": "Mã",
+        "start": "SN bắt đầu",
+        "max": "SN lớn nhất hiện tại",
+        "startSample": "Chưa tạo số: ví dụ từ số thứ tự 1 (số mét, đơn vị là giá trị ví dụ)"
+      },
       "outcome": {
-        "USE": "Sẽ dùng quy tắc {code}",
-        "ATTACH": "Tiền tố {prefix} đã có quy tắc {code}; sẽ tạo phiên bản cho PI này trong {code}",
-        "NEW": "Tiền tố mới {prefix}; lưu thành quy tắc mới sau khi tạo"
+        "USE": "Dùng quy tắc này",
+        "ATTACH": "Tiền tố {prefix} đã có quy tắc này; sẽ tạo phiên bản cho PI này trong quy tắc đó",
+        "NEW": "Tiền tố mới {prefix}; lưu thành quy tắc mới với mã này sau khi tạo"
       },
       "base": "Cơ số",
       "seqLen": "Số chữ số tuần tự",
@@ -1150,7 +1159,7 @@
     "globalReadonly": "Chỉ quản trị hệ thống mới được sửa, xóa quy tắc dùng chung; nhân viên vận hành chỉ được chọn dùng",
     "editTitle": "Sửa quy tắc {code}",
     "filterPi": "Chọn PI",
-    "search": "Tiền tố / mã / tên / PI",
+    "search": "Tiền tố / mã / PI",
     "colPrefix": "Tiền tố",
     "seqFormat": "Định dạng tuần tự",
     "seqFormatVal": "Hệ {base} · {n} chữ số",
@@ -1227,14 +1236,13 @@
     "maxSeq": "Tuần tự tối đa {n}",
     "hintIN_PLACE": "Phiên bản hiện tại chưa tạo số: lưu sẽ sửa tại chỗ",
     "hintNEW_VERSION": "Quy tắc đã tạo số: đổi chiều dài, đơn vị, hậu tố sẽ tạo phiên bản hiện tại mới, chỉ dùng cho PI chọn sau; PI đã có phiên bản riêng giữ nguyên",
-    "hintUSED": "Quy tắc đã tạo số: chỉ đổi tên thì không tạo phiên bản mới",
     "resultUPDATED": "Đã sửa tại chỗ",
     "resultNEW_VERSION": "Đã tạo phiên bản v{v}",
     "resultRENAMED": "Đã đổi tên",
     "resultRECATEGORIZED": "Đã đổi PI",
     "resultUNCHANGED": "Không có thay đổi",
     "deleteBlocked": "Không thể xóa quy tắc đã tạo số hoặc đã gán cho PI",
-    "deleteConfirm": "Xóa quy tắc {code} ({name}) cùng mọi phiên bản?",
+    "deleteConfirm": "Xóa quy tắc {code} cùng mọi phiên bản?",
     "deleted": "Đã xóa quy tắc {code}"
   },
   "snImport": {

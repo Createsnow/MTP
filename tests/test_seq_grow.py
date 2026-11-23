@@ -48,7 +48,7 @@ def test_grow_crosses_width_and_each_width_is_a_version(w, api, sql):
     w.generate(pi, lines=[(bill, 1)])
     got = sns(sql, pi)
     assert got[:2] == [f"{p}01", f"{p}02"] and got[98:101] == [f"{p}99", f"{p}100", f"{p}101"] and got[-1] == f"{p}120"
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", pi)
     vs = sql.all("SELECT * FROM sn_rule_version WHERE rule_id = %s ORDER BY version", rid)
     assert [(v["version"], v["prefix"], v["seq_len"], v["claimed_pi"], v["used"]) for v in vs] == [
         (1, p, 2, pi, 1),

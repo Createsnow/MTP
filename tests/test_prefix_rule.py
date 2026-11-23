@@ -1,7 +1,9 @@
 """一个前缀一条规则（2026-11-19）：sn_rule.prefix 唯一；自定义规则用已有前缀时归到那个前缀的规则下（米数、单位、后缀
-与规则不同时为本 PI 另出版本，不另建 PI-PI号-n）；页面版本号只按后缀区分；生成过号的规则不能改前缀与流水格式。"""
+与规则不同时为本 PI 另出版本，不另建规则）；页面版本号只按后缀区分；生成过号的规则不能改前缀与流水格式。"""
 
 from __future__ import annotations
+
+import re
 
 from conftest import m, ok, uid
 
@@ -36,7 +38,7 @@ def test_custom_on_existing_prefix_attaches_to_its_rule(w, api, sql):
     ok(w.select(p1, [(b1, 1)], custom=custom(pre)))
     w.generate(p1)
     rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre)
-    assert rid and sql.scalar("SELECT rule_code FROM sn_rule WHERE id = %s", rid) == f"PI-{p1}-1"
+    assert rid and re.fullmatch(r"[0-9A-F]{8}", sql.scalar("SELECT rule_code FROM sn_rule WHERE id = %s", rid))
     r = ok(w.select(p2, [(b2, 1)], custom=custom(pre, with_unit=True)))["rule"]
     assert r["plan"] == "NEW", "格式与规则不同：按自定义登记，生成时归到前缀的规则下"
     w.generate(p2)

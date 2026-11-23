@@ -26,7 +26,11 @@ def test_rule_code_name_and_delete_checks(w, api):
     code = uid("R")
     rid = ok(api.post("/api/rules", {**base, "rule_code": code, "prefix": P()}, w.admin))["rule"]["id"]
     assert api.post("/api/rules", {**base, "rule_code": code, "prefix": P()}, w.admin).code == "RULE_CODE_EXISTS"
-    r = api.post("/api/rules", {**base, "rule_code": uid("R"), "rule_name": " ", "prefix": P()}, w.admin)
+    # 页面只用编码：名称不填时同编码；传了超过 128 字仍报 RULE_NAME_REQUIRED
+    c = uid("R")
+    r = api.post("/api/rules", {**base, "rule_code": c, "rule_name": " ", "prefix": P()}, w.admin)
+    assert ok(r)["rule"]["rule_name"] == c
+    r = api.post("/api/rules", {**base, "rule_code": uid("R"), "rule_name": "x" * 129, "prefix": P()}, w.admin)
     assert r.code == "RULE_NAME_REQUIRED"
     pi = uid("PI")
     ok(w.bind_pi(pi, rid))

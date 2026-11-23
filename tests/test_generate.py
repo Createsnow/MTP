@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from conftest import BILLS, m, mark_bill_stat, ok, q, uid, xlsx_rows
 
 
@@ -11,6 +13,18 @@ def mk(w, *lines, pi=None, org=None, bill=None, customer="C1"):
     bill = bill or uid("MO")
     w.order(bill, org, customer, pi, *lines)
     return org, pi, bill
+
+
+TIME_CODE = re.compile(r"[0-9A-F]{8}")
+
+
+def _pi_rule_id(sql, pi: str) -> int:
+    """本 PI 的自定义规则存入规则库后的规则（存入时分类为本 PI）。"""
+    return sql.scalar("SELECT id FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", pi)
+
+
+def _pi_rule_count(sql, pi: str) -> int:
+    return sql.count("SELECT COUNT(*) FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", pi)
 
 
 def P() -> str:
@@ -292,7 +306,7 @@ def test_other_pi_may_change_prefix(w, sql):
     assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s", p2).startswith(newp)
     v = sql.one("SELECT * FROM sn_rule_version WHERE prefix = %s", newp)
     assert v["claimed_pi"] == p2 and v["rule_id"] != rid
-    assert sql.scalar("SELECT rule_code FROM sn_rule WHERE prefix = %s", newp) == f"PI-{p2}-1"
+    assert TIME_CODE.fullmatch(sql.scalar("SELECT rule_code FROM sn_rule WHERE prefix = %s", newp)), "默认 8 位时间哈希"
 
 
 def test_lines_with_different_rules_share_one_serial(w, sql):
@@ -317,14 +331,14 @@ def test_custom_rule_saved_only_after_success(w, sql):
     assert sql.count("SELECT COUNT(*) FROM sn_rule") == 0, "生成前不留规则"
     w.generate(pi)
     r = sql.one("SELECT * FROM sn_rule")
-    assert r["rule_name"] == f"{pi}_v1" and r["rule_code"] == f"PI-{pi}-1"
+    assert TIME_CODE.fullmatch(r["rule_code"]) and r["rule_name"] == r["rule_code"], "编码默认 8 位时间哈希，名称同编码"
     assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec LIMIT 1", pi) == f"{p}00000110.50"
     assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) == r["id"], "PI 登记改记为存入的规则"
 
 
-def test_custom_rule_names_follow_code_number(w, sql):
-    """自定义规则存入规则库：编码 PI-PI号-n，名称 PI号_vn。一个前缀一条规则：同前缀、改了后缀的自定义规则
-    归到这条规则下另出版本（作用于整张 PI，之后生成的号用它），不另建 PI-PI号-2。"""
+def test_custom_rule_one_rule_per_prefix(w, sql):
+    """自定义规则存入规则库：编码默认 8 位时间哈希，名称同编码。一个前缀一条规则：同前缀、改了后缀的自定义规则
+    归到这条规则下另出版本（作用于整张 PI，之后生成的号用它），不另建规则。"""
     org, pi, bill = mk(w, ("M1", 3), ("M2", 3))
     pre = P()
     ok(w.select(pi, [(bill, 1)], custom=m(prefix=pre, base=10, seq_len=6, with_length=True)))
@@ -332,10 +346,65 @@ def test_custom_rule_names_follow_code_number(w, sql):
     ok(w.select(pi, [(bill, 2)], custom=m(prefix=pre, base=10, seq_len=6, with_length=True, suffix="B")))
     w.generate(pi, lines=[(bill, 2)])
     rows = sql.all("SELECT id, rule_code, rule_name FROM sn_rule ORDER BY rule_code")
-    assert [(r["rule_code"], r["rule_name"]) for r in rows] == [(f"PI-{pi}-1", f"{pi}_v1")]
+    assert len(rows) == 1 and TIME_CODE.fullmatch(rows[0]["rule_code"]) and rows[0]["rule_name"] == rows[0]["rule_code"]
     vs = sql.all("SELECT suffix, claimed_pi FROM sn_rule_version WHERE rule_id = %s ORDER BY id", rows[0]["id"])
     assert [(v["suffix"], v["claimed_pi"]) for v in vs] == [("", pi), ("B", pi)]
     assert sql.scalar("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec DESC LIMIT 1", pi).endswith("B")
+
+
+def test_custom_rule_code_given_or_time_hash(w, api, sql):
+    """生成页填的规则编码：选规则时登记在 PI 上（生成页带出），生成成功后按它存入规则库（名称同编码）；
+    与已有编码相同时不拦截，自动加 -v1、-v2；格式不符报 RULE_CODE_INVALID。"""
+    code = "RC_" + uid("").replace("-", "")[-8:]
+    _, pa, ba = mk(w, ("M1", 2))
+    ok(w.select(pa, [(ba, 1)], custom=m(prefix=P(), base=10, seq_len=4, with_length=False, rule_code=code)))
+    ctx = ok(api.get(f"/api/generate/context?pi={pa}", w.admin))
+    assert ctx["rule_prefix"]["rule_code"] == code, "生成前登记在 PI 上，打开弹窗时带出"
+    w.generate(pa)
+    r = sql.one("SELECT rule_code, rule_name FROM sn_rule WHERE id = %s", _pi_rule_id(sql, pa))
+    assert (r["rule_code"], r["rule_name"]) == (code, code)
+    assert ok(api.get(f"/api/generate/context?pi={pa}", w.admin))["rule_prefix"]["rule_code"] is None
+    # 别的 PI 新前缀填了同一个编码：不拦截，存入时依次自动加 -v1、-v2
+    for n in (1, 2):
+        _, pb, bb = mk(w, ("M1", 1))
+        ok(w.select(pb, [(bb, 1)], custom=m(prefix=P(), base=10, seq_len=4, with_length=False, rule_code=code)))
+        w.generate(pb)
+        assert sql.scalar("SELECT rule_code FROM sn_rule WHERE id = %s", _pi_rule_id(sql, pb)) == f"{code}-v{n}"
+    # 格式不符
+    _, pc, bc = mk(w, ("M1", 1))
+    bad = m(prefix=P(), base=10, seq_len=4, with_length=False, rule_code="规则 1")
+    assert w.select(pc, [(bc, 1)], custom=bad).code == "RULE_CODE_INVALID"
+
+
+def test_rule_options_start_and_max_sn(w, api):
+    """生成页规则库每条列开始 SN、当前最大 SN：还没生成过号时开始 SN 为从流水 1 起的示例、最大 SN 为空；
+    生成后为号池里这个前缀下流水最小、最大的号。"""
+    _, pi, _ = mk(w, ("M1", 3))
+    p = P()
+    rid = w.rule(p, seq_len=4, with_length=False, suffix="X")
+
+    def opt():
+        return next(x for x in ok(api.get(f"/api/rules/options?pi={pi}", w.admin)).body if x["rule_id"] == rid)
+
+    o = opt()
+    assert (o["start_sn"], o["start_sample"], o["max_sn"]) == (f"{p}0001X", True, None)
+    assert (o["prefix"], o["custom"]["base"], o["custom"]["suffix"]) == (p, 10, "X")
+    ok(w.bind_pi(pi, rid))
+    w.generate(pi)
+    o = opt()
+    assert (o["start_sn"], o["start_sample"], o["max_sn"]) == (f"{p}0001X", False, f"{p}0003X")
+
+
+def test_rule_library_code_only(w, api, sql):
+    """规则库页面只用编码：新建不填名称时名称同编码；修改不传名称时名称不变。"""
+    code = uid("R")
+    r = ok(api.post("/api/rules", m(rule_code=code, prefix=P(), base=10, seq_len=4, with_length=False), w.admin))
+    rid = r["rule"]["id"]
+    assert sql.scalar("SELECT rule_name FROM sn_rule WHERE id = %s", rid) == code
+    cur = sql.one("SELECT prefix FROM sn_rule_version WHERE rule_id = %s", rid)
+    body = m(prefix=cur["prefix"], base=10, seq_len=4, with_length=False, suffix="Z")
+    assert ok(api.put(f"/api/rules/{rid}", body, w.admin))["action"] == "UPDATED"
+    assert sql.scalar("SELECT rule_name FROM sn_rule WHERE id = %s", rid) == code
 
 
 def test_custom_rule_shared_by_lines_generated_separately(w, sql):
@@ -344,11 +413,11 @@ def test_custom_rule_shared_by_lines_generated_separately(w, sql):
     p = P()
     ok(w.select(pi, [(bill, 1), (bill, 2)], custom=m(prefix=p, base=10, seq_len=6, with_length=False)))
     w.generate(pi, lines=[(bill, 1)])
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
+    rid = _pi_rule_id(sql, pi)
     row = sql.one("SELECT rule_id, custom_json FROM sn_pi_rule WHERE pi_no = %s", pi)
     assert (row["rule_id"], row["custom_json"]) == (rid, None)
     w.generate(pi, lines=[(bill, 2)])
-    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
+    assert _pi_rule_count(sql, pi) == 1
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert sns == [f"{p}{i:06d}" for i in range(1, 6)]
 
@@ -386,10 +455,10 @@ def test_pi_bills_share_first_bill_prefix(w, api, sql):
     # 同一 PI 换流水位数：同一前缀下进制、位数、字符表锁定
     assert w.select(pi, [(second, 1)], custom={**c, "seq_len": 5}).code == "RULE_PREFIX_FORMAT_LOCKED"
     ok(w.select(pi, [(second, 1)], custom=ctx["rule_prefix"]["custom"]))
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
+    rid = _pi_rule_id(sql, pi)
     assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) == rid
     w.generate(pi, lines=[(second, 1)])
-    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
+    assert _pi_rule_count(sql, pi) == 1
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert sns == [f"{prefix}{i:04d}" for i in range(1, 6)]
     # 别的 PI 用这个前缀：同格式可共用，换位数报格式锁定
@@ -513,8 +582,8 @@ def test_custom_rule_seq_start(w, api, sql):
     w.generate(pi)
     sns = [r["sn"] for r in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert sns == [f"{p}{i:04d}" for i in range(101, 106)]
-    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
+    assert _pi_rule_count(sql, pi) == 1
+    rid = _pi_rule_id(sql, pi)
     row = sql.one("SELECT rule_id, custom_json, seq_start FROM sn_pi_rule WHERE pi_no = %s", pi)
     assert (row["rule_id"], row["custom_json"], row["seq_start"]) == (rid, None, None)
     g = ok(api.get(f"/api/generate/gaps?pi={pi}", w.admin))
@@ -550,7 +619,7 @@ def test_custom_rule_seq_start_with_range_and_used_prefix(w, api, sql):
         [],
         [(3, 49)],
     )
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1")
+    rid = _pi_rule_id(sql, pi)
     # 已用前缀、起始号大于接续的下一个号（52）：沿用那条规则，起始号登记在 PI 上
     ok(w.select(pi, [(bill, 2)], custom={**c, "seq_start": 500}))
     row = sql.one("SELECT rule_id, seq_start FROM sn_pi_rule WHERE pi_no = %s", pi)
@@ -561,7 +630,7 @@ def test_custom_rule_seq_start_with_range_and_used_prefix(w, api, sql):
     w.generate(pi, lines=[(bill, 2)])
     seqs = [r["seq_dec"] for r in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", pi)]
     assert seqs == [1, 2, 50, 51, 500, 501]
-    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 1, "不另建规则"
+    assert _pi_rule_count(sql, pi) == 1, "不另建规则"
     assert sql.scalar("SELECT seq_start FROM sn_pi_rule WHERE pi_no = %s", pi) is None, "起始号只管这一次生成"
     gaps = ok(api.get(f"/api/generate/gaps?pi={pi}", w.admin))
     assert [(g["start_seq"], g["end_seq"]) for g in gaps["segments"]] == [(3, 49), (52, 499)]

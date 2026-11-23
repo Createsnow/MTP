@@ -66,9 +66,9 @@ def test_select_applies_to_whole_pi_and_prefix_locks(w, api, sql):
     res = w.select(pi, [(b1, 1)], rule_id=rid)
     assert res.code == "RULE_PI_PREFIX_LOCKED", str(res)
     assert w.bind_pi(pi, rid).code == "RULE_PI_PREFIX_LOCKED"
-    assert reg(sql, pi)["rule_id"] == sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{pi}-1"), (
-        "没有改动"
-    )
+    assert reg(sql, pi)["rule_id"] == sql.scalar(
+        "SELECT id FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", pi
+    ), "没有改动"
     # 同前缀（改后缀）可以：另成一条规则，同一前缀
     c = {"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}
     ok(w.select(pi, [(b1, 1)], custom={**c, "suffix": "Z"}))
@@ -95,7 +95,7 @@ def test_generation_blocked_when_rule_prefix_differs_from_pi(w, api, sql):
 
 
 def test_custom_rule_reuses_same_format_rule_and_continues_serials(w, api, sql):
-    """自定义规则与规则库里前缀、格式完全相同的规则：归到那条规则下（不另建 PI-PI号-n），别的 PI 已用时共用前缀，
+    """自定义规则与规则库里前缀、格式完全相同的规则：归到那条规则下（不另建规则），别的 PI 已用时共用前缀，
     流水接在前缀最大号之后；上限自动突破按前缀（默认开启）。"""
     org = w.org(uid("O")[:10])
     _, p1, b1 = mk(w, ("M1", 5), org=org)
@@ -104,7 +104,7 @@ def test_custom_rule_reuses_same_format_rule_and_continues_serials(w, api, sql):
     c = {"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}
     ok(w.select(p1, [(b1, 1)], custom=c))
     w.generate(p1)
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{p1}-1")
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", p1)
     r = ok(w.select(p2, [(b2, 1)], custom={**c, "seq_grow": True}))["rule"]
     assert (r["rule_id"], r["plan"], r["seq_grow"]) == (rid, "SHARE", True)
     assert (reg(sql, p2)["rule_id"], reg(sql, p2)["custom_json"]) == (rid, None)
@@ -112,7 +112,9 @@ def test_custom_rule_reuses_same_format_rule_and_continues_serials(w, api, sql):
     assert [x["sn"] for x in sql.all("SELECT sn FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", p2)] == [
         f"{pre}{i:04d}" for i in (6, 7, 8)
     ]
-    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{p2}-%") == 0, "不另建规则"
+    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", p2) == 0, (
+        "不另建规则"
+    )
     # 规则库：一个前缀一组，一条规则，两张 PI 都在
     g = group(api, w, pre)
     assert [x["rule"]["id"] for x in g["rules"]] == [rid]
@@ -136,8 +138,8 @@ def test_custom_rule_selected_before_other_pi_generates_is_merged_at_generation(
     ok(w.select(p2, [(b2, 1)], custom=c))
     w.generate(p1)
     w.generate(p2)
-    rid = sql.scalar("SELECT id FROM sn_rule WHERE rule_code = %s", f"PI-{p1}-1")
-    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{p2}-%") == 0
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", p1)
+    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", p2) == 0
     assert reg(sql, p2)["rule_id"] == rid
     got = [x["seq_dec"] for x in sql.all("SELECT seq_dec FROM sn_item WHERE pi_no = %s ORDER BY seq_dec", p2)]
     assert got == [3, 4]

@@ -16,15 +16,28 @@
     <template v-if="mode === 'LIBRARY'">
       <el-input v-model="kw" clearable prefix-icon="Search" class="mb" />
       <!-- 一个前缀一条规则：点选即选前缀，按本 PI 用它时的配置填进「自定义」，在那里改。
-           每条列「规则编码 v版本」（本 PI 用的版本，版本号只按后缀区分）、格式与本 PI 用它时的处理（共用前缀等） -->
+           每条一行：编码 ｜ 前缀 ｜ 进制 ｜ 后缀 ｜ 开始 SN ｜ 当前最大 SN（按本 PI 用它时的版本；还没生成过号时开始 SN
+           为从流水 1 起的示例、置灰），行尾为本 PI 用它时的处理（推荐、共用前缀、识别码） -->
       <div class="rule-list">
+        <div class="it hd">
+          <span />
+          <span>{{ t("generate.rule.listCol.code") }}</span>
+          <span>{{ t("generate.rule.sec.PRE") }}</span>
+          <span>{{ t("generate.rule.base") }}</span>
+          <span>{{ t("generate.rule.sec.SUF") }}</span>
+          <span>{{ t("generate.rule.listCol.start") }}</span>
+          <span>{{ t("generate.rule.listCol.max") }}</span>
+          <span />
+        </div>
         <div v-for="o in filtered" :key="o.rule_id" class="it" :class="{ on: picked?.rule_id === o.rule_id }" tabindex="0"
           @click="pick(o)" @keyup.enter="pick(o)">
           <span class="radio" />
-          <span class="nm">
-            <b>{{ optionTitle(o) }}</b>
-            <span v-if="o.format" class="fm">{{ o.format }}</span>
-          </span>
+          <b class="c sn-mono" :title="o.rule_code">{{ o.rule_code }}</b>
+          <span class="c sn-mono" :title="o.inc?.prefix || o.prefix">{{ o.inc?.prefix || o.prefix }}</span>
+          <span class="c">{{ o.custom?.base ? t("generate.rule.baseN", { n: o.custom.base }) : "—" }}</span>
+          <span class="c sn-mono" :title="o.custom?.suffix">{{ o.custom?.suffix || "—" }}</span>
+          <span class="c sn-mono" :class="{ sample: o.start_sample }" :title="o.start_sample ? t('generate.rule.listCol.startSample') : o.start_sn">{{ o.start_sn || "—" }}</span>
+          <span class="c sn-mono" :title="o.max_sn">{{ o.max_sn || "—" }}</span>
           <span class="tags">
             <el-tag v-if="o.recommended" size="small" type="success">{{ t("generate.rule.recommended") }}</el-tag>
             <el-tag v-if="o.plan" size="small" type="info">{{ t(`generate.plan.${o.plan}`) }}</el-tag>
@@ -42,9 +55,15 @@
          左侧组件库添加到前缀或后缀，右侧组件清单按三段逐行改参数、上移 / 下移（越过流水即换段）、删除。
          弹窗只放控件与数据，不放说明文字 -->
     <div v-else class="parts-box">
-      <!-- 结果提示：来自哪条规则；改了以后按前缀归到哪条规则下（一个前缀一条规则） -->
-      <div v-if="outcome" class="outcome">
-        <el-tag size="small" :type="outcome.kind === 'NEW' ? 'warning' : 'success'">{{ t(`generate.rule.outcome.${outcome.kind}`, outcome) }}</el-tag>
+      <!-- 规则编码：新前缀时可改（默认 8 位时间哈希，留空也按时间哈希，不校验是否与已有编码相同），生成成功后按它存入
+           规则库；前缀已有规则时为那条规则的编码（一个前缀一条规则），只读。后面是结果提示与来自哪条规则 -->
+      <div class="outcome">
+        <span class="lb">{{ t("generate.rule.ruleCode") }}</span>
+        <el-input v-if="codeEditable" v-model.trim="ruleCode" :maxlength="64" size="small" class="w200 mono-in" clearable
+          :placeholder="t('generate.rule.ruleCodePh')" />
+        <el-input v-else :model-value="outcome?.code" size="small" class="w200 mono-in" disabled />
+        <span v-if="codeError" class="err">{{ codeError }}</span>
+        <el-tag v-if="outcome" size="small" :type="outcome.kind === 'NEW' ? 'warning' : 'success'">{{ t(`generate.rule.outcome.${outcome.kind}`, outcome) }}</el-tag>
         <span v-if="fromRule" class="muted">{{ t("generate.rule.fromRule", { code: fromRule.rule_code }) }}</span>
       </div>
       <div class="tpls">
@@ -266,7 +285,7 @@ import type { CustomRule, OrderLine } from "@/types/api";
 /** ctx.rule_prefix（见 rules.pi_prefix）：custom = 本 PI 已生成的号还在时所用前缀的格式，prefix 为这个前缀；
  *  还没有生成的号（或已全部删掉）时 custom 为 null，prefix 为 PI 第一张单据编码后 7 位（没有点选的单据时才用）。 */
 /** 本 PI 规则登记（rules.pi_prefix）：registered 已登记；seq_grow 为前缀的自动突破开关 */
-type RulePrefix = { prefix: string; custom: CustomRule | null; seq_grow?: boolean; registered?: boolean };
+type RulePrefix = { prefix: string; custom: CustomRule | null; seq_grow?: boolean; registered?: boolean; rule_code?: string | null };
 /** SN 组成的一个组件（见 snParts.js） */
 type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
@@ -293,6 +312,18 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void; (e: "saved"): void }>();
 const { t } = useI18n();
+/** 规则编码格式：1–64 位字母、数字、_ 或 -（同后台） */
+const RULE_CODE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** 默认规则编码：8 位时间哈希（当前时间的 FNV-1a 32 位哈希，大写十六进制） */
+function timeCode() {
+  const text = `${Date.now()}-${performance.now()}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).toUpperCase().padStart(8, "0");
+}
 const { offset } = useTime();
 
 /** 常用格式（顺序即按钮顺序） */
@@ -311,6 +342,8 @@ const kw = ref("");
 const picked = ref<any>(null);
 /** 从规则库点选、填进「自定义」的规则（选项，见 rules.options）；没点选为 null */
 const fromRule = ref<any>(null);
+/** 规则编码（自定义规则存入规则库时用）：打开时带出登记时填的，没有为 8 位时间哈希 */
+const ruleCode = ref("");
 /** 识别码适用客户（页面上的清单）与改选的已释放号段（值；null = 取下一个值） */
 const incCustomers = ref<string[]>([]);
 const incPick = ref<number | null>(null);
@@ -497,8 +530,6 @@ function resetParts() {
   undoable(t("generate.rule.resetDone"), () => setParts(prev));
 }
 
-/** 规则选择列「规则编码 v版本」 */
-const optionTitle = (o: any) => (o.version ? `${o.rule_code} v${o.version}` : o.rule_code);
 const filtered = computed(() => {
   const k = kw.value.trim().toLowerCase();
   if (!k) return props.options;
@@ -556,10 +587,18 @@ const outcome = computed(() => {
   if (r) return { kind: "ATTACH", code: r.rule_code, prefix: built.value.spec.prefix };
   return { kind: "NEW", prefix: built.value.spec.prefix };
 });
+/** 规则编码可改：前缀是新的（生成成功后新建规则）；前缀已有规则时用那条规则的编码 */
+const codeEditable = computed(() => !outcome.value || outcome.value.kind === "NEW");
+/** 规则编码格式（同后台 RULE_CODE_INVALID）；留空按时间哈希，不校验是否与已有编码相同 */
+const codeError = computed(() =>
+  codeEditable.value && ruleCode.value && !RULE_CODE_RE.test(ruleCode.value)
+    ? translateApiError({ code: "RULE_CODE_INVALID", params: {} }, "")
+    : "",
+);
 const canSave = computed(() => {
   if (!props.lines.length || mode.value !== "CUSTOM") return false;
   if (unchanged.value) return !fromRule.value.inc_error;
-  return !built.value.errors.length && !!built.value.spec.prefix && !sample.error;
+  return !built.value.errors.length && !!built.value.spec.prefix && !sample.error && !codeError.value;
 });
 
 /** 打开即在自定义页签：前缀为默认前缀；其他组件按本 PI 已用这个前缀的格式（保存时沿用那一版），
@@ -577,6 +616,7 @@ function onOpen() {
   // 起始号带出所选物料行已存的：新前缀的自定义规则，或沿用本 PI 已用前缀时另记的（还没生成过）
   const own = props.rulePrefix?.custom ? cur?.prefix === props.rulePrefix.prefix : cur?.mode === "CUSTOM";
   const start = own ? cur?.seq_start ?? null : null;
+  ruleCode.value = props.rulePrefix?.rule_code || (own && cur?.mode === "CUSTOM" ? cur?.custom?.rule_code : "") || timeCode();
   // 上限自动突破按前缀：本 PI 已登记时为前缀的开关，否则默认开启
   const grow = props.rulePrefix?.registered ? props.rulePrefix.seq_grow ?? true : own ? cur?.seq_grow ?? true : true;
   parts.value = base ? fromSpec({ ...base, seq_start: start, seq_grow: grow }, defaultHead()) : defaultParts(grow);
@@ -731,7 +771,8 @@ async function save() {
     } else {
       // 请求体：prefix、base、seq_len、with_length、length_pad、sep_before、sep_after、with_unit、suffix、seq_start，
       // 另带 seq_grow（上限自动突破，后台不传按关闭）
-      body.custom = { ...fullSpec.value, seq_start: seqStart() };
+      // rule_code：新前缀时带上（生成成功后按它存入规则库；留空后台按时间哈希）
+      body.custom = { ...fullSpec.value, seq_start: seqStart(), ...(outcome.value?.kind === "NEW" && ruleCode.value ? { rule_code: ruleCode.value } : {}) };
     }
     // 一个 PI 只有一个规则：后台按整张 PI 保存，返回作用的物料行数
     const r: any = await api.selectLineRule(body);
@@ -768,16 +809,18 @@ async function save() {
 .sw.c-INC { background: var(--el-color-success-light-9); border-color: var(--el-color-success); }
 /* 规则库 */
 .rule-list { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; max-height: 360px; overflow: auto; }
-.rule-list .it { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--el-border-color-lighter); outline: none; }
+.rule-list .it { display: grid; grid-template-columns: 16px minmax(0, 1.1fr) minmax(0, 0.9fr) 72px minmax(0, 0.7fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 200px; gap: 10px; align-items: center; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--el-border-color-lighter); outline: none; }
 .rule-list .it:last-child { border-bottom: none; }
 .rule-list .it:hover, .rule-list .it:focus-visible { background: var(--el-fill-color-light); }
+.rule-list .it.hd:hover { background: var(--el-fill-color-lighter); }
 .rule-list .it.on { background: var(--el-color-primary-light-9); }
 .rule-list .radio { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--el-border-color-darker); box-sizing: border-box; }
 .rule-list .it.on .radio { border: 4px solid var(--el-color-primary); }
-.rule-list .nm { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rule-list .nm b { font-weight: 500; white-space: nowrap; }
-.rule-list .fm { font-size: 12px; color: var(--el-text-color-regular); word-break: break-all; }
-.rule-list .tags { display: flex; gap: 6px; }
+.rule-list .it.hd { position: sticky; top: 0; z-index: 1; cursor: default; padding-top: 6px; padding-bottom: 6px; font-size: 12px; color: var(--el-text-color-secondary); background: var(--el-fill-color-lighter); }
+.rule-list .c { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.rule-list b.c { font-weight: 500; }
+.rule-list .c.sample { color: var(--el-text-color-placeholder); }
+.rule-list .tags { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .rule-list .empty { padding: 20px; text-align: center; color: var(--app-muted); }
 .parts-box { display: flex; flex-direction: column; gap: 12px; }
 /* 常用格式 */

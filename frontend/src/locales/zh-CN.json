@@ -544,10 +544,19 @@
       "incPickNext": "取下一个值",
       "incImpactTitle": "本 PI 生成成功后，以下 PI 会受影响",
       "pickedFill": "已按规则 {code} 填入，可在此修改",
+      "ruleCode": "规则编码",
+      "ruleCodePh": "留空按 8 位时间哈希",
+      "baseN": "{n} 进制",
+      "listCol": {
+        "code": "编码",
+        "start": "开始 SN",
+        "max": "当前最大 SN",
+        "startSample": "还没生成过号：从流水 1 起的示例（米数、单位为示例值）"
+      },
       "outcome": {
-        "USE": "将用规则 {code}",
-        "ATTACH": "前缀 {prefix} 已有规则 {code}，将在 {code} 下为本 PI 另出版本",
-        "NEW": "新前缀 {prefix}，生成后存为新规则"
+        "USE": "沿用这条规则",
+        "ATTACH": "前缀 {prefix} 已有这条规则，将在它下面为本 PI 另出版本",
+        "NEW": "新前缀 {prefix}，生成后按这个编码存为新规则"
       },
       "base": "进制",
       "seqLen": "流水位数",
@@ -1150,7 +1159,7 @@
     "globalReadonly": "全局规则只有系统管理员能修改、删除，普通操作员只能选用",
     "editTitle": "修改规则 {code}",
     "filterPi": "选择 PI",
-    "search": "前缀 / 规则编码 / 名称 / PI",
+    "search": "前缀 / 规则编码 / PI",
     "colPrefix": "前缀",
     "seqFormat": "流水格式",
     "seqFormatVal": "{base} 进制 · {n} 位",
@@ -1227,14 +1236,13 @@
     "maxSeq": "最大流水 {n}",
     "hintIN_PLACE": "当前版本从没生成过号：保存后就地修改",
     "hintNEW_VERSION": "规则已生成过号：改米数、单位、后缀会另出一版作为当前版本，只用于之后新选它的 PI；已有自己版本的 PI 不变",
-    "hintUSED": "规则已生成过号：只改名称不另出版本",
     "resultUPDATED": "已就地修改",
     "resultNEW_VERSION": "已另出版本 v{v}",
     "resultRENAMED": "已改名",
     "resultRECATEGORIZED": "已改 PI",
     "resultUNCHANGED": "没有改动",
     "deleteBlocked": "生成过号或已指定给 PI 的规则不能删除",
-    "deleteConfirm": "删除规则 {code}（{name}）及其全部版本？",
+    "deleteConfirm": "删除规则 {code} 及其全部版本？",
     "deleted": "规则 {code} 已删除"
   },
   "snImport": {

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import re
+
 from conftest import MES, m, ok, uid
 
 
@@ -204,7 +206,7 @@ def test_inc_rule_library_readonly_and_mes_fields(w, api, sql):
     cur = sql.one("SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = 1", rid)
     same = m(rule_name="改名", prefix=cur["prefix"], base=10, seq_len=4, with_length=False, suffix="")
     assert ok(api.put(f"/api/rules/{rid}", same, w.admin))["action"] == "RENAMED"
-    assert rule["rule_code"].startswith("PI-")
+    assert re.fullmatch(r"[0-9A-F]{8}", rule["rule_code"]), "自定义规则编码默认 8 位时间哈希"
     g = next(x for x in ok(api.get(f"/api/rules/prefixes?q={head}", w.admin)).body if x["prefix"] == head)
     assert g["inc"]["customers"] == [cust]
     assert [(v["text"], v["pi_no"]) for v in g["inc"]["values"]] == [("0", p1), ("1", p2)]

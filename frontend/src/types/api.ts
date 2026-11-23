@@ -120,6 +120,8 @@ export interface CustomRule {
   inc_end?: number;
   inc_tail?: string;
   inc_value?: number | null;
+  /** 规则编码（选填）：前缀是新的、生成成功存入规则库时用它；不填按 8 位时间哈希，与已有编码相同时自动加 -v1、-v2… */
+  rule_code?: string;
 }
 
 export interface BillState {
