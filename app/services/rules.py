@@ -1546,6 +1546,8 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
             )
         out.sort(key=lambda x: (x["min_seq"] == 0, x["min_seq"], x["pi_no"]))
     return {
+        # 各规则在这个前缀下的开始 SN、当前最大 SN（见 _rule_sn_range）
+        "rule_sns": _rule_sn_range(every, items, "sn2" if role == SLOT2 else "sn"),
         "prefix": prefix,
         "base": spec.base,
         "seq_len": spec.seq_len,
@@ -1558,6 +1560,53 @@ def prefix_usage(prefix_in: str | None, facs: tuple[str, ...] | None = None) -> 
         "inc": _inc_json(inc_of(base), None) if col == "inc_head" else None,
         "role": role,
     }
+
+
+def _rule_sn_range(every: list[dict], items: str, col: str) -> list[dict]:
+    """前缀详情里各规则的开始 SN、当前最大 SN：号池里挂在这条规则（这个前缀上的各版本）上的号，流水最小、最大的
+    那两枚。还没有号时 max_sn 为空，start_sn 为按规则在这个前缀上最新的版本从流水 1 起的示例号（米数、单位用示例值），
+    start_sample 为 True。只查当前这一个前缀（按前缀 + 流水的索引）。"""
+    by_rule: dict[int, list[dict]] = {}
+    for v in every:
+        by_rule.setdefault(v["rule_id"], []).append(v)
+    got: dict[int, list] = {}
+    prefixes = sorted({v["prefix"] for v in every})
+    if prefixes:
+        rows = db.all(
+            f"SELECT rule_version_id vid, seq_prefix, MIN(seq_dec) lo, MAX(seq_dec) hi FROM {items} "
+            f"WHERE seq_prefix IN ({marks(len(prefixes))}) AND rule_version_id IN ({marks(len(every))}) "
+            "GROUP BY rule_version_id, seq_prefix",
+            *prefixes,
+            *[v["id"] for v in every],
+        )
+        rid_of = {v["id"]: v["rule_id"] for v in every}
+        for r in rows:
+            cur = got.setdefault(rid_of[r["vid"]], [None, None])
+            if cur[0] is None or r["lo"] < cur[0][1]:
+                cur[0] = (r["seq_prefix"], int(r["lo"]))
+            if cur[1] is None or r["hi"] > cur[1][1]:
+                cur[1] = (r["seq_prefix"], int(r["hi"]))
+    keys = sorted({k for lo_hi in got.values() for k in lo_hi})
+    sns: dict[tuple[str, int], str] = {}
+    if keys:
+        cond = " OR ".join(["(seq_prefix = %s AND seq_dec = %s)"] * len(keys))
+        for r in db.all(
+            f"SELECT seq_prefix, seq_dec, {col} AS sn FROM {items} WHERE {cond}", *[x for k in keys for x in k]
+        ):
+            sns[(r["seq_prefix"], int(r["seq_dec"]))] = r["sn"]
+    out = []
+    for rid, vs in by_rule.items():
+        lo, hi = got.get(rid, (None, None))
+        start = sns.get(lo) if lo else None
+        sample = start is None
+        if sample:
+            v = max(_base_versions(vs) or vs, key=lambda x: x["id"])
+            try:
+                start = codec.format_sn(1, spec_of(v), SAMPLE_LENGTH, SAMPLE_UNIT)
+            except (codec.SeqOverflow, ValueError):
+                start = None
+        out.append({"rule_id": rid, "start_sn": start, "start_sample": sample, "max_sn": sns.get(hi) if hi else None})
+    return out
 
 
 def get_rule(rule_id: int | None, lock: bool = False) -> dict:

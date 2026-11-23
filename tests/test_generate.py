@@ -395,6 +395,22 @@ def test_rule_options_start_and_max_sn(w, api):
     assert (o["start_sn"], o["start_sample"], o["max_sn"]) == (f"{p}0001X", False, f"{p}0003X")
 
 
+def test_prefix_usage_rule_start_and_max_sn(w, api):
+    """规则库页面前缀详情：各规则的开始 SN、当前最大 SN（还没生成过号时开始 SN 为示例、最大 SN 为空）。"""
+    _, pi, _ = mk(w, ("M1", 4))
+    p = P()
+    rid = w.rule(p, base=16, seq_len=4, with_length=False, suffix="-Q")
+
+    def rs():
+        u = ok(api.get(f"/api/rules/prefixes/usage?prefix={p}", w.admin))
+        return next(x for x in u["rule_sns"] if x["rule_id"] == rid)
+
+    assert (rs()["start_sn"], rs()["start_sample"], rs()["max_sn"]) == (f"{p}0001-Q", True, None)
+    ok(w.bind_pi(pi, rid))
+    w.generate(pi)
+    assert (rs()["start_sn"], rs()["start_sample"], rs()["max_sn"]) == (f"{p}0001-Q", False, f"{p}0004-Q")
+
+
 def test_rule_library_code_only(w, api, sql):
     """规则库页面只用编码：新建不填名称时名称同编码；修改不传名称时名称不变。"""
     code = uid("R")

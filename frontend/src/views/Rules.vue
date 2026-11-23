@@ -15,21 +15,14 @@
           <el-segmented v-model="usedFilter" :options="usedOptions" size="default" />
         </div>
         <div v-loading="loading" class="plist">
-          <div v-for="g in paged" :key="g.prefix" class="pitem" :class="{ on: cur?.prefix === g.prefix }" @click="pick(g)">
-            <div class="pitem-top">
-              <b class="sn-mono pfx">{{ g.prefix }}</b>
-              <!-- 前缀用途：第二 SN 用的前缀标出（一个前缀只能当第一 SN 或第二 SN 中的一种） -->
-              <el-tag v-if="g.role === 2" size="small" type="warning" effect="plain">{{ t("rules.roleSecond") }}</el-tag>
-              <span class="dot" :class="g.used ? 'ok' : ''">{{ g.used ? t("rules.used") : t("rules.unused") }}</span>
-            </div>
-            <div class="pitem-meta">
-              <span>{{ t("rules.seqFormatVal", { base: g.base, n: g.seq_len }) }}</span>
-              <span class="sep">·</span><span>{{ t("rules.ruleCountVal", { n: g.rules.length }) }}</span>
-              <span class="sep">·</span><span>{{ t("rules.piCountVal", { n: groupPis(g).length }) }}</span>
-            </div>
-            <!-- 自增前缀：范围与锁定的客户（各 PI 一个号段：前缀 + 自增值） -->
-            <div v-if="g.inc" class="pitem-inc">{{ incTagText(g.inc) }}</div>
-            <div class="pitem-org">{{ orgText(g) }}</div>
+          <!-- 一个前缀一行：前缀（粗体）+ 灰色「规则编码 · 被 N 个 PI 使用」+ 绿色「第一 SN / 第二 SN」 -->
+          <div v-for="g in paged" :key="g.prefix" class="pitem" :class="{ on: cur?.prefix === g.prefix }" tabindex="0"
+            @click="pick(g)" @keyup.enter="pick(g)">
+            <b class="sn-mono pfx" :title="g.prefix">{{ g.prefix }}</b>
+            <span class="meta" :title="ruleCodes(g)">
+              <span class="sn-mono">{{ ruleCodes(g) }}</span> · {{ t("rules.usedByPis", { n: groupPis(g).length }) }}
+            </span>
+            <span class="slot">{{ g.role === 2 ? t("rules.slotSecond") : t("rules.slotFirst") }}</span>
           </div>
           <el-empty v-if="!loading && !shown.length" :image-size="72" :description="t('common.empty')" />
         </div>
@@ -86,7 +79,7 @@
                 </div>
               </div>
               <div class="samples">
-                <span v-for="x in detail.items" :key="x.seq_dec" class="sn-mono chip" :class="{ max: x.max }">{{ x.sn }}</span>
+                <span v-for="x in detail.items" :key="x.seq_dec" class="sn-mono chip">{{ x.sn }}</span>
                 <HelpTip :content="t('rules.detailNote')" />
               </div>
             </template>
@@ -95,20 +88,34 @@
 
           <div class="sec">{{ t("rules.rulesTitle") }}</div>
           <el-table :data="cur.rules" size="small" :row-key="(x: any) => x.rule.id">
-            <!-- 只用规则编码（唯一、建好后不能改，生成页与「使用的 PI」都按编码），不再有名称 -->
-            <el-table-column :label="t('rules.code')" min-width="140">
-              <template #default="{ row }"><span class="sn-mono">{{ row.rule.rule_code }}</span></template>
-            </el-table-column>
-            <el-table-column :label="t('rules.format')" min-width="260">
+            <!-- 编码 ｜ 前缀 ｜ 进制 ｜ 后缀 ｜ 开始 SN ｜ 当前最大 SN ｜ 操作（规则在这个前缀上的版本；开始 SN、当前最大 SN
+                 为号池里挂在这条规则上的号，还没生成过号时开始 SN 为从流水 1 起的示例、置灰）。
+                 规则的当前版本已换到别的前缀时编码后标出 -->
+            <el-table-column :label="t('generate.rule.listCol.code')" min-width="140">
               <template #default="{ row }">
-                <span>{{ row.version?.format }}</span>
+                <span class="sn-mono">{{ row.rule.rule_code }}</span>
                 <el-tag v-if="!row.is_current_prefix && row.current" size="small" type="warning" effect="plain" class="ml">
                   {{ t("rules.otherPrefix", { prefix: row.current.prefix }) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column :label="t('rules.version')" width="64"><template #default="{ row }">v{{ row.current?.display_version ?? row.rule.current_version }}</template></el-table-column>
-            <el-table-column :label="t('rules.owner')" min-width="130" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.rule.factory_code ? factoryName(row.rule.factory_code) : t("rules.ownerGlobal") }}</template>
+            <el-table-column :label="t('rules.prefix')" min-width="90">
+              <template #default="{ row }"><span class="sn-mono">{{ cur.inc ? cur.prefix : row.version?.prefix }}</span></template>
+            </el-table-column>
+            <el-table-column :label="t('rules.base')" width="80">
+              <template #default="{ row }">{{ row.version?.base ? t("generate.rule.baseN", { n: row.version.base }) : "—" }}</template>
+            </el-table-column>
+            <el-table-column :label="t('rules.suffixCol')" min-width="80">
+              <template #default="{ row }"><span class="sn-mono">{{ row.version?.suffix || "—" }}</span></template>
+            </el-table-column>
+            <el-table-column :label="t('generate.rule.listCol.start')" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="sn-mono" :class="{ muted: detail.ruleSns[row.rule.id]?.start_sample }"
+                  :title="detail.ruleSns[row.rule.id]?.start_sample ? t('generate.rule.listCol.startSample') : undefined">
+                  {{ detail.ruleSns[row.rule.id]?.start_sn || "—" }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('generate.rule.listCol.max')" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }"><span class="sn-mono">{{ detail.ruleSns[row.rule.id]?.max_sn || "—" }}</span></template>
             </el-table-column>
             <el-table-column :label="t('common.actions')" width="110" fixed="right">
               <template #default="{ row }">
@@ -297,14 +304,13 @@ const defaultCharset = computed(() => CHARSETS[form.base]);
 const groupPis = (g: any): string[] => [...g.pis, ...g.selected_pis];
 const piValues = computed(() => [...new Set(rows.value.flatMap(groupPis))].sort());
 const byPi = computed(() => (piFilter.value ? rows.value.filter((g) => groupPis(g).includes(piFilter.value)) : rows.value));
-const usedOptions = computed(() => {
-  const n = byPi.value.filter((g) => g.used).length;
-  return [
-    { value: "ALL", label: `${t("common.all")} ${byPi.value.length}` },
-    { value: "USED", label: `${t("rules.used")} ${n}` },
-    { value: "UNUSED", label: `${t("rules.unused")} ${byPi.value.length - n}` },
-  ];
-});
+const usedOptions = computed(() => [
+  { value: "ALL", label: t("common.all") },
+  { value: "USED", label: t("rules.used") },
+  { value: "UNUSED", label: t("rules.unused") },
+]);
+/** 左侧清单的规则编码（一个前缀通常一条；换过前缀的规则也列在旧前缀下） */
+const ruleCodes = (g: any) => g.rules.map((x: any) => x.rule.rule_code).join("、");
 const shown = computed(() => (usedFilter.value === "ALL" ? byPi.value : byPi.value.filter((g) => g.used === (usedFilter.value === "USED"))));
 /** 左侧清单前端分页；改筛选回第一页，条数变少时页码不越界。 */
 const paged = computed(() => shown.value.slice((page.value - 1) * pageSize, page.value * pageSize));
@@ -426,10 +432,10 @@ const specOf = (c: any) => ({
   length_pad: c.length_pad || 0, sep_before: c.length_sep_before || "", sep_after: c.length_sep_after || "", with_unit: !!c.with_unit,
 });
 
-/** 前缀详情：各 PI 占的流水（GET /rules/prefixes/usage）与所选规则的示例号（前 5 个和最大号）。 */
+/** 前缀详情：各 PI 占的流水、各规则的开始 SN / 当前最大 SN（GET /rules/prefixes/usage）与所选规则的示例号（前 3 个）。 */
 const detail = reactive({
   ruleId: 0, loading: false, items: [] as any[], error: "", parts: [] as any[],
-  usage: [] as any[], usageLoading: false, usageError: "",
+  usage: [] as any[], usageLoading: false, usageError: "", ruleSns: {} as Record<number, any>,
 });
 const detailRule = computed(() => cur.value?.rules.find((x: any) => x.rule.id === detail.ruleId) ?? null);
 /** 已生成枚数：各 PI 占的流水枚数之和。 */
@@ -452,13 +458,16 @@ async function setGrow(v: boolean) {
 }
 /** 切换前缀时取使用情况与示例号（同一前缀重新加载列表时规则有变也重取示例号）。 */
 watch(curPrefix, async (prefix) => {
-  Object.assign(detail, { ruleId: cur.value?.rules[0]?.rule.id ?? 0, usage: [], usageError: "" });
+  Object.assign(detail, { ruleId: cur.value?.rules[0]?.rule.id ?? 0, usage: [], usageError: "", ruleSns: {} });
   loadSample();
   if (!prefix) return;
   detail.usageLoading = true;
   try {
     const r: any = await api.rulePrefixUsage(prefix);
-    if (curPrefix.value === prefix) detail.usage = r.pis;
+    if (curPrefix.value === prefix) {
+      detail.usage = r.pis;
+      detail.ruleSns = Object.fromEntries((r.rule_sns ?? []).map((x: any) => [x.rule_id, x]));
+    }
   } catch (e: any) {
     if (curPrefix.value === prefix) detail.usageError = e?.message || "";
   } finally {
@@ -483,7 +492,7 @@ function splitParts(c: any, s: any, unit: string) {
   return out;
 }
 
-/** 示例号：所选规则在这个前缀上的版本（前 5 个和最大号，米数、产品单位用示例值）。 */
+/** 示例号：所选规则在这个前缀上的版本（前 3 个，米数、产品单位用示例值）。 */
 async function loadSample() {
   const x = detailRule.value;
   Object.assign(detail, { items: [], error: "", parts: [] });
@@ -493,9 +502,9 @@ async function loadSample() {
   try {
     const r: any = await api.previewRule(specOf(c));
     if (detailRule.value !== x) return; // 等结果时已改看别的规则
-    const last = r.samples.length - 1;
-    detail.items = r.samples.map((s: any, i: number) => ({
-      ...s, prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len, max: i === last && r.max_seq > 5,
+    // 只列前 3 个示例号
+    detail.items = r.samples.slice(0, 3).map((s: any) => ({
+      ...s, prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len,
       length: c.with_length ? r.sample_length : "", unit: c.with_unit ? r.sample_unit : "",
     }));
     if (r.samples.length) detail.parts = splitParts(c, r.samples[0], c.with_unit ? r.sample_unit || "" : "");
@@ -574,24 +583,18 @@ onMounted(load);
 .err { color: var(--el-color-danger); font-size: 12px; }
 /* 左右分栏：左侧前缀清单固定宽度，右侧详情自适应；窄屏上下排列 */
 .split { display: flex; flex-direction: row !important; gap: 16px; align-items: stretch; }
-.side { width: 320px; flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px; min-height: 0; }
+.side { width: 360px; flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px; min-height: 0; }
 .side-filter { display: flex; flex-direction: column; gap: 8px; }
 .pi-sel { width: 100%; }
 .side-filter :deep(.el-segmented) { width: 100%; }
-.plist { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 0 -4px; padding: 0 4px; }
-.pitem { border: 1px solid var(--app-line); border-radius: 8px; padding: 10px 12px; cursor: pointer; transition: border-color .15s, background .15s; }
-.pitem:hover { border-color: var(--el-color-primary-light-5); }
-.pitem.on { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); box-shadow: inset 3px 0 0 var(--el-color-primary); }
-.pitem-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pfx { font-size: 15px; word-break: break-all; }
-.dot { font-size: 12px; color: var(--app-muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
-.dot::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--el-color-info-light-5); }
-.dot.ok { color: var(--el-color-success); }
-.dot.ok::before { background: var(--el-color-success); }
-.pitem-meta { margin-top: 4px; font-size: 12px; color: var(--app-text); }
-.pitem-meta .sep { margin: 0 5px; color: var(--app-muted); }
-.pitem-org { margin-top: 2px; font-size: 12px; color: var(--app-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pitem-inc { margin-top: 2px; font-size: 12px; color: var(--el-color-success-dark-2); }
+.plist { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; border: 1px solid var(--app-line); border-radius: 8px; }
+.pitem { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--app-line); outline: none; transition: background .15s; }
+.pitem:last-of-type { border-bottom: none; }
+.pitem:hover, .pitem:focus-visible { background: var(--el-fill-color-light); }
+.pitem.on { background: var(--el-color-primary-light-9); box-shadow: inset 3px 0 0 var(--el-color-primary); }
+.pfx { flex: none; max-width: 40%; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitem .meta { flex: 1; min-width: 0; font-size: 12px; color: var(--app-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitem .slot { flex: none; font-size: 12px; color: var(--el-color-success); }
 .side-pager { justify-content: center; margin-top: 0; }
 .main { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .mhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid var(--app-line); }
