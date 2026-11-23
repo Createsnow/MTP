@@ -175,11 +175,8 @@ export interface OrderLine {
   edit_lock: "GENERATED" | "ALLOCATED" | null;
   quota: number;
   rule: LineRule | null;
-  /** 生成页才有：项次拦截时挡住本行的物料行 */
-  blockers?: any[];
-  /** 生成页才有：双 SN 的 PI 的第二 SN 规则（单 SN 为 null）与第二前缀的项次拦截 */
+  /** 生成页才有：双 SN 的 PI 的第二 SN 规则（单 SN 为 null） */
   rule2?: LineRule | null;
-  blockers2?: any[];
   /** 金蝶修改日期 */
   modify_time: string | null;
   synced_at: string;

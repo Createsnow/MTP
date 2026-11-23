@@ -10,6 +10,11 @@
           {{ t("generate.attachDupItem", { attach: g.attach, lines: g.lines.map((l: any) => t("generate.attachDupLine", { bill: l.bill_no, seq: l.seq })).join("、") }) }}
         </div>
       </el-alert>
+      <!-- 同前缀没选中的行里还有更小项次没生成：只提示（不拦），列出前几行，之后生成时号排在本次之后 -->
+      <el-alert v-if="lower.total" type="info" :closable="false" show-icon class="usage"
+        :title="t('generate.lowerPending', { n: num(lower.total) })">
+        <div>{{ lower.items.map((b: any) => t("generate.lowerPendingLine", { pi: b.pi_no, bill: b.bill_no, seq: b.seq, attach: b.attach })).join("；") }}{{ lower.total > lower.items.length ? " …" : "" }}</div>
+      </el-alert>
       <!-- 行按生成顺序（不分单据按附件项次）；列依次为附件项次、单据编号、物料编码、ERP行号、订单数量（物料行的订单数量）、前缀、进制、流水位数、流水号（起 ~ 止）、
            十进制流水号（起 ~ 止）、米数、产品单位、开始 / 结束 SN；
            米数、产品单位为写进 SN 的值，规则不带时为「—」 -->
@@ -131,6 +136,8 @@ function srcLabel(src: string): string {
 }
 /** 同一单据内附件项次相同的物料行（预演各行已按排号顺序排好）。 */
 const dups = computed<any[]>(() => (props.preview?.generatable ? dupAttach(props.preview.items || [], (x: any) => x.attach) : []));
+/** 同前缀没选中、更小项次未生成的物料行（后台 lower_pending；旧预演没带时为空） */
+const lower = computed<{ total: number; items: any[] }>(() => props.preview?.lower_pending || { total: 0, items: [] });
 // 每次打开都要重新勾选
 watch(() => props.modelValue, (open) => { if (open) unlocked.value = false; });
 </script>

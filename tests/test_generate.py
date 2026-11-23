@@ -647,9 +647,8 @@ def test_preview_lists_reasons(w, api):
     assert got == {1: ["LENGTH_EMPTY"], 3: ["ATTACH_EMPTY"]}, "金蝶米数为空须填写（有值的原样用），附件项次必填"
     ok(api.put("/api/orders/attach", m(bill_no=bill, seq=3, value="9"), w.admin))
     p = ok(w.preview(pi, lines=[(bill, 3), (bill, 2)]))
-    assert p["issues"][0]["issues"] == ["ATTACH_ORDER_BLOCKED"], "项次 9 被项次 1 没生成完的序号 1 挡住"
-    assert [x["seq"] for x in p["issues"][0]["blockers"]] == [1]
-    assert ok(w.preview(pi, lines=[(bill, 2)]))["generatable"] is True, "可缩小范围"
+    assert p["generatable"] is True, "没选中的序号 1（项次 1）不拦"
+    assert [x["seq"] for x in p["lower_pending"]["items"]] == [1], "只提示更小项次没生成"
     ok(api.put("/api/orders/attach", m(bill_no=bill, seq=3, value="A9"), w.admin))
     p = ok(w.preview(pi, lines=[(bill, 3)]))
     assert p["issues"][0]["issues"] == ["ATTACH_NOT_NUMERIC"], "附件项次须为数字"
@@ -892,17 +891,16 @@ def test_gen_order_same_attach_bill_by_pick_then_line(w, sql):
 
 
 def test_attach_order_within_pi_across_bills(w, sql):
-    """同一 PI 分几次生成也按项次先后：只勾 A 时 A 的项次 2 被 B 没生成的项次 1 挡住；
-    先生成 A、B 的项次 1，再生成项次 2，整张 PI 按项次接号。"""
+    """同一 PI 分几次生成：只勾 A 时不被 B 没生成的项次 1 挡（只提示），A 内按项次接号；
+    之后再勾 B，接在最大号之后。"""
     _, pi, a = mk(w, ("M1", 2, "100", "2"), ("M2", 2, "100", "1"), ("M3", 2, "100", "1"))
     _, _, b = mk(w, ("M4", 2, "100", "1"), ("M5", 2, "100", "2"), pi=pi)
     ok(w.bind_pi(pi, w.rule(P())))
     p = ok(w.preview(pi, bills=[a]))
-    assert {(x["bill_no"], x["seq"]): x["issues"] for x in p["issues"]} == {(a, 1): ["ATTACH_ORDER_BLOCKED"]}
-    assert [(x["bill_no"], x["seq"]) for x in p["issues"][0]["blockers"]] == [(b, 1)]
-    w.generate(pi, lines=[(a, 2), (a, 3)])
-    w.generate(pi, lines=[(b, 1)])
-    w.generate(pi, bills=[a, b])
+    assert p["generatable"] and [(x["bill_no"], x["seq"]) for x in p["items"]] == [(a, 2), (a, 3), (a, 1)]
+    assert [(x["bill_no"], x["seq"]) for x in p["lower_pending"]["items"]] == [(b, 1)]
+    w.generate(pi, bills=[a])
+    w.generate(pi, bills=[b])
     rows = {
         (r["bill_no"], r["bill_seq"]): (r["a"], r["b"])
         for r in sql.all(
@@ -911,7 +909,7 @@ def test_attach_order_within_pi_across_bills(w, sql):
             pi,
         )
     }
-    assert rows == {(a, 2): (1, 2), (a, 3): (3, 4), (b, 1): (5, 6), (a, 1): (7, 8), (b, 2): (9, 10)}
+    assert rows == {(a, 2): (1, 2), (a, 3): (3, 4), (a, 1): (5, 6), (b, 1): (7, 8), (b, 2): (9, 10)}
 
 
 def test_gen_order_same_attach_and_line_by_bill_pick(w):

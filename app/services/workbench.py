@@ -416,11 +416,8 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
             units.get(k),
         )
         v["issues"] = x.issues
-        # 项次拦截（ATTACH_ORDER_BLOCKED）：挡住本行的物料行
-        v["blockers"] = x.blockers
-        # 双 SN：第二 SN 的规则（单 SN 为 None）与第二前缀的项次拦截
+        # 双 SN：第二 SN 的规则（单 SN 为 None）
         v["rule2"] = rules.info(x.res2, x.length, last2 + 1, x.unit) if is_dual else None
-        v["blockers2"] = x.blockers2
         # 物料行失效（line_void）：整行置灰、不能勾选，不计订单数、可生成
         v["void"] = x.void
         # 金蝶业务状态、领料状态（状态码，空 = 未取到）：生成页「业务状态」列显示

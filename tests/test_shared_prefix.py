@@ -191,17 +191,21 @@ def test_prefix_lock_taken_once_per_transaction(app_client):
     h.release()
 
 
-def test_confirm_rejected_when_attach_order_changed(w, sql):
-    """确认生成时在前缀锁内按最新数据重算：预演后同前缀别的 PI 选了这个前缀、带更小项次的行，项次拦截变了，
-    报预演已失效（不会顺延着生成）。"""
+def test_confirm_not_blocked_when_lower_item_appears(w, sql):
+    """确认生成时在前缀锁内按最新数据重算：预演后同前缀别的 PI 选了这个前缀、带更小项次的行——没选中的行不拦
+    （2026-11-23），照常生成；之后那张 PI 再生成接在最大号之后。"""
     org, p1, b1 = mk(w, ("M1", 2, "100", "2"))
     rid = w.rule(P(), seq_len=6, with_length=False)
     ok(w.bind_pi(p1, rid))
     token = ok(w.preview(p1))["token"]
-    _, p2, _b2 = mk(w, ("M1", 2, "100", "1"), org=org)
+    _, p2, b2 = mk(w, ("M1", 2, "100", "1"), org=org)
     ok(w.bind_pi(p2, rid))
-    assert w.api.post("/api/generate/run", m(token=token), w.admin).code == "GEN_PREVIEW_CHANGED"
-    assert sql.count("SELECT COUNT(*) FROM sn_item WHERE bill_no = %s", b1) == 0
+    j = ok(w.api.post("/api/generate/run", m(token=token), w.admin))
+    assert j["status"] == "SUCCESS"
+    w.generate(p2)
+    seq = "SELECT seq_dec FROM sn_item WHERE bill_no = %s ORDER BY seq_dec"
+    assert [r["seq_dec"] for r in sql.all(seq, b1)] == [1, 2]
+    assert [r["seq_dec"] for r in sql.all(seq, b2)] == [3, 4]
 
 
 def test_concurrent_generation_on_shared_prefix_never_duplicates(w, sql):

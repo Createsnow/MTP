@@ -237,13 +237,17 @@ def _import_issues(w, api, org, rows) -> list[set[str]]:
 
 
 def test_second_prefix_attach_order_and_seq_start(w, api, sql):
-    """第二前缀同样按项次从小到大拦截；第二 SN 可设起始号（从最大号之后编时第一个号不小于它）。"""
+    """第二前缀同样不拦没选中的行（更小项次没生成只提示，同一物料行只列一次）；
+    第二 SN 可设起始号（从最大号之后编时第一个号不小于它）。"""
     org = w.org(uid("O")[:10])
     b = P()
     _, p1, b1, a1, _b = dual_pi(w, ("M1", 1, "100", "1"), ("M2", 1, "100", "2"), second=b, org=org)
-    # 只生成项次 2：第二前缀下项次 1 还有额度，被拦
+    # 只生成项次 2：项次 1 还有额度，不拦，只提示
     p = ok(w.preview(p1, lines=[(b1, 2)]))
-    assert not p["generatable"] and "ATTACH_ORDER_BLOCKED" in p["issues"][0]["issues"]
+    assert p["generatable"] and p["lower_pending"] == {
+        "total": 1,
+        "items": [{"pi_no": p1, "bill_no": b1, "seq": 1, "attach": "1"}],
+    }
     _, p2, b2 = mk(w, ("M1", 1, "100", "1"), org=org)
     ok(set_dual(w, p2))
     ok(w.select(p2, [(b2, 1)], custom=custom(P())))

@@ -1,7 +1,7 @@
 """以规则前缀为排号基准（2026-11-17 变更，取代按 PI 的号段预留）：
 - 同一前缀下各 PI 共用一套十进制流水，接在前缀最大号之后；(seq_prefix, seq_dec) 唯一；
-- 项次拦截：项次已开始（有现存的号）的不拦；还没开始的，同前缀登记的 PI 里还有更小项次（或项次为空 / 不是数字）的行
-  有额度就拦（ATTACH_ORDER_BLOCKED，列出挡路的行）；删过号的行、失效的行不挡；一起生成的行彼此不挡；
+- 项次先后只管本次选中的范围（2026-11-23 放开）：没选中的单据、物料行（本 PI 或同前缀别的 PI）不拦，之后再选时
+  接在前缀最大号之后；同前缀没选中的行里还有更小项次没生成时预演只提示（lower_pending）；删过号的行、失效的行不算；
 - 排号顺序：点选物料行同项次按点击先后，勾整单同项次按单据勾选先后、单据内按行号；
 - 一个 PI 一个规则前缀，登记在 PI 上，新单据继承；有号时锁定，没号时可改；
 - 确认生成时同前缀别的 PI 先生成了：自动顺延；流水上限自动突破按前缀。MES 报文不变。"""
@@ -57,41 +57,39 @@ def test_same_prefix_pis_share_one_serial(w, sql):
     assert (g["prefix"], g["last_seq"], g["next_seq"], g["reserved"]) == (pre, 5, 6, [])
 
 
-def test_attach_order_blocks_across_pis_until_lower_items_done(w, sql):
-    """项次 2 还没开始：同前缀 PI-B 的项次 1 没生成完时，PI-A 的项次 2 被拦（列出挡路的行）；
-    同一次勾选项次 1、2 一起生成可以（项次 1 在前）；B 的项次 1 生成完后 A 的项次 2 可以生成。"""
+def test_unselected_lines_do_not_block_only_hint(w, sql):
+    """没选中的行不拦（本 PI 没选的行、同前缀别的 PI）：选哪些就生成哪些，接在前缀最大号之后；
+    同前缀没选中的行里还有更小项次没生成时，预演给提示（lower_pending，不拦）。"""
     pre = P()
     pa, pb = uid("PI"), uid("PI")
     a = bill(w, pa, ("M1", 2, "1"), ("M2", 2, "2"))
     b = bill(w, pb, ("M1", 3, "1"))
     ok(w.select(pa, [(a, 1)], custom=C(pre)))
     ok(w.select(pb, [(b, 1)], custom=C(pre)))
-    # A 只点选项次 2：被本 PI 的项次 1 和 B 的项次 1 挡
+    # A 只点选项次 2：不拦，提示本 PI 的项次 1 和 B 的项次 1 还没生成
     p = ok(w.preview(pa, lines=[(a, 2)]))
-    assert not p["generatable"]
-    assert issues(p) == {(a, 2): ["ATTACH_ORDER_BLOCKED"]}
-    got = {(x["pi_no"], x["bill_no"], x["seq"], x["reason"]) for x in p["issues"][0]["blockers"]}
-    assert got == {(pa, a, 1, "NOT_GENERATED"), (pb, b, 1, "NOT_GENERATED")}
-    # A 整单（项次 1、2 一起）：仍被 B 的项次 1 挡
+    assert p["generatable"] and not p["issues"]
+    assert p["lower_pending"]["total"] == 2
+    got = {(x["pi_no"], x["bill_no"], x["seq"], x["attach"]) for x in p["lower_pending"]["items"]}
+    assert got == {(pa, a, 1, "1"), (pb, b, 1, "1")}
+    # A 整单（项次 1、2 一起，项次 1 在前）：B 的项次 1 不拦，只提示
     p = ok(w.preview(pa, bills=[a]))
-    assert issues(p) == {(a, 2): ["ATTACH_ORDER_BLOCKED"]}
-    assert [(x["pi_no"], x["bill_no"]) for x in p["issues"][0]["blockers"]] == [(pb, b)]
-    # 生成页详情：物料行带拦截原因与挡路的行
+    assert p["generatable"] and [(x["seq"], x["start_seq"]) for x in p["items"]] == [(1, 1), (2, 3)]
+    assert [(x["pi_no"], x["bill_no"]) for x in p["lower_pending"]["items"]] == [(pb, b)]
+    # 生成页详情：物料行不带拦截原因
     c = ok(w.api.get(f"/api/generate/context?pi={pa}", w.admin))
-    line = next(x for x in c["bills"][0]["lines"] if x["seq"] == 2)
-    assert line["issues"] == ["ATTACH_ORDER_BLOCKED"] and line["blockers"][0]["bill_no"] == b
-    # 只生成 A 的项次 1，可以（项次 1 没有更小的项次）
-    w.generate(pa, lines=[(a, 1)])
-    assert not ok(w.preview(pa, lines=[(a, 2)]))["generatable"], "B 的项次 1 还没生成完"
+    assert all(not x["issues"] for x in c["bills"][0]["lines"])
+    w.generate(pa)
+    # 之后再生成 B：接在最大号之后；B 已是最小项次，没有提示
+    p = ok(w.preview(pb))
+    assert p["lower_pending"] == {"total": 0, "items": []}
     w.generate(pb)
-    w.generate(pa, lines=[(a, 2)])
-    assert seqs(sql, a) == {1: [1, 2], 2: [6, 7]}
-    assert seqs(sql, b) == {1: [3, 4, 5]}
+    assert seqs(sql, a) == {1: [1, 2], 2: [3, 4]}
+    assert seqs(sql, b) == {1: [5, 6, 7]}
 
 
-def test_started_item_not_blocked_by_late_lower_item(w, sql):
-    """项次 2 已开始（有现存的号）：之后同步进来项次 1 的单据，项次 2 剩下的行照常生成、接在最大号之后，
-    项次 1 也可以生成；还没开始的项次 3 要等项次 1 新增的部分生成完。"""
+def test_late_lower_item_generates_after_max(w, sql):
+    """后同步进来的单据有更小项次：哪个项次先选就先生成，都接在最大号之后（只提示，不拦）。"""
     pre = P()
     pi = uid("PI")
     org = w.org(uid("O")[:10])
@@ -99,50 +97,41 @@ def test_started_item_not_blocked_by_late_lower_item(w, sql):
     ok(w.select(pi, [(a, 1)], custom=C(pre)))
     w.generate(pi)
     late = bill(w, pi, ("M1", 2, "1"), ("M2", 2, "2"), ("M3", 2, "3"), org=org)
-    p = ok(w.preview(pi, lines=[(late, 2)]))
-    assert p["generatable"], "项次 2 已开始，项次 1 的新单据不挡"
     p = ok(w.preview(pi, lines=[(late, 3)]))
-    assert issues(p) == {(late, 3): ["ATTACH_ORDER_BLOCKED"]}
-    assert {(x["seq"], x["attach"]) for x in p["issues"][0]["blockers"]} == {(1, "1"), (2, "2")}
+    assert p["generatable"]
+    assert {(x["seq"], x["attach"]) for x in p["lower_pending"]["items"]} == {(1, "1"), (2, "2")}
+    w.generate(pi, lines=[(late, 3)])
     w.generate(pi, lines=[(late, 2)])
     w.generate(pi, lines=[(late, 1)])
-    w.generate(pi, lines=[(late, 3)])
-    assert seqs(sql, late) == {2: [3, 4], 1: [5, 6], 3: [7, 8]}
+    assert seqs(sql, late) == {3: [3, 4], 2: [5, 6], 1: [7, 8]}
 
 
-def test_deleted_lines_do_not_block_and_item_unstarted_after_all_deleted(w, sql):
-    """删过号的行不挡（重新生成接在最大号之后）；某项次的号全部删掉后回到没开始，又会被更小项次的额度挡。"""
+def test_deleted_lines_regenerate_after_max_and_not_in_hint(w, sql):
+    """删过号的行重新生成接在最大号之后（原流水成为空号段，同前缀各 PI 都看得到），也不算进提示。"""
     pre = P()
     pa, pb = uid("PI"), uid("PI")
     a = bill(w, pa, ("M1", 2, "1"), ("M2", 2, "2"))
     ok(w.select(pa, [(a, 1)], custom=C(pre)))
     w.generate(pa)
-    # 删掉 A 项次 1 的号：项次 1 有额度但删过号，不挡后面的项次
     ok(w.delete(pa, lines=[(a, 1)], reason="t"))
     b = bill(w, pb, ("M1", 1, "2"), ("M2", 1, "3"))
     ok(w.select(pb, [(b, 1)], custom=C(pre)))
-    assert ok(w.preview(pb, lines=[(b, 1)]))["generatable"], "项次 2 已开始"
-    assert ok(w.preview(pb, lines=[(b, 2)]))["issues"][0]["issues"] == ["ATTACH_ORDER_BLOCKED"], "项次 2 还没生成完"
-    w.generate(pb, lines=[(b, 1)])
+    p = ok(w.preview(pb, lines=[(b, 2)]))
+    assert p["generatable"]
+    assert [(x["bill_no"], x["seq"]) for x in p["lower_pending"]["items"]] == [(b, 1)], "删过号的 A 项次 1 不算"
     w.generate(pb, lines=[(b, 2)])
-    # A 项次 1 重新生成接在最大号之后（原流水 1、2 成为空号段）
+    w.generate(pb, lines=[(b, 1)])
     w.generate(pa, lines=[(a, 1)])
     assert seqs(sql, a) == {2: [3, 4], 1: [7, 8]}
+    assert seqs(sql, b) == {2: [5], 1: [6]}
     g = ok(w.api.get(f"/api/generate/gaps?pi={pb}", w.admin))
     assert [(x["start_seq"], x["end_seq"], x["bill_no"]) for x in g["segments"]] == [(1, 2, a)], (
         "空号段同前缀各 PI 都看得到"
     )
-    # 项次 2 的号全部删掉：项次 2 回到没开始；这时新的项次 1 额度挡住它（删过号的行本身不挡）
-    ok(w.delete(pa, lines=[(a, 2)], reason="t"))
-    ok(w.delete(pb, lines=[(b, 1)], reason="t"))
-    c = bill(w, pb, ("M1", 1, "1"))
-    p = ok(w.preview(pa, lines=[(a, 2)]))
-    assert issues(p) == {(a, 2): ["ATTACH_ORDER_BLOCKED"]}
-    assert [x["bill_no"] for x in p["issues"][0]["blockers"]] == [c]
 
 
-def test_empty_or_non_numeric_attach_blocks_all_unstarted(w, sql):
-    """附件项次为空 / 不是数字：本行不能生成，并挡住这个前缀全部没开始的项次；已开始的项次不受影响。"""
+def test_empty_or_non_numeric_attach_only_blocks_itself(w, sql):
+    """附件项次为空 / 不是数字：本行不能生成（选中的行有一行不能生成，整次不能生成）；不挡没选中的行，也不算进提示。"""
     pre = P()
     pa, pb = uid("PI"), uid("PI")
     a = bill(w, pa, ("M1", 1, "1"))
@@ -150,16 +139,12 @@ def test_empty_or_non_numeric_attach_blocks_all_unstarted(w, sql):
     w.generate(pa)
     b = bill(w, pb, ("M1", 1, "A1"), ("M2", 1, "1"), ("M3", 1, "5"))
     ok(w.select(pb, [(b, 1)], custom=C(pre)))
-    p = ok(w.preview(pb, lines=[(b, 1)]))
-    assert issues(p) == {(b, 1): ["ATTACH_NOT_NUMERIC"]}
-    assert ok(w.preview(pb, lines=[(b, 2)]))["generatable"], "项次 1 已开始，不受影响"
+    assert issues(ok(w.preview(pb, lines=[(b, 1)]))) == {(b, 1): ["ATTACH_NOT_NUMERIC"]}
+    p = ok(w.preview(pb, lines=[(b, 1), (b, 3)]))
+    assert not p["generatable"] and issues(p) == {(b, 1): ["ATTACH_NOT_NUMERIC"]}
     p = ok(w.preview(pb, lines=[(b, 3)]))
-    assert issues(p) == {(b, 3): ["ATTACH_ORDER_BLOCKED"]}
-    # 项次 1 已开始，但还有额度的项次 1 的行仍挡没开始的项次 5（项次 1 生成完才能开始项次 5）
-    assert [(x["seq"], x["reason"]) for x in p["issues"][0]["blockers"]] == [
-        (1, "ATTACH_NOT_NUMERIC"),
-        (2, "NOT_GENERATED"),
-    ]
+    assert p["generatable"]
+    assert [(x["seq"], x["attach"]) for x in p["lower_pending"]["items"]] == [(2, "1")], "不是数字的不算"
 
 
 def test_click_order_and_bill_order(w, sql):

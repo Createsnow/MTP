@@ -8,10 +8,9 @@
 一次生成它的全部额度，不拆成两次。排号顺序（_gen_order）：先按附件项次从小到大（按数字比）；同项次时，
 点选物料行按点击先后，勾整张单据按单据勾选先后、同一单据内按行号。
 
-项次拦截（_check_order，按前缀）：一行的项次在这个前缀下已开始（有现存的号）时不拦，接在最大号之后生成；
-还没开始时，登记了这个前缀的 PI 里只要还有更小项次的行有额度，就拦住（ATTACH_ORDER_BLOCKED，列出挡路的行）。
-项次为空或不是数字的行自己不能生成，并挡住这个前缀全部没开始的项次。失效的物料行、冻结或暂停交付单据的行、
-删过号的行不挡。同一次生成里的行彼此不挡（小项次排在前）。
+项次先后只管本次选中的范围（2026-11-23 放开）：一次生成内按上面的排号顺序；没选中的单据、物料行（本 PI 或同前缀
+别的 PI）不拦本次生成，之后再选时接在前缀最大号之后。项次为空或不是数字的行自己不能生成。同前缀没选中的行里还有更小项次
+没生成时，预演只给提示（lower_pending，见 _lower_pending），不拦。
 
 流水来源（预演时选）：
 - MAX 从前缀最大号 + 1 起往后编（默认）；起始号（PI 登记的）大于下一个号时从起始号起，跳过的流水成为空号段；
@@ -587,13 +586,9 @@ class Line:
     issues: list[str] = field(default_factory=list)
     #: 物料行失效（line_void）：不参与排号，额度按 0 算
     void: bool = False
-    #: 项次拦截（ATTACH_ORDER_BLOCKED）：挡住本行的物料行（同前缀别的 PI 或本 PI 这次不生成的行）
-    blockers: list[dict] = field(default_factory=list)
     #: 双 SN 的 PI：第二 SN 的规则（PI 登记在 sn_pi_rule2）；单 SN 为 False / None
     dual: bool = False
     res2: rules.Resolved | None = None
-    #: 第二前缀的项次拦截（ATTACH_ORDER_BLOCKED2）：挡住本行的物料行
-    blockers2: list[dict] = field(default_factory=list)
 
     @property
     def quota(self) -> int:
@@ -607,8 +602,8 @@ def _load_lines(pi: str, keys: list[tuple[str, int]]) -> list[Line]:
 
 def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Line]]:
     """多张 PI 的 _load_lines 一次取（生成页列表逐 PI 判断「需先选规则 / 不能生成」用）：快照、计数、附件项次、
-    米数、产品单位、单据冻结、失效条件各一条 SQL，PI 的规则登记按 PI 查，项次拦截按前缀查一次；
-    每张 PI 的结果与单独调用 _load_lines 相同。每组的物料行视为一次生成（彼此不挡）。"""
+    米数、产品单位、单据冻结、失效条件各一条 SQL，PI 的规则登记按 PI 查；
+    每张 PI 的结果与单独调用 _load_lines 相同。生成条件只看物料行自己（没选中的行不拦，见文首）。"""
     out: dict[str, list[Line]] = {pi: [] for pi in groups}
     all_keys = [k for keys in groups.values() for k in keys]
     if not all_keys:
@@ -670,15 +665,6 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
             )
             _check(line, reg, taken, reg2)
             out[pi].append(line)
-        if reg is not None:
-            # 带识别码的号段归本 PI 独占：项次只与本 PI 的物料行比（别的 PI 预显示了同一个值也不互相挡）
-            only = pi if res is not None and res.inc is not None else None
-            _check_order(reg["prefix"], out[pi], set(keys), taken, only)
-        if dual and reg2 is not None:
-            # 第二前缀同样按项次从小到大拦截
-            only2 = pi if res2 is not None and res2.inc is not None else None
-            with rules.second():
-                _check_order(reg2["prefix"], out[pi], set(keys), taken, only2)
     return out
 
 
@@ -768,27 +754,19 @@ def attach_order(attach: str) -> tuple:
     return (1, Decimal(0), (attach or "").strip())
 
 
-# ================================================================== 项次拦截（按前缀）
+# ================================================================== 更小项次未生成的提示（按前缀，不拦）
 
-#: 被拦时最多列出的挡路物料行
-BLOCKER_LIST_MAX = 20
+#: 提示里最多列出的物料行（其余只计行数）
+LOWER_LIST_MAX = 3
 
 
-def _prefix_order_state(prefix: str, memo: dict, only_pi: str | None = None) -> tuple[set[Decimal], list[dict]]:
-    """前缀的项次状态：(已开始的项次, 候选挡路行)。
-    - 已开始的项次：这个前缀下现存的号（本系统生成的）的附件项次；号全删掉的项次回到没开始。
-    - 候选挡路行：登记了这个前缀的全部 PI 的物料行中还有额度的；失效的物料行、冻结或暂停交付单据的行、
-      删过号的行（删号后重新生成接在最大号之后）不挡。项次为空或不是数字的 key 为 None（挡全部没开始的项次）。"""
-    mk = ("order", rules.slot(), prefix, only_pi)
+def _prefix_pending(prefix: str, memo: dict, only_pi: str | None = None) -> list[dict]:
+    """登记了这个前缀的 PI（only_pi 给定时只看这张 PI）里还有额度、项次为数字的物料行。
+    失效的物料行、冻结或暂停交付单据的行、删过号的行（删号后重新生成接在最大号之后）不算。
+    第二 SN 上下文看登记了第二前缀的 PI。"""
+    mk = ("pending", rules.slot(), prefix, only_pi)
     if mk in memo:
         return memo[mk]
-    # 第二 SN 上下文：第二前缀下现存的第二 SN 所在号的项次、登记了第二前缀的 PI
-    started_sql = (
-        "SELECT DISTINCT i.attach_no FROM sn_item_sub s JOIN sn_item i ON i.id = s.item_id WHERE s.seq_prefix = %s"
-        if rules.slot() == rules.SLOT2
-        else "SELECT DISTINCT attach_no FROM sn_item WHERE seq_prefix = %s AND origin = 'GEN'"
-    )
-    started = {k for k in (attach_key(a) for a in db.column(started_sql, prefix)) if k is not None}
     snap = db.all(
         f"SELECT m.* FROM sn_prd_mo m JOIN {rules.reg_table()} r ON r.pi_no = m.pi WHERE r.prefix = %s "
         + ("" if only_pi is None else "AND m.pi = %s ")
@@ -796,7 +774,7 @@ def _prefix_order_state(prefix: str, memo: dict, only_pi: str | None = None) -> 
         prefix,
         *([] if only_pi is None else [only_pi]),
     )
-    cands: list[dict] = []
+    out: list[dict] = []
     if snap:
         keys = [(r["bill_no"], r["seq"]) for r in snap]
         counts, fills, _lens, _units = orders.line_extras(keys)
@@ -825,54 +803,46 @@ def _prefix_order_state(prefix: str, memo: dict, only_pi: str | None = None) -> 
                 continue
             attach, _src = orders.effective_attach(r, fills.get(k))
             ak = attach_key(attach)
-            cands.append(
-                {
-                    "pi_no": r["pi"],
-                    "bill_no": r["bill_no"],
-                    "seq": r["seq"],
-                    "material_code": r["material_code"],
-                    "attach": attach,
-                    "quota": quota,
-                    "key": ak,
-                    "reason": "ATTACH_EMPTY"
-                    if not attach
-                    else ("ATTACH_NOT_NUMERIC" if ak is None else "NOT_GENERATED"),
-                }
-            )
-    memo[mk] = (started, cands)
-    return memo[mk]
+            if ak is None:
+                continue
+            out.append({"pi_no": r["pi"], "bill_no": r["bill_no"], "seq": r["seq"], "attach": attach, "key": ak})
+    memo[mk] = out
+    return out
 
 
-def _check_order(
-    prefix: str, ls: list[Line], run: set[tuple[str, int]], memo: dict, only_pi: str | None = None
-) -> None:
-    """项次拦截：同一前缀下，一行的项次已开始（有现存的号）时不拦，接在最大号之后生成；还没开始时，
-    只要登记了这个前缀的 PI 里还有更小项次（或项次为空、不是数字）的行有额度，就拦住（ATTACH_ORDER_BLOCKED）。
-    run 为这次一起生成的行：彼此不挡（同一次生成里小项次排在前）。"""
-    todo = [x for x in ls if x.quota > 0 and attach_key(x.attach) is not None]
-    if not todo:
-        return
-    started, cands = _prefix_order_state(prefix, memo, only_pi)
-    others = [b for b in cands if (b["bill_no"], b["seq"]) not in run]
-    if not others:
-        return
-    second = rules.slot() == rules.SLOT2
-    for x in todo:
-        k = attach_key(x.attach)
-        if k in started:
-            continue
-        bl = [b for b in others if b["key"] is None or b["key"] < k]
-        if bl:
-            found = [
-                {n: b[n] for n in ("pi_no", "bill_no", "seq", "material_code", "attach", "quota", "reason")}
-                for b in bl[:BLOCKER_LIST_MAX]
-            ]
-            if second:
-                x.issues.append("ATTACH_ORDER_BLOCKED2")
-                x.blockers2 = found
-            else:
-                x.issues.append("ATTACH_ORDER_BLOCKED")
-                x.blockers = found
+def _lower_pending(pi: str, todo: list[Line]) -> dict:
+    """提示（不拦）：同前缀没选中的物料行里还有比本次最大项次更小的项次没生成——它们之后生成时接在最大号之后，
+    号排在本次之后。返回 {"total": 行数, "items": 前 LOWER_LIST_MAX 行（按项次、PI、单据、行号）}。
+    带识别码的规则只看本 PI；双 SN 另看第二前缀，同一物料行只算一次。"""
+    empty = {"total": 0, "items": []}
+    top = max((k for k in (attach_key(x.attach) for x in todo) if k is not None), default=None)
+    if top is None:
+        return empty
+    run = {(x.bill_no, x.seq) for x in todo}
+    memo: dict = {}
+    found: dict[tuple[str, int], dict] = {}
+
+    def scan(res: rules.Resolved | None) -> None:
+        prefix = prefix_of(pi)
+        if prefix is None:
+            return
+        only = pi if res is not None and res.inc is not None else None
+        for b in _prefix_pending(prefix, memo, only):
+            k = (b["bill_no"], b["seq"])
+            if k not in run and b["key"] < top:
+                found.setdefault(k, b)
+
+    scan(todo[0].res)
+    if todo[0].dual:
+        with rules.second():
+            scan(todo[0].res2)
+    if not found:
+        return empty
+    ls = sorted(found.values(), key=lambda b: (b["key"], b["pi_no"], b["bill_no"], b["seq"]))
+    return {
+        "total": len(ls),
+        "items": [{n: b[n] for n in ("pi_no", "bill_no", "seq", "attach")} for b in ls[:LOWER_LIST_MAX]],
+    }
 
 
 def _gen_order(ls: list[Line], scope: str) -> list[Line]:
@@ -913,7 +883,8 @@ def _scope_keys(pi: str, scope: str, bills_in: list[str] | None, lines_in: list[
 
 def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = None) -> dict:
     """按排号顺序（见 _gen_order）给每个还有额度的物料行切号（整行额度，不拆行），接在本 PI 规则前缀的最大号之后；
-    流水来源见 seq（默认 MAX）。返回计划（不落库）；不能生成时 issues 非空（项次拦截另带挡路的物料行）。"""
+    流水来源见 seq（默认 MAX）。返回计划（不落库）；不能生成时 issues 非空。
+    可生成时另带 lower_pending：同前缀没选中的行里还有更小项次没生成（只提示，不拦，不参与确认生成时的比对）。"""
     seq = seq or {"mode": SEQ_MAX}
     prefix = prefix_of(pi)
     base = rules.prefix_last(prefix)
@@ -932,14 +903,11 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
             "inc": x.res is not None
             and x.res.inc is not None
             and ("RULE_PREFIX" in x.issues or "RULE_PI_PREFIX" in x.issues),
-            # 项次拦截：挡住本行的物料行（最多 BLOCKER_LIST_MAX 行）
-            "blockers": x.blockers,
-            # 双 SN：第二 SN 的前缀不能用时同上（确认生成时按第二 SN 的前缀提示）、第二前缀的项次拦截
+            # 双 SN：第二 SN 的前缀不能用时同上（确认生成时按第二 SN 的前缀提示）
             "prefix2": x.res2.version["prefix"] if "RULE2_PREFIX" in x.issues and x.res2 and x.res2.ready else None,
             "inc2": x.res2 is not None
             and x.res2.inc is not None
             and ("RULE2_PREFIX" in x.issues or "RULE2_PI_PREFIX" in x.issues),
-            "blockers2": x.blockers2,
         }
         for x in todo
         if x.issues
@@ -960,6 +928,7 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
         return out
     if issues:
         return out
+    out["lower_pending"] = _lower_pending(pi, todo)
     qty = quota
     if qty > settings.gen_max_per_run:
         raise biz(ErrorCode.GEN_QTY_OVER_MAX, qty=qty, max=settings.gen_max_per_run)

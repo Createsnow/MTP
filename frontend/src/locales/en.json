@@ -712,8 +712,6 @@
       "NO_RULE2": "No second-SN rule",
       "RULE2_PREFIX": "Second-SN rule needs new prefix",
       "RULE2_PI_PREFIX": "Differs from the PI's second prefix",
-      "ATTACH_ORDER_BLOCKED2": "Earlier attachment items not generated (second prefix)",
-      "ATTACH_ORDER_BLOCKED": "Earlier attachment items not generated",
       "ATTACH_NOT_NUMERIC": "Attachment item must be numeric",
       "LENGTH_EMPTY": "Length to fill",
       "UNIT_EMPTY": "Unit to fill",
@@ -732,13 +730,8 @@
       "sn2": "Second SN",
       "sn2Range": "Second SN (start ~ end)"
     },
-    "blockerTitle": "These lines under the same prefix must be generated (or fixed) first:",
-    "blocker": "PI {pi} · {bill} line {seq} · item {attach} · {reason}",
-    "blockerReason": {
-      "NOT_GENERATED": "not generated",
-      "ATTACH_EMPTY": "attachment item empty",
-      "ATTACH_NOT_NUMERIC": "attachment item not numeric"
-    },
+    "lowerPending": "{n} line(s) with smaller attachment items under this prefix are not generated yet; their SNs will come after this run",
+    "lowerPendingLine": "PI {pi} · {bill} line {seq} · item {attach}",
     "genShifted": "Another PI on the same prefix generated first; this run was shifted to {start} ~ {end}",
     "piRule": "Rule {rule} · prefix {prefix}",
     "piRuleCustom": "Custom",

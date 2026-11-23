@@ -712,8 +712,6 @@
       "NO_RULE2": "Chưa có quy tắc SN thứ hai",
       "RULE2_PREFIX": "Quy tắc SN thứ hai cần tiền tố mới",
       "RULE2_PI_PREFIX": "Khác tiền tố SN thứ hai PI đã dùng",
-      "ATTACH_ORDER_BLOCKED2": "Hạng mục trước chưa tạo xong (tiền tố thứ hai)",
-      "ATTACH_ORDER_BLOCKED": "Hạng mục trước chưa tạo xong",
       "ATTACH_NOT_NUMERIC": "Hạng mục đính kèm phải là số",
       "LENGTH_EMPTY": "Chiều dài chờ điền",
       "UNIT_EMPTY": "Đơn vị chờ điền",
@@ -732,13 +730,8 @@
       "sn2": "SN thứ hai",
       "sn2Range": "SN thứ hai (đầu ~ cuối)"
     },
-    "blockerTitle": "Các dòng cùng tiền tố sau phải tạo xong (hoặc xử lý) trước:",
-    "blocker": "PI {pi} · {bill} dòng {seq} · hạng mục {attach} · {reason}",
-    "blockerReason": {
-      "NOT_GENERATED": "chưa tạo",
-      "ATTACH_EMPTY": "hạng mục trống",
-      "ATTACH_NOT_NUMERIC": "hạng mục không phải số"
-    },
+    "lowerPending": "Còn {n} dòng có hạng mục nhỏ hơn cùng tiền tố chưa tạo; SN của chúng sẽ xếp sau lần này",
+    "lowerPendingLine": "PI {pi} · {bill} dòng {seq} · hạng mục {attach}",
     "genShifted": "PI khác cùng tiền tố vừa tạo trước; lần này đã lùi sang {start} ~ {end}",
     "piRule": "Quy tắc {rule} · tiền tố {prefix}",
     "piRuleCustom": "Tùy chỉnh",

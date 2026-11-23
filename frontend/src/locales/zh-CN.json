@@ -712,8 +712,6 @@
       "NO_RULE2": "需先选第二 SN 规则",
       "RULE2_PREFIX": "第二 SN 规则须换前缀",
       "RULE2_PI_PREFIX": "与本 PI 已用第二前缀不同",
-      "ATTACH_ORDER_BLOCKED2": "第二前缀靠前项次未生成完",
-      "ATTACH_ORDER_BLOCKED": "靠前项次未生成完",
       "ATTACH_NOT_NUMERIC": "附件项次须为数字",
       "LENGTH_EMPTY": "米数待填写",
       "UNIT_EMPTY": "产品单位待填写",
@@ -732,13 +730,8 @@
       "sn2": "第二SN",
       "sn2Range": "第二 SN（起 ~ 止）"
     },
-    "blockerTitle": "同前缀下这些物料行须先生成完（或处理后）：",
-    "blocker": "PI {pi} · {bill} 行 {seq} · 项次 {attach} · {reason}",
-    "blockerReason": {
-      "NOT_GENERATED": "未生成",
-      "ATTACH_EMPTY": "附件项次为空",
-      "ATTACH_NOT_NUMERIC": "附件项次不是数字"
-    },
+    "lowerPending": "同前缀还有 {n} 行更小项次未生成，之后生成时号排在本次之后",
+    "lowerPendingLine": "PI {pi} · {bill} 行 {seq} · 项次 {attach}",
     "genShifted": "同前缀别的 PI 刚生成过，本次号段已顺延为 {start} ～ {end}",
     "piRule": "规则 {rule} · 前缀 {prefix}",
     "piRuleCustom": "自定义",
