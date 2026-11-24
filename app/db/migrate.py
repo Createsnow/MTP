@@ -203,7 +203,8 @@ def schema_columns(table: str) -> list[tuple[str, str]]:
 
 
 def missing_columns(db: Db, tables: list[str] | None = None) -> list[tuple[str, str, str, str | None]]:
-    """库里已有的表缺了迁移脚本里的哪些字段：[(表, 字段名, 字段定义, 前一个字段)]（表本身不存在的不算）。"""
+    """库里已有的表缺了迁移脚本里的哪些字段：[(表, 字段名, 字段定义, 前一个字段)]（表本身不存在的不算）。
+    只用于启动检查（报错、说明按 V1 重建），不据此补字段。"""
     rows = db.all("SELECT TABLE_NAME t, COLUMN_NAME c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()")
     have: dict[str, set[str]] = {}
     for r in rows:
@@ -234,9 +235,11 @@ def check_tables(db: Db) -> None:
         )
     cols = missing_columns(db)
     if cols:
+        # 表结构只来自完整的 V1，不另用 SQL 补字段：库是按旧版 V1 建的，须按当前 V1 重建
         raise MigrationError(
             f"数据库 {db.target.database} 的表缺少建表脚本里的字段 "
             + "、".join(f"{t}.{c}" for t, c, _d, _p in cols)
-            + "（库是按旧版建表脚本建的）。启动时不补字段：按运维手册 8.9 补建缺失的字段"
-            "（uv run python -m devtools.create_missing_tables --yes，已有的数据不动）"
+            + "（库是按旧版建表脚本建的）。表结构只按完整的 V1 建，不另补字段：测试库按运维手册 8.7 保留账户"
+            "（可加 --keep 保留订单快照）、按 V1 重建其他表（uv run python -m devtools.rebuild_keep_accounts），"
+            "或按 8.1 / 8.2 / 8.3 整体重建"
         )
