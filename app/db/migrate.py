@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 import zlib
@@ -83,12 +84,19 @@ def migrations() -> list[Migration]:
     return sorted(out, key=lambda m: m.key)
 
 
+def migrate_lock_name(database: str) -> str:
+    """建表锁的锁名（带库名，与 locks.lock_name 同一写法；这里不引用 services，免得循环导入）。"""
+    return "sn_migrate_" + hashlib.md5(f"{database}/".encode()).hexdigest()
+
+
 def migrate(db: Db) -> int:
     """执行未应用的脚本，返回本次执行的个数。"""
     user = db.target.user
     applied_now = 0
     with db.connection() as conn, conn.cursor() as c:
-        c.execute("SELECT GET_LOCK('sn_center_migrate', 120) AS ok")
+        # 锁名带库名：同一台 MySQL 上别的库（开发 / 测试 / 正式）建表不互相等待（命名锁整台服务器共用，见 locks）
+        lock = migrate_lock_name(db.target.database)
+        c.execute("SELECT GET_LOCK(%s, 120) AS ok", (lock,))
         if not c.fetchone()["ok"]:
             raise MigrationError("could not acquire migration lock")
         try:
@@ -151,7 +159,7 @@ def migrate(db: Db) -> int:
                 applied_now += 1
                 log.info("migration_applied", version=m.version, script=m.script)
         finally:
-            c.execute("SELECT RELEASE_LOCK('sn_center_migrate')")
+            c.execute("SELECT RELEASE_LOCK(%s)", (lock,))
     return applied_now
 
 
