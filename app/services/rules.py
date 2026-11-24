@@ -104,6 +104,8 @@ VERSION_FIELDS = (
     "length_sep_before",
     "length_sep_after",
     "with_unit",
+    "attach_width",
+    "attach_tail",
     "used",
     "claimed_pi",
     "derived_from",
@@ -380,7 +382,16 @@ def spec_of(v: dict) -> codec.Spec:
         v.get("length_sep_before") or "",
         v.get("length_sep_after") or "",
         bool(v.get("with_unit")),
+        int(v.get("attach_width") or 0),
+        v.get("attach_tail") or "",
     )
+
+
+def attach_text(s: codec.Spec) -> str:
+    """附件项次段的说明（锁定提示用）：附件项次（N 位）+ 固定字符 / 不带附件项次。"""
+    if not s.with_attach:
+        return "不带附件项次"
+    return f"附件项次（{s.attach_width} 位）" + (f" + {s.attach_tail}" if s.attach_tail else "")
 
 
 def format_text(s: codec.Spec, inc: Inc | None = None) -> str:
@@ -389,6 +400,11 @@ def format_text(s: codec.Spec, inc: Inc | None = None) -> str:
     head = [s.prefix] if inc is None else [inc.head, f"识别码（{inc.text(inc.start)}~{inc.text(inc.end)}）"]
     if inc is not None and inc.tail:
         head.append(inc.tail)
+    if s.with_attach:
+        # 附件项次：前缀（及识别码）之后、流水之前，取物料行的附件项次
+        head.append(f"附件项次（{s.attach_width} 位）")
+        if s.attach_tail:
+            head.append(s.attach_tail)
     parts = [*head, f"{s.seq_len} 位 {s.base} 进制流水"]
     if s.with_length:
         if s.sep_before:
@@ -415,6 +431,9 @@ class SpecIn:
     sep_before: str | None = ""
     sep_after: str | None = ""
     with_unit: bool | None = False
+    #: 附件项次位数（前缀与流水之间；0 = 不带）、附件项次之后流水之前的固定字符
+    attach_width: int | None = 0
+    attach_tail: str | None = ""
 
 
 def normalize(s: SpecIn) -> codec.Spec:
@@ -437,6 +456,8 @@ def normalize(s: SpecIn) -> codec.Spec:
         util.trim(s.sep_before) if with_length else "",
         util.trim(s.sep_after) if with_length else "",
         bool(s.with_unit),
+        s.attach_width or 0,
+        util.trim(s.attach_tail),
     )
     err = codec.validate(spec)
     if err is not None:
@@ -455,8 +476,23 @@ def prefix_taken(prefix: str, memo: dict[str, bool] | None = None) -> bool:
 
 
 def same_seq_format(a: codec.Spec, b: codec.Spec) -> bool:
-    """流水部分相同：进制、流水位数、字符表（同一前缀下锁定）。"""
-    return (a.base, a.seq_len, a.charset) == (b.base, b.seq_len, b.charset)
+    """流水部分相同：进制、流水位数、字符表，及流水之前的附件项次位数与固定字符（同一前缀下锁定：前缀之后到流水的
+    长度固定，同前缀下各版本的号才由流水唯一确定，不会因附件项次段长短不同拼出相同的号）。"""
+    return (a.base, a.seq_len, a.charset, a.attach_width, a.attach_tail) == (
+        b.base,
+        b.seq_len,
+        b.charset,
+        b.attach_width,
+        b.attach_tail,
+    )
+
+
+def format_locked(prefix: str, used: codec.Spec, spec: codec.Spec) -> BizError:
+    """同一前缀下格式与已用的不同（same_seq_format 为假）时的错误：流水部分不同报 RULE_PREFIX_FORMAT_LOCKED，
+    只有附件项次段不同报 RULE_PREFIX_ATTACH_LOCKED。"""
+    if (used.base, used.seq_len, used.charset) != (spec.base, spec.seq_len, spec.charset):
+        return biz(ErrorCode.RULE_PREFIX_FORMAT_LOCKED, prefix=prefix, base=used.base, seq_len=used.seq_len)
+    return biz(ErrorCode.RULE_PREFIX_ATTACH_LOCKED, prefix=prefix, used=attach_text(used))
 
 
 def check_prefix(
@@ -507,7 +543,7 @@ def _prefix_rules(
         # 突破版本（同前缀、由原版本加位而来）按原版本的流水格式比较
         b = by_id.get(v["derived_from"]) or v
         if spec is not None and not same_seq_format(spec_of(b), spec):
-            raise biz(ErrorCode.RULE_PREFIX_FORMAT_LOCKED, prefix=prefix, base=b["base"], seq_len=b["seq_len"])
+            raise format_locked(prefix, spec_of(b), spec)
     for v in _overlapping(prefix):
         # 不论是否同一 PI：不同前缀一个是另一个的开头时，流水不同也可能拼出相同的号（如 P1+03+后缀 5 与 P103+5）
         raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=prefix, other=v["prefix"], pi=v["claimed_pi"] or "-")
@@ -732,7 +768,7 @@ def _inc_guard(inc: Inc, value: int, spec: codec.Spec, pi: str, current: tuple[s
     for v in db.all("SELECT * FROM sn_rule_version WHERE prefix = %s", spec.prefix):
         b = base_of(v)
         if not same_seq_format(spec_of(b), spec):
-            raise biz(ErrorCode.RULE_PREFIX_FORMAT_LOCKED, prefix=spec.prefix, base=b["base"], seq_len=b["seq_len"])
+            raise format_locked(spec.prefix, spec_of(b), spec)
 
 
 def _inc_verify(inc: Inc, value: int, spec: codec.Spec, pi: str, customer: str | None, scope: IncScope) -> None:
@@ -1064,9 +1100,10 @@ def _adopt(cu: CurrentUser, rule: dict, pi: str, orgs: set[str]) -> None:
         check_visible(cu, rule)
 
 
-#: 示例号用的米数、单位（页面不填时）
+#: 示例号用的米数、单位、附件项次（页面不填时）
 SAMPLE_LENGTH = "100"
 SAMPLE_UNIT = "M"
+SAMPLE_ATTACH = "1"
 
 
 def preview(
@@ -1077,8 +1114,10 @@ def preview(
     grow: bool = False,
     inc_in: dict | None = None,
     pi_in: str | None = None,
+    attach: str | None = None,
 ) -> dict:
-    """编辑时的示例号：前 5 个和最大号（米数、单位用示例值）、最大流水（规则位数的）。seq_start：从这个流水起
+    """编辑时的示例号：前 5 个和最大号（米数、单位、附件项次用示例值；
+    附件项次比位数长时按示例值 1）、最大流水（规则位数的）。seq_start：从这个流水起
     （自定义规则的起始号），不填从 1 起。grow（上限自动突破）：起始号可超过规则位数（按突破后的位数），
     最大号之后另带突破后的第一个号（最大流水 + 1）。
     inc_in（识别码：inc_start、inc_end、inc_tail，inc_customers 适用客户、inc_pick 改选的已释放号段；s.prefix 为
@@ -1114,6 +1153,9 @@ def preview(
         }
     sample_len = codec.clean_length(length) or SAMPLE_LENGTH
     sample_unit = util.trim(unit) or SAMPLE_UNIT
+    sample_attach = util.trim(attach)
+    if not sample_attach or not codec.attach_fits(sample_attach, spec):
+        sample_attach = SAMPLE_ATTACH
     mx = codec.max_seq(spec)
     first = check_seq_start(seq_start, spec, grow) or 1
     seqs = list(range(first, min(first + 4, mx) + 1)) + ([mx] if mx > first + 4 else [])
@@ -1128,7 +1170,7 @@ def preview(
         {
             "seq_dec": i,
             "seq_text": codec.encode_seq(i, text(i)),
-            "sn": codec.format_sn(i, text(i), sample_len, sample_unit),
+            "sn": codec.format_sn(i, text(i), sample_len, sample_unit, sample_attach),
         }
         for i in seqs
     ]
@@ -1137,6 +1179,7 @@ def preview(
         "format": format_text(spec, inc),
         "sample_length": sample_len,
         "sample_unit": sample_unit,
+        "sample_attach": sample_attach if spec.with_attach else None,
         "samples": samples,
         "inc": inc_out,
     }
@@ -1147,6 +1190,7 @@ def describe(s: codec.Spec) -> str:
         f"prefix={s.prefix} suffix={s.suffix} base={s.base} len={s.seq_len} with_length={int(s.with_length)} "
         f"length_pad={s.length_pad} sep_before={s.sep_before} sep_after={s.sep_after} "
         f"with_unit={int(s.with_unit)} charset={s.charset}"
+        + (f" attach_width={s.attach_width} attach_tail={s.attach_tail}" if s.with_attach else "")
     )
 
 
@@ -1602,7 +1646,7 @@ def _rule_sn_range(every: list[dict], items: str, col: str) -> list[dict]:
         if sample:
             v = max(_base_versions(vs) or vs, key=lambda x: x["id"])
             try:
-                start = codec.format_sn(1, spec_of(v), SAMPLE_LENGTH, SAMPLE_UNIT)
+                start = codec.format_sn(1, spec_of(v), SAMPLE_LENGTH, SAMPLE_UNIT, SAMPLE_ATTACH)
             except (codec.SeqOverflow, ValueError):
                 start = None
         out.append({"rule_id": rid, "start_sn": start, "start_sample": sample, "max_sn": sns.get(hi) if hi else None})
@@ -1648,9 +1692,9 @@ def _insert_version(
     """inc：带识别码的版本（spec.prefix 为完整的「前缀 + 自增值 + 固定字符」，inc_value 为取到的值）。"""
     return db.insert(
         "INSERT INTO sn_rule_version(rule_id, version, prefix, suffix, base, seq_len, charset, with_length, "
-        "length_pad, length_sep_before, length_sep_after, with_unit, used, claimed_pi, derived_from, inc_head, "
-        "inc_tail, inc_start, inc_end, inc_value, inc_customer, created_by, created_at, updated_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "length_pad, length_sep_before, length_sep_after, with_unit, attach_width, attach_tail, used, claimed_pi, "
+        "derived_from, inc_head, inc_tail, inc_start, inc_end, inc_value, inc_customer, created_by, created_at, "
+        "updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         rule_id,
         version,
         spec.prefix,
@@ -1663,6 +1707,8 @@ def _insert_version(
         spec.sep_before,
         spec.sep_after,
         1 if spec.with_unit else 0,
+        spec.attach_width,
+        spec.attach_tail,
         1 if used else 0,
         claimed_pi,
         derived_from,
@@ -1834,7 +1880,7 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
                 db.exec(
                     "UPDATE sn_rule_version SET prefix = %s, suffix = %s, base = %s, seq_len = %s, charset = %s, "
                     "with_length = %s, length_pad = %s, length_sep_before = %s, length_sep_after = %s, "
-                    "with_unit = %s, updated_at = %s WHERE id = %s",
+                    "with_unit = %s, attach_width = %s, attach_tail = %s, updated_at = %s WHERE id = %s",
                     spec.prefix,
                     spec.suffix,
                     spec.base,
@@ -1845,6 +1891,8 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
                     spec.sep_before,
                     spec.sep_after,
                     1 if spec.with_unit else 0,
+                    spec.attach_width,
+                    spec.attach_tail,
                     now,
                     cur["id"],
                 )
@@ -2042,6 +2090,8 @@ def _custom_spec(c: dict) -> codec.Spec:
             c.get("sep_before") or "",
             c.get("sep_after") or "",
             c.get("with_unit", False),
+            c.get("attach_width") or 0,
+            c.get("attach_tail") or "",
         )
     )
 
@@ -2120,6 +2170,8 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
         "length_sep_before": spec.sep_before,
         "length_sep_after": spec.sep_after,
         "with_unit": 1 if spec.with_unit else 0,
+        "attach_width": spec.attach_width,
+        "attach_tail": spec.attach_tail,
         "used": 0,
         "claimed_pi": None,
         "derived_from": None,
@@ -2153,6 +2205,9 @@ def _custom_dict(spec: codec.Spec, inc: Inc | None = None, customers=None) -> di
         "with_unit": spec.with_unit,
         "suffix": spec.suffix,
     }
+    if spec.with_attach:
+        # 附件项次（前缀与流水之间）：不带时没有这两项（与原来相同）
+        out.update({"attach_width": spec.attach_width, "attach_tail": spec.attach_tail})
     if inc is not None:
         out.update(inc.fields())
         if customers is not None:
@@ -2286,8 +2341,14 @@ def pi_default(pi: str) -> Resolved | None:
     return _registered(pi, pi_rule(pi))
 
 
-def info(res: Resolved | None, length: str | None = None, start_seq: int = 1, unit: str | None = None) -> dict | None:
-    """规则说明：来源、选法、规则、本 PI 用的版本、格式、第一个号（按本行米数、单位）。"""
+def info(
+    res: Resolved | None,
+    length: str | None = None,
+    start_seq: int = 1,
+    unit: str | None = None,
+    attach: str | None = None,
+) -> dict | None:
+    """规则说明：来源、选法、规则、本 PI 用的版本、格式、第一个号（按本行米数、单位、附件项次）。"""
     if res is None:
         return None
     out = {
@@ -2323,14 +2384,20 @@ def info(res: Resolved | None, length: str | None = None, start_seq: int = 1, un
         out["sep_after"] = s.sep_after
         out["with_unit"] = s.with_unit
         out["suffix"] = s.suffix
+        out["attach_width"] = s.attach_width
+        out["attach_tail"] = s.attach_tail
         # 上限自动突破时为加到 12 位的最大流水
         out["max_seq"] = codec.max_seq_grow(s) if res.seq_grow else codec.max_seq(s)
         if res.seq_start is not None:
             # 自定义规则的起始号：从最大号之后编号时第一个号不小于它
             start_seq = max(start_seq, res.seq_start)
-        if (length is not None or not s.with_length) and 0 < start_seq <= out["max_seq"]:
+        if (
+            (length is not None or not s.with_length)
+            and codec.attach_fits(attach, s)
+            and 0 < start_seq <= out["max_seq"]
+        ):
             w = codec.widen(s, codec.seq_width(start_seq, s)) if res.seq_grow else s
-            out["first_sn"] = codec.format_sn(start_seq, w, length, unit)
+            out["first_sn"] = codec.format_sn(start_seq, w, length, unit, attach)
     elif res.rule is not None:
         t = current_version(res.rule)
         if t is not None:
@@ -2775,7 +2842,7 @@ def _fill_sn_range(items: list[dict]) -> None:
         x["start_sample"] = lo is None
         if lo is None and spec is not None:
             try:
-                lo = codec.format_sn(1, spec, SAMPLE_LENGTH, SAMPLE_UNIT)
+                lo = codec.format_sn(1, spec, SAMPLE_LENGTH, SAMPLE_UNIT, SAMPLE_ATTACH)
             except (codec.SeqOverflow, ValueError):
                 lo = None
         x["start_sn"] = lo

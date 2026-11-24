@@ -31,6 +31,8 @@ def _spec(b: RuleSpecIn) -> rules.SpecIn:
         b.sep_before,
         b.sep_after,
         b.with_unit,
+        b.attach_width,
+        b.attach_tail,
     )
 
 
@@ -96,7 +98,8 @@ def rule_delete(id: int, cu: OperatorDep) -> dict:
 
 @router.post(
     "/preview",
-    summary="示例号：前 5 个和最大号（米数、单位用示例值；可从起始号起；上限自动突破时另带突破后的第一个号）、最大流水",
+    summary="示例号：前 5 个和最大号（米数、单位、附件项次用示例值；可从起始号起；上限自动突破时另带突破后的第一个号）"
+    "、最大流水",
 )
 def rule_preview(body: RulePreviewIn, cu: OperatorDep) -> dict:
     inc = None
@@ -108,7 +111,9 @@ def rule_preview(body: RulePreviewIn, cu: OperatorDep) -> dict:
             "inc_customers": body.inc_customers,
             "inc_pick": body.inc_pick,
         }
-    return rules.preview(_spec(body), body.length, body.unit, body.seq_start, bool(body.seq_grow), inc, body.pi_no)
+    return rules.preview(
+        _spec(body), body.length, body.unit, body.seq_start, bool(body.seq_grow), inc, body.pi_no, body.attach
+    )
 
 
 @router.get("/options", summary="生成页规则库选项：推荐的排前面；给出本 PI 用这条规则时的版本与是否须换前缀")

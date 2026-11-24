@@ -574,11 +574,13 @@
       },
       "sec": {
         "PRE": "Prefix",
+        "ATT": "Attachment item",
         "SEQ": "Serial",
         "SUF": "Suffix"
       },
       "secHint": {
         "PRE": "Before the serial",
+        "ATT": "Between prefix and serial, taken from each line",
         "SEQ": "Exactly one",
         "SUF": "After the serial"
       },
@@ -592,6 +594,12 @@
         "AUTO": "Per-customer increment"
       },
       "toSuf": "→ suffix",
+      "toBeforeSeq": "→ before serial",
+      "attachWidth": "Width",
+      "attachTip": "At generation each line's attachment item (the same as on its SNs) is written between the prefix and the serial, left-padded with 0 to the width; the width is locked under the same prefix",
+      "attachTooLong": "Attachment item {attach} exceeds {width} digits; those lines cannot be generated. Increase the width",
+      "attachUsed": "attachment item ({width} digits)",
+      "attachNone": "no attachment item",
       "col": {
         "NO": "No.",
         "PART": "Part",
@@ -632,7 +640,8 @@
         "SEQ": "Serial",
         "LEN": "Length",
         "UNIT": "Unit",
-        "INC": "ID code"
+        "INC": "ID code",
+        "ATTACH": "Attachment item"
       },
       "cut": {
         "ALL": "All",
@@ -652,12 +661,15 @@
         "PREFIX_EMPTY": "The prefix cannot be empty",
         "AFTER_SEQ": "Length and unit can only be in the suffix",
         "INC_AFTER_SEQ": "ID code can only be before the serial (after the prefix)",
+        "ATTACH_AFTER_SEQ": "Attachment item can only be between the prefix and the serial",
+        "ATTACH_BEFORE_INC": "Attachment item must come after the ID code",
+        "ATTACH_WIDTH": "Attachment item width must be 1–{max}",
         "INC_RANGE": "ID code accepts digits only: start and end are 0–{max}, start cannot exceed end",
         "UNIT_AFTER_LEN": "Unit must come after length",
         "UNIT_GAP": "Without length, the unit must directly follow the serial",
         "DUPLICATE": "Serial, length and unit can each appear only once",
         "PREFIX_TOO_LONG": "The prefix exceeds {max} characters",
-        "SEP_TOO_LONG": "Text between serial and length, or between length and unit, is limited to {max} characters"
+        "SEP_TOO_LONG": "Text between attachment item and serial, serial and length, or length and unit, is limited to {max} characters"
       },
       "changeConfirm": "Some selected lines already have SNs. Change the rule?",
       "seqGrowPrefix": "Set per prefix: the first selection of the prefix decides, later change it in the rule library",
@@ -722,6 +734,7 @@
       "RULE2_PREFIX": "Second-SN rule needs new prefix",
       "RULE2_PI_PREFIX": "Differs from the PI's second prefix",
       "ATTACH_NOT_NUMERIC": "Attachment item must be numeric",
+      "ATTACH_TOO_LONG": "Attachment item is longer than the rule's attachment item width",
       "LENGTH_EMPTY": "Length to fill",
       "UNIT_EMPTY": "Unit to fill",
       "FILL": "To fill",

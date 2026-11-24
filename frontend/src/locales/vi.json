@@ -574,11 +574,13 @@
       },
       "sec": {
         "PRE": "Tiền tố",
+        "ATT": "Hạng mục đính kèm",
         "SEQ": "Tuần tự",
         "SUF": "Hậu tố"
       },
       "secHint": {
         "PRE": "Trước tuần tự",
+        "ATT": "Giữa tiền tố và tuần tự, lấy theo từng dòng",
         "SEQ": "Bắt buộc, chỉ một",
         "SUF": "Sau tuần tự"
       },
@@ -592,6 +594,12 @@
         "AUTO": "Tự tăng theo khách hàng"
       },
       "toSuf": "→ hậu tố",
+      "toBeforeSeq": "→ trước tuần tự",
+      "attachWidth": "Số chữ số",
+      "attachTip": "Khi tạo, hạng mục đính kèm của từng dòng (giống trên SN) được ghi giữa tiền tố và tuần tự, thiếu chữ số thì bù 0 bên trái; số chữ số bị khóa trong cùng tiền tố",
+      "attachTooLong": "Hạng mục đính kèm {attach} vượt quá {width} chữ số, các dòng đó không thể tạo: hãy tăng số chữ số",
+      "attachUsed": "hạng mục đính kèm ({width} chữ số)",
+      "attachNone": "không có hạng mục đính kèm",
       "col": {
         "NO": "STT",
         "PART": "Thành phần",
@@ -632,7 +640,8 @@
         "SEQ": "Tuần tự",
         "LEN": "Chiều dài",
         "UNIT": "Đơn vị",
-        "INC": "Mã nhận dạng"
+        "INC": "Mã nhận dạng",
+        "ATTACH": "Hạng mục đính kèm"
       },
       "cut": {
         "ALL": "Toàn bộ",
@@ -652,12 +661,15 @@
         "PREFIX_EMPTY": "Tiền tố không được để trống",
         "AFTER_SEQ": "Chiều dài và đơn vị chỉ được nằm ở hậu tố",
         "INC_AFTER_SEQ": "Mã nhận dạng chỉ được đặt trước tuần tự (sau tiền tố)",
+        "ATTACH_AFTER_SEQ": "Hạng mục đính kèm chỉ được đặt giữa tiền tố và tuần tự",
+        "ATTACH_BEFORE_INC": "Hạng mục đính kèm phải nằm sau mã nhận dạng",
+        "ATTACH_WIDTH": "Số chữ số hạng mục đính kèm phải từ 1–{max}",
         "INC_RANGE": "Mã nhận dạng chỉ nhận chữ số: giá trị đầu, cuối từ 0–{max}, giá trị đầu không lớn hơn giá trị cuối",
         "UNIT_AFTER_LEN": "Đơn vị phải nằm sau chiều dài",
         "UNIT_GAP": "Khi không có chiều dài, đơn vị phải nằm ngay sau tuần tự",
         "DUPLICATE": "Tuần tự, chiều dài và đơn vị mỗi loại chỉ có một",
         "PREFIX_TOO_LONG": "Tiền tố vượt quá {max} ký tự",
-        "SEP_TOO_LONG": "Phần giữa tuần tự và chiều dài, hoặc giữa chiều dài và đơn vị, tối đa {max} ký tự"
+        "SEP_TOO_LONG": "Phần giữa hạng mục đính kèm và tuần tự, tuần tự và chiều dài, hoặc chiều dài và đơn vị, tối đa {max} ký tự"
       },
       "changeConfirm": "Một số dòng đã có SN. Đổi quy tắc?",
       "seqGrowPrefix": "Thiết lập theo tiền tố: lần chọn đầu tiên quyết định, sau đó sửa trong thư viện quy tắc",
@@ -722,6 +734,7 @@
       "RULE2_PREFIX": "Quy tắc SN thứ hai cần tiền tố mới",
       "RULE2_PI_PREFIX": "Khác tiền tố SN thứ hai PI đã dùng",
       "ATTACH_NOT_NUMERIC": "Hạng mục đính kèm phải là số",
+      "ATTACH_TOO_LONG": "Hạng mục đính kèm dài hơn số chữ số hạng mục đính kèm của quy tắc",
       "LENGTH_EMPTY": "Chiều dài chờ điền",
       "UNIT_EMPTY": "Đơn vị chờ điền",
       "FILL": "Chờ điền",

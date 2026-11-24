@@ -3,6 +3,7 @@
 import gzip
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -39,6 +40,46 @@ def test_sn_is_prefix_serial_length_unit_suffix():
     assert codec.format_sn(7, UNIT_ONLY, "100", "PCS") == "U007PCS"
     assert codec.encode_seq(31, B32) == "000Z"
     assert codec.encode_seq(32, B32) == "0010"
+
+
+#: 前缀 + 附件项次（补足 3 位）+ "-" + 流水(4) + 米数（补足 4 位）+ 单位 + 后缀
+ATT = Spec("AB", "#", 10, 4, "0123456789", True, 4, "", "", True, 3, "-")
+
+
+def test_attach_between_prefix_and_serial():
+    """附件项次：前缀之后、流水之前，左侧补 0 成定长；比位数长不能写；反解、截单位按定长的附件项次段。"""
+    assert ATT.with_attach and ATT.head_len == len("AB") + 3 + 1
+    assert codec.format_sn(5, ATT, "50", "M", "7") == "AB007-00050050M#"
+    assert codec.format_sn(5, ATT, "50", "M", "123") == "AB123-00050050M#"
+    with pytest.raises(codec.AttachTooLong):
+        codec.format_sn(5, ATT, "50", "M", "1234")
+    with pytest.raises(codec.AttachTooLong):
+        codec.format_sn(5, ATT, "50", "M", "")
+    assert codec.attach_fits("12", ATT) and not codec.attach_fits("1234", ATT) and not codec.attach_fits(" ", ATT)
+    assert codec.attach_fits(None, NOLEN), "不带附件项次的规则都能写"
+    assert codec.parse("AB007-00050050M#", ATT) == 5
+    assert codec.parse("AB123-00120050M#", ATT) == 12
+    assert codec.parse("AB007_00050050M#", ATT) is None, "固定字符不符"
+    assert codec.parse("AB07-00050050M#", ATT) is None, "附件项次段长度不符"
+    assert codec.unit_of("AB010-00050050M#", ATT, "50") == "M"
+    # 不带附件项次时与原来相同（固定字符不起作用）
+    assert Spec("AB", "", 10, 4, "0123456789", False, attach_tail="-") == Spec("AB", "", 10, 4, "0123456789", False)
+    assert codec.format_sn(1, NOLEN, attach="9") == "AVM00001X"
+    assert codec.validate(replace(ATT, attach_width=17)) == ErrorCode.RULE_ATTACH_WIDTH_INVALID
+    assert codec.validate(replace(ATT, attach_tail="x" * 17)) == ErrorCode.RULE_ATTACH_WIDTH_INVALID
+    # 52 + 附件项次段 4 + 流水 4 + 米数补 0 位 4 + 后缀 1 = 65 > 64；不带附件项次时 61 不超
+    assert codec.validate(replace(ATT, prefix="P" * 52)) == ErrorCode.RULE_SN_TOO_LONG, "总长算上附件项次段"
+    assert codec.validate(replace(ATT, prefix="P" * 52, attach_width=0)) is None
+
+
+def test_schema_columns_stop_at_column_list():
+    """建表脚本的字段清单：到与开头括号配对的右括号为止（分区定义不算），含新增的附件项次两列。"""
+    from app.db.migrate import schema_columns
+
+    names = [n for n, _d in schema_columns("sn_rule_version")]
+    assert names[names.index("with_unit") + 1 : names.index("with_unit") + 3] == ["attach_width", "attach_tail"]
+    assert "PARTITION" not in [n for n, _d in schema_columns("sn_audit")]
+    assert all(n.islower() for t in schema_tables() for n, _d in schema_columns(t))
 
 
 def test_default_32_charset_drops_confusable_letters():
@@ -363,7 +404,7 @@ def test_migration_flyway_checksum():
     """测试阶段只保留一个 V1__init.sql；校验和按 Flyway 算法固定，改了建表脚本须同步更新这里（并重建测试库）。"""
     ours = {m.script: m for m in migrations()}
     assert list(ours) == ["V1__init.sql"]
-    assert ours["V1__init.sql"].checksum() == -1406597576
+    assert ours["V1__init.sql"].checksum() == -1908091444
     statements = ours["V1__init.sql"].statements()
     assert len(statements) == 45
     text = "\n".join(statements)

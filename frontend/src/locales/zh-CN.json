@@ -574,11 +574,13 @@
       },
       "sec": {
         "PRE": "前缀",
+        "ATT": "附件项次",
         "SEQ": "流水",
         "SUF": "后缀"
       },
       "secHint": {
         "PRE": "流水之前",
+        "ATT": "前缀与流水之间，按物料行取值",
         "SEQ": "必须且只有一个",
         "SUF": "流水之后"
       },
@@ -592,6 +594,12 @@
         "AUTO": "按客户自增"
       },
       "toSuf": "→ 后缀",
+      "toBeforeSeq": "→ 流水前",
+      "attachWidth": "位数",
+      "attachTip": "生成时取每个物料行的附件项次（与号上的附件项次相同），放在前缀与流水之间，不足位数左侧补 0；同一前缀下位数锁定",
+      "attachTooLong": "附件项次 {attach} 超过 {width} 位，这些物料行不能生成：请加位数",
+      "attachUsed": "附件项次（{width} 位）",
+      "attachNone": "不带附件项次",
       "col": {
         "NO": "顺序",
         "PART": "组件",
@@ -632,7 +640,8 @@
         "SEQ": "流水",
         "LEN": "米数",
         "UNIT": "单位",
-        "INC": "识别码"
+        "INC": "识别码",
+        "ATTACH": "附件项次"
       },
       "cut": {
         "ALL": "全部",
@@ -652,12 +661,15 @@
         "PREFIX_EMPTY": "前缀不能为空",
         "AFTER_SEQ": "米数、单位只能放在后缀",
         "INC_AFTER_SEQ": "识别码只能放在流水之前（前缀之后）",
+        "ATTACH_AFTER_SEQ": "附件项次只能放在前缀与流水之间",
+        "ATTACH_BEFORE_INC": "附件项次须放在识别码之后",
+        "ATTACH_WIDTH": "附件项次位数须为 1–{max}",
         "INC_RANGE": "识别码只能填数字：起始值、结束值为 0–{max}，起始值不能大于结束值",
         "UNIT_AFTER_LEN": "单位须放在米数之后",
         "UNIT_GAP": "不带米数时，单位须紧跟流水",
         "DUPLICATE": "流水、米数、单位各只能有一个",
         "PREFIX_TOO_LONG": "前缀超过 {max} 位",
-        "SEP_TOO_LONG": "流水与米数、米数与单位之间的内容各不能超过 {max} 位"
+        "SEP_TOO_LONG": "附件项次与流水、流水与米数、米数与单位之间的内容各不能超过 {max} 位"
       },
       "changeConfirm": "所选物料行已生成过号，确认改选规则？",
       "seqGrowPrefix": "按前缀统一设置：前缀第一次被选时按这里的选择，之后在规则库修改",
@@ -722,6 +734,7 @@
       "RULE2_PREFIX": "第二 SN 规则须换前缀",
       "RULE2_PI_PREFIX": "与本 PI 已用第二前缀不同",
       "ATTACH_NOT_NUMERIC": "附件项次须为数字",
+      "ATTACH_TOO_LONG": "附件项次超过规则的附件项次位数",
       "LENGTH_EMPTY": "米数待填写",
       "UNIT_EMPTY": "产品单位待填写",
       "FILL": "待填写",

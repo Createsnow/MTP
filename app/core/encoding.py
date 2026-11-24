@@ -1,4 +1,5 @@
-"""SN 编码：完整 SN = 前缀 + 流水 + 米数前分隔符 + 米数 + 米数后分隔符 + 单位 + 后缀（PRD 5.2.2）。
+"""SN 编码：完整 SN = 前缀 + [附件项次 + 附件项次后固定字符] + 流水 + 米数前分隔符 + 米数 + 米数后分隔符 + 单位 + 后缀
+（PRD 5.2.2）。
 
 - 流水定长：左侧用字符表首字符（默认字符表即 0）补到流水位数；10 / 16 / 32 / 36 进制。
 - 米数是字符串，取所属物料行的米数原样写入（只去首尾空格，000 / 001 / 0.5 / 其他都可以，不按数值规范化），
@@ -7,7 +8,11 @@
 - 单位取物料行的产品单位原样写入；规则不带单位时不写。
 - 前缀、后缀、分隔符不限制字符（只去首尾空格）。前缀必填：一个前缀只归属一张 PI，同一 PI 内流水不重复，
   SN 就不重复（号池唯一约束兜底）。
-- 流水紧跟前缀、定长，所以按版本可以把 SN 反解出十进制流水。
+- 附件项次（生成页自定义规则的组件，2026-11-24）：放在前缀与流水之间，取所属物料行的附件项次（与号上的 attach_no
+  相同），按规则的附件项次位数（attach_width）左侧补 0 成定长（项次比位数长的物料行不能生成）；attach_width = 0 为
+  不带。定长是为了不撞号：前缀 + 附件项次 + 固定字符的长度固定，SN 仍由「前缀 + 流水」唯一确定（同一前缀下各版本的
+  附件项次位数、固定字符锁定，见 rules.same_seq_format），附件项次只是随物料行变的字符。
+- 流水在前缀（及定长的附件项次段）之后、定长，所以按版本可以把 SN 反解出十进制流水。
 - 上限自动突破（生成页自定义规则的开关）：流水用完规则位数后接着加位（4 位用到 9999 后 10000 起为 5 位，以此类推，
   最多 MAX_SEQ_LEN 位）；每个位数各是一个规则版本（同前缀、同格式，只有流水位数不同），号挂在自己位数的版本上，
   所以每个版本内流水仍是定长。
@@ -32,6 +37,8 @@ MAX_SEQ_LEN = 12
 MAX_LENGTH_PAD = 32
 #: 分隔符最多字符数
 MAX_SEP = 16
+#: 附件项次位数上限（0 = 不带附件项次）
+MAX_ATTACH_WIDTH = 16
 SN_MAX = 64
 LONG_MAX = 2**63 - 1
 #: 字符表不能含空白
@@ -58,6 +65,10 @@ class Spec:
     sep_before: str = ""
     sep_after: str = ""
     with_unit: bool = False
+    #: 附件项次位数（前缀与流水之间，左侧补 0 成定长）；0 = 不带附件项次
+    attach_width: int = 0
+    #: 附件项次之后、流水之前的固定字符（不带附件项次时为空）
+    attach_tail: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "prefix", self.prefix or "")
@@ -65,6 +76,18 @@ class Spec:
         object.__setattr__(self, "sep_before", self.sep_before or "")
         object.__setattr__(self, "sep_after", self.sep_after or "")
         object.__setattr__(self, "length_pad", self.length_pad or 0)
+        object.__setattr__(self, "attach_width", self.attach_width or 0)
+        # 不带附件项次时固定字符不起作用，统一为空（免得同一格式比较时不相等）
+        object.__setattr__(self, "attach_tail", (self.attach_tail or "") if self.attach_width else "")
+
+    @property
+    def with_attach(self) -> bool:
+        return self.attach_width > 0
+
+    @property
+    def head_len(self) -> int:
+        """流水之前的字符数：前缀 + 附件项次（定长）+ 附件项次后固定字符。"""
+        return len(self.prefix) + (self.attach_width + len(self.attach_tail) if self.with_attach else 0)
 
 
 def validate(s: Spec) -> ErrorCode | None:
@@ -79,13 +102,15 @@ def validate(s: Spec) -> ErrorCode | None:
         return ErrorCode.RULE_LENGTH_PAD_INVALID
     if len(s.sep_before) > MAX_SEP or len(s.sep_after) > MAX_SEP:
         return ErrorCode.RULE_AFFIX_INVALID
+    if s.attach_width < 0 or s.attach_width > MAX_ATTACH_WIDTH or len(s.attach_tail) > MAX_SEP:
+        return ErrorCode.RULE_ATTACH_WIDTH_INVALID
     if s.charset is None or len(s.charset) != s.base:
         return ErrorCode.RULE_CHARSET_LENGTH
     if not _CHARSET_RE.match(s.charset):
         return ErrorCode.RULE_CHARSET_INVALID
     if len(set(s.charset)) != len(s.charset):
         return ErrorCode.RULE_CHARSET_DUPLICATE
-    if len(s.prefix) + len(s.suffix) + s.seq_len + _fixed_length_part(s) > SN_MAX:
+    if s.head_len + len(s.suffix) + s.seq_len + _fixed_length_part(s) > SN_MAX:
         return ErrorCode.RULE_SN_TOO_LONG
     return None
 
@@ -163,18 +188,52 @@ def pad_length(length: str | None, s: Spec) -> str:
     return v.rjust(s.length_pad, "0") if s.length_pad else v
 
 
-def format_sn(seq: int, s: Spec, length: str | None = None, unit: str | None = None) -> str:
-    """完整 SN；规则带米数时写入（补 0）米数及前后分隔符，带单位时写入单位，不带时忽略。"""
+class AttachTooLong(ValueError):
+    """附件项次比规则的附件项次位数长。"""
+
+
+def attach_fits(attach: str | None, s: Spec) -> bool:
+    """附件项次能否写进规则（不带附件项次的规则都能）：去首尾空格后非空、不超过附件项次位数。"""
+    if not s.with_attach:
+        return True
+    v = (attach or "").strip()
+    return 0 < len(v) <= s.attach_width
+
+
+def pad_attach(attach: str | None, s: Spec) -> str:
+    """附件项次段：左侧补 0 到附件项次位数 + 固定字符；规则不带附件项次时为空。比位数长抛 AttachTooLong。"""
+    if not s.with_attach:
+        return ""
+    v = (attach or "").strip()
+    if not v or len(v) > s.attach_width:
+        raise AttachTooLong(f"attach {v!r} exceeds width {s.attach_width}")
+    return v.rjust(s.attach_width, "0") + s.attach_tail
+
+
+def format_sn(seq: int, s: Spec, length: str | None = None, unit: str | None = None, attach: str | None = None) -> str:
+    """完整 SN；规则带附件项次时在前缀之后写入（补 0）附件项次及固定字符，带米数时写入（补 0）米数及前后分隔符，
+    带单位时写入单位，不带时忽略。"""
     mid = s.sep_before + pad_length(length, s) + s.sep_after if s.with_length else ""
     tail = (unit or "") if s.with_unit else ""
-    return s.prefix + encode_seq(seq, s) + mid + tail + s.suffix
+    return s.prefix + pad_attach(attach, s) + encode_seq(seq, s) + mid + tail + s.suffix
+
+
+def _head_ok(sn: str, s: Spec) -> bool:
+    """SN 开头为前缀（带附件项次时之后为定长附件项次段，以固定字符结尾）。"""
+    if not sn.startswith(s.prefix):
+        return False
+    if not s.with_attach:
+        return True
+    return len(sn) >= s.head_len and sn[len(s.prefix) : s.head_len].endswith(s.attach_tail)
 
 
 def parse(sn: str | None, s: Spec) -> int | None:
-    """按规则反解完整 SN → 十进制流水；前缀、后缀、流水位数或字符、米数分隔符不符返回 None。"""
-    if sn is None or not sn.startswith(s.prefix) or not sn.endswith(s.suffix):
+    """按规则反解完整 SN → 十进制流水；前缀、附件项次段长度、后缀、流水位数或字符、米数分隔符不符返回 None。"""
+    if sn is None or not _head_ok(sn, s) or not sn.endswith(s.suffix):
         return None
-    body = sn[len(s.prefix) : len(sn) - len(s.suffix)]
+    if len(sn) - len(s.suffix) < s.head_len:
+        return None
+    body = sn[s.head_len : len(sn) - len(s.suffix)]
     if len(body) < s.seq_len:
         return None
     seq_text, rest = body[: s.seq_len], body[s.seq_len :]
@@ -188,12 +247,12 @@ def parse(sn: str | None, s: Spec) -> int | None:
 
 def unit_of(sn: str | None, s: Spec, length: str | None = None) -> str | None:
     """从完整 SN 截出写入的产品单位（米数传号上记的未补 0 原值）；规则不带单位或号与规则对不上时返回 None。"""
-    if not s.with_unit or sn is None or not sn.startswith(s.prefix) or not sn.endswith(s.suffix):
+    if not s.with_unit or sn is None or not _head_ok(sn, s) or not sn.endswith(s.suffix):
         return None
     mid = s.sep_before + pad_length(length, s) + s.sep_after if s.with_length else ""
-    head = len(s.prefix) + s.seq_len + len(mid)
+    head = s.head_len + s.seq_len + len(mid)
     end = len(sn) - len(s.suffix)
-    if end < head or sn[len(s.prefix) + s.seq_len : head] != mid:
+    if end < head or sn[s.head_len + s.seq_len : head] != mid:
         return None
     return sn[head:end]
 

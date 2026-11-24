@@ -172,6 +172,54 @@ def create_statement(table: str) -> str:
     raise MigrationError(f"迁移脚本里没有 CREATE TABLE {table}")
 
 
+_COLUMN = re.compile(r"^(\w+)\s+(.+?),?$")
+_NOT_COLUMN = ("PRIMARY", "UNIQUE", "KEY", "INDEX", "CONSTRAINT", "FOREIGN", "FULLTEXT", "CHECK")
+
+
+def schema_columns(table: str) -> list[tuple[str, str]]:
+    """迁移脚本里某张表的字段（按建表语句顺序）：[(字段名, 字段定义)]，定义不含末尾逗号。"""
+    stmt = create_statement(table)
+    start = stmt.index("(")
+    depth, end = 0, len(stmt)
+    for i in range(start, len(stmt)):
+        # 字段清单到与开头括号配对的右括号为止（之后的表选项、分区定义不算）；注释里没有括号
+        if stmt[i] == "(":
+            depth += 1
+        elif stmt[i] == ")":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    body = stmt[start + 1 : end]
+    out = []
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.split()[0].upper() in _NOT_COLUMN:
+            continue
+        m = _COLUMN.match(line)
+        if m:
+            out.append((m.group(1), line.rstrip(",")))
+    return out
+
+
+def missing_columns(db: Db, tables: list[str] | None = None) -> list[tuple[str, str, str, str | None]]:
+    """库里已有的表缺了迁移脚本里的哪些字段：[(表, 字段名, 字段定义, 前一个字段)]（表本身不存在的不算）。"""
+    rows = db.all("SELECT TABLE_NAME t, COLUMN_NAME c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()")
+    have: dict[str, set[str]] = {}
+    for r in rows:
+        have.setdefault(r["t"], set()).add(r["c"])
+    out = []
+    for t in tables if tables is not None else schema_tables():
+        if t not in have:
+            continue
+        prev = None
+        for name, definition in schema_columns(t):
+            if name not in have[t]:
+                out.append((t, name, definition, prev))
+            prev = name
+    return out
+
+
 def check_tables(db: Db) -> None:
     """库里须有迁移脚本建的每张表。表结构只来自迁移脚本本身（每张表一条完整的 CREATE TABLE），
     启动时不另外补建表、补字段：缺表说明库是按旧版建表脚本建的，报错并说明处理办法。"""
@@ -183,4 +231,12 @@ def check_tables(db: Db) -> None:
             "启动时不补建表：只是 V1 新增了表、原有表没改时按运维手册 8.9 只补建缺失的表"
             "（uv run python -m devtools.create_missing_tables --yes）；否则测试库按 8.7 保留账户、按 V1 重建其他表"
             "（uv run python -m devtools.rebuild_keep_accounts），或按 8.1 / 8.2 / 8.3 整体重建"
+        )
+    cols = missing_columns(db)
+    if cols:
+        raise MigrationError(
+            f"数据库 {db.target.database} 的表缺少建表脚本里的字段 "
+            + "、".join(f"{t}.{c}" for t, c, _d, _p in cols)
+            + "（库是按旧版建表脚本建的）。启动时不补字段：按运维手册 8.9 补建缺失的字段"
+            "（uv run python -m devtools.create_missing_tables --yes，已有的数据不动）"
         )

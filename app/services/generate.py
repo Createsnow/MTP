@@ -717,6 +717,9 @@ def _check(line: Line, reg: dict | None, taken: dict, reg2: dict | None = None) 
         line.issues.append("ATTACH_EMPTY")
     elif attach_key(line.attach) is None:
         line.issues.append("ATTACH_NOT_NUMERIC")
+    elif any(sp is not None and not codec.attach_fits(line.attach, sp) for sp in specs):
+        # 规则带附件项次（前缀与流水之间，定长）：项次比规则的附件项次位数长时写不进去，须调大位数或换新前缀
+        line.issues.append("ATTACH_TOO_LONG")
 
 
 def _prefix_ok(line: Line, memo: dict | None, res: rules.Resolved | None = None) -> bool:
@@ -728,7 +731,7 @@ def _prefix_ok(line: Line, memo: dict | None, res: rules.Resolved | None = None)
         return rules.inc_usable(res, line.pi)
     spec = res.spec()
     own = res.version["id"] if res.plan == rules.PLAN_CLAIM else None
-    k = (spec.prefix, spec.base, spec.seq_len, spec.charset, line.pi, own)
+    k = (spec.prefix, spec.base, spec.seq_len, spec.charset, spec.attach_width, spec.attach_tail, line.pi, own)
     if memo is None or k not in memo:
         ok = rules.prefix_usable(spec.prefix, spec, line.pi, own)
         if memo is None:
@@ -1061,6 +1064,9 @@ def _seg_parts(
 ) -> tuple[list[list[int]], list[dict], str | None, str | None]:
     """物料行切到的号段 → (号段, 各段起止号, 米数, 单位)。上限自动突破：用完规则位数后接着加位（最多 12 位），
     号段按位数切开，每段一个位数（生成时挂对应位数的版本）。"""
+    if not codec.attach_fits(x.attach, spec):
+        # 兜底（生成条件已拦 ATTACH_TOO_LONG）：附件项次写不进规则的定长附件项次段
+        raise biz(ErrorCode.GEN_ATTACH_TOO_LONG, bill_no=x.bill_no, seq=x.seq, attach=x.attach, width=spec.attach_width)
     segs = [list(g) for g in raw]
     end = segs[-1][1]
     mx = codec.max_seq_grow(spec) if grow else codec.max_seq(spec)
@@ -1080,8 +1086,8 @@ def _seg_parts(
             "start_seq": a,
             "end_seq": b,
             "qty": b - a + 1,
-            "start_sn": codec.format_sn(a, ws, length, unit),
-            "end_sn": codec.format_sn(b, ws, length, unit),
+            "start_sn": codec.format_sn(a, ws, length, unit, x.attach),
+            "end_sn": codec.format_sn(b, ws, length, unit, x.attach),
             "start_seq_text": codec.encode_seq(a, ws),
             "end_seq_text": codec.encode_seq(b, ws),
         }
@@ -1485,7 +1491,7 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
             # 号段已按位数切开（见 _plan），一块内位数相同
             v = version_for(base_v, s)
             spec = rules.spec_of(v)
-            sns = [codec.format_sn(q, spec, x["length"], x.get("unit")) for q in range(s, e + 1)]
+            sns = [codec.format_sn(q, spec, x["length"], x.get("unit"), x["attach"]) for q in range(s, e + 1)]
             rows = [
                 (
                     sn,
@@ -1528,7 +1534,17 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
             continue_deleted_rev(sns)
             if seq2 is not None:
                 _write_sub(
-                    pi, j["gen_batch"], now, sub, versions2[sub["rule_key"]], spec.prefix, s, e, seq2, version_for
+                    pi,
+                    j["gen_batch"],
+                    now,
+                    sub,
+                    versions2[sub["rule_key"]],
+                    spec.prefix,
+                    s,
+                    e,
+                    seq2,
+                    version_for,
+                    x["attach"],
                 )
             bill_stats.touch(pi, x["bill_no"])
             done += len(sns)
@@ -1616,8 +1632,10 @@ def _write_sub(
     e: int,
     seq2,
     version_for,
+    attach: str | None = None,
 ) -> None:
     """生成事务内：刚写入的一块第一 SN（前缀 prefix、流水 s..e）依次配上第二 SN（seq2 为本行第二 SN 的流水）。
+    attach：本行的附件项次（第二 SN 规则带附件项次时写入）。
     第二 SN 全局唯一：与第二 SN 撞号由 sn_item_sub 的唯一键拦下；与号池里的号相同（只可能是 SN 导入的号：
     两边前缀用途分开且不能一个是另一个的开头）时整次回滚。导入时另按第二前缀的前缀锁排队（见 sn_import）。"""
     ids = {
@@ -1631,7 +1649,7 @@ def _write_sub(
         q2 = next(seq2)
         v = version_for(base2, q2)
         spec = rules.spec_of(v)
-        sn2 = codec.format_sn(q2, spec, sub["length"], sub.get("unit"))
+        sn2 = codec.format_sn(q2, spec, sub["length"], sub.get("unit"), attach)
         rows.append((ids[q], sn2, pi, q2, spec.prefix, v["id"], batch, now))
     sns = [r[1] for r in rows]
     hit = db.one(f"SELECT sn, pi_no, origin FROM sn_item WHERE sn IN ({marks(len(sns))}) LIMIT 1", *sns)

@@ -121,11 +121,16 @@ class ErrorCode(Enum):
     RULE_CHARSET_LENGTH = (400, "字符表的字符数必须等于进制")
     RULE_CHARSET_INVALID = (400, "字符表不能含空格")
     RULE_CHARSET_DUPLICATE = (400, "字符表不能有重复字符")
-    RULE_SN_TOO_LONG = (400, "前缀 + 流水 + 分隔符 + 米数 + 单位 + 后缀总长不能超过 64")
+    RULE_SN_TOO_LONG = (400, "前缀 + 附件项次 + 流水 + 分隔符 + 米数 + 单位 + 后缀总长不能超过 64")
     RULE_PREFIX_FORMAT_LOCKED = (
         409,
         "前缀 {prefix} 已按 {base} 进制、{seq_len} 位流水使用；同一前缀下进制、流水位数、字符表不能改，须换新前缀",
     )
+    RULE_PREFIX_ATTACH_LOCKED = (
+        409,
+        "前缀 {prefix} 已按「{used}」使用；同一前缀下附件项次位数及其后的固定字符不能改，须换新前缀",
+    )
+    RULE_ATTACH_WIDTH_INVALID = (400, "附件项次位数须为 1–16，附件项次与流水之间的固定字符不超过 16 个字符")
     RULE_PREFIX_OVERLAP = (409, "前缀 {prefix} 与 PI {pi} 的前缀 {other} 一个是另一个的开头，可能编出相同的号，请更换")
     RULE_USED_FORMAT_LOCKED = (
         409,
@@ -177,6 +182,10 @@ class ErrorCode(Enum):
     GEN_NOT_GENERATABLE = (400, "所选范围不能生成：{detail}")
     GEN_PI_QUOTA_EMPTY = (400, "所选范围没有可生成额度")
     GEN_RULE_EXHAUSTED = (400, "规则位数已用尽：最大流水 {max}，本次需要排到 {end}")
+    GEN_ATTACH_TOO_LONG = (
+        400,
+        "单据 {bill_no} 序号 {seq} 的附件项次 {attach} 超过规则的附件项次位数 {width}，请调大附件项次位数或换新前缀",
+    )
     GEN_PREVIEW_REQUIRED = (400, "没有完成本次预演，不能生成")
     GEN_PREVIEW_EXPIRED = (400, "预演已过期，请重新预演")
     GEN_PREVIEW_CHANGED = (409, "预演条件已改变，请重新预演")

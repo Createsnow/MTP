@@ -102,6 +102,8 @@ CREATE TABLE sn_rule_version (
   length_sep_before VARCHAR(16) NOT NULL DEFAULT '' COMMENT '米数前分隔符',
   length_sep_after  VARCHAR(16) NOT NULL DEFAULT '' COMMENT '米数后分隔符',
   with_unit    TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '带单位（物料行的产品单位）',
+  attach_width INT         NOT NULL DEFAULT 0 COMMENT '附件项次位数：前缀与流水之间写入物料行的附件项次，左侧补 0 成定长；0 = 不带（同一前缀下锁定）',
+  attach_tail  VARCHAR(16) NOT NULL DEFAULT '' COMMENT '附件项次之后、流水之前的固定字符（同一前缀下锁定）',
   used         TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '生成过号（含之后撤销的）：再改格式必须另出一版',
   claimed_pi   VARCHAR(64) NULL COMMENT '归属 PI：首次用它生成的 PI，或换前缀另出时的 PI',
   derived_from BIGINT      NULL COMMENT '由哪一版换前缀而来',
