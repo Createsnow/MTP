@@ -234,15 +234,19 @@
                   </span>
                 </template>
                 <template v-else-if="p.kind === 'ATTACH'">
-                  <!-- 附件项次：取物料行的附件项次，左侧补 0 到位数（定长）；前缀已归属本 PI 时按它锁定的位数，置灰 -->
+                  <!-- 附件项次：取物料行的附件项次原样（不补 0），前、后连接符默认 -，都可以不填；后连接符不填（或以数字、
+                       小数点开头）时提示可能重号（不拦）。前缀已归属本 PI 时按它锁定的连接符，置灰 -->
                   <span class="fi" :title="attachLockTitle">
-                    {{ t("generate.rule.attachWidth") }}
-                    <el-input-number v-model="p.width" :min="1" :max="ATTACH_WIDTH_MAX" :step="1" step-strictly size="small" class="w100"
-                      :disabled="!!locked" />
+                    {{ t("generate.rule.attachHead") }}
+                    <el-input v-model="p.head" :maxlength="SEP_MAX" size="small" class="w80 mono-in" :disabled="!!locked"
+                      :placeholder="t('common.optional')" />
                   </span>
-                  <span v-if="attachLong.length" class="fi seq-short">
-                    {{ t("generate.rule.attachTooLong", { width: p.width, attach: attachLong.join("、") }) }}
+                  <span class="fi" :title="attachLockTitle">
+                    {{ t("generate.rule.attachTail") }}
+                    <el-input v-model="p.tail" :maxlength="SEP_MAX" size="small" class="w80 mono-in" :disabled="!!locked"
+                      :placeholder="t('common.optional')" />
                   </span>
+                  <span v-if="attachDup" class="fi seq-short">{{ t("generate.rule.attachNoSep") }}</span>
                 </template>
                 <template v-else-if="p.kind === 'LEN'">
                   <span class="fi">
@@ -291,8 +295,8 @@ import { BASES, CHARSETS } from "@/constants";
 import { useTime } from "@/composables/useTime";
 import { translateApiError } from "@/i18n";
 import {
-  ATTACH_WIDTH_MAX, CUTS, DATE_FMTS, INC_MAX, PAD_MAX, PREFIX_MAX, SEP_MAX, SEPS, SEQ_LEN_MAX, TEMPLATES, TEXT_MAX,
-  SEQ_LEN_DEFAULT, addIndex, attachText, attachWidthFor, blockReason, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue,
+  CUTS, DATE_FMTS, INC_MAX, PAD_MAX, PREFIX_MAX, SEP_MAX, SEPS, SEQ_LEN_MAX, TEMPLATES, TEXT_MAX,
+  SEQ_LEN_DEFAULT, addIndex, attachText, attachWarn, blockReason, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue,
   partsSig, sampleSegments,
   seqLenFor, seqNeed, seqText as seqTextOf, textPart, todayIn, toSpec,
 } from "@/snParts.js";
@@ -305,7 +309,7 @@ type RulePrefix = { prefix: string; custom: CustomRule | null; seq_grow?: boolea
 /** SN 组成的一个组件（见 snParts.js） */
 type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
-  base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number; width?: number;
+  base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number; head?: string; tail?: string;
 };
 /** 识别码的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因；
  *  current 为已生效的适用客户（前缀还没有规则时为 null），free 为已释放、可以改选的号段 */
@@ -324,8 +328,6 @@ type SecKey = "PRE" | "ATT" | "SEQ" | "SUF";
 const props = defineProps<{
   modelValue: boolean; pi: string; lines: OrderLine[]; options: any[]; rulePrefix?: RulePrefix; nextSeq?: number; piQuota?: number;
   prefixLocked?: Record<string, CustomRule>;
-  /** 本 PI 全部有效物料行的附件项次（规则作用于整张 PI）：附件项次组件的默认位数、项次比位数长的提示按它 */
-  piAttaches?: string[];
   /** 2 = 第二 SN 的规则（双 SN 的 PI；规则、默认前缀、锁定前缀取 ctx.rule2）；不给为第一 SN */
   slot?: number;
 }>();
@@ -449,13 +451,6 @@ function chipValue(p: Part) {
 }
 const chipType = (k: string) =>
   k === "SEQ" ? "SEQ" : k === "ATTACH" || k === "LEN" || k === "UNIT" ? "LINE" : k === "SEP" ? "SEP" : k === "INC" ? "INC" : "FIX";
-/** 本 PI 物料行的附件项次（没给时为所选物料行的） */
-const attaches = computed(() => (props.piAttaches ?? props.lines.map((l) => l.attach_no)).map((a) => String(a ?? "").trim()).filter(Boolean));
-/** 比附件项次位数长、写不进去的附件项次（去重；这些物料行不能生成） */
-const attachLong = computed(() => {
-  const w = Number(built.value.spec.attach_width) || 0;
-  return w ? [...new Set(attaches.value.filter((a) => a.length > w))] : [];
-});
 
 /** 流水的位置；没有流水时（不应出现）全部算前缀 */
 const seqAt = computed(() => {
@@ -513,8 +508,8 @@ function applyTpl(k: keyof typeof TEMPLATES) {
 function addPart(kind: string) {
   if (addBlock.value[kind]) return;
   const p: Part = newPart(kind, today());
-  // 附件项次：位数默认为本 PI 物料行附件项次的最大长度（前缀已归属本 PI 时按它锁定的位数）
-  if (kind === "ATTACH") p.width = Number(locked.value?.attach_width) || attachWidthFor(attaches.value);
+  // 附件项次：连接符默认 -（前缀已归属本 PI、带附件项次时按它锁定的连接符）
+  if (kind === "ATTACH" && locked.value?.with_attach) Object.assign(p, { head: locked.value.attach_head ?? "", tail: locked.value.attach_tail ?? "" });
   setParts(insertAt(parts.value, addIndex(parts.value, kind, target.value, partCtx.value), p));
 }
 /** 上移 / 下移第 i 个组件（d = -1 / 1）：越过流水即在前缀、后缀之间换段；放不下时按钮置灰 */
@@ -581,17 +576,17 @@ const lockTitle = computed(() =>
     )
     : undefined,
 );
-/** 前缀已归属本 PI 时附件项次段锁定（位数、固定字符与它相同，带不带也相同）：不同时的提示，并且不能保存 */
+/** 后连接符不填（或以数字、小数点开头）：项次与流水分不开，可能重号（只提示，保存时再确认一次） */
+const attachDup = computed(() => attachWarn(built.value.spec));
+/** 前缀已归属本 PI 时附件项次段锁定（带不带、连接符与它相同）：不同时的提示，并且不能保存 */
 const attachLockTitle = computed(() => (locked.value ? attachLockError.value || undefined : undefined));
 const attachLockError = computed(() => {
   const lk = locked.value;
   if (!lk) return "";
   const s = built.value.spec;
-  const w = Number(s.attach_width) || 0, lw = Number(lk.attach_width) || 0;
-  if (w === lw && (w === 0 || (s.attach_tail || "") === (lk.attach_tail || ""))) return "";
-  const used = lw
-    ? t("generate.rule.attachUsed", { width: lw }) + (lk.attach_tail ? ` + ${lk.attach_tail}` : "")
-    : t("generate.rule.attachNone");
+  const w = !!s.with_attach, lw = !!lk.with_attach;
+  if (w === lw && (!w || ((s.attach_head || "") === (lk.attach_head || "") && (s.attach_tail || "") === (lk.attach_tail || "")))) return "";
+  const used = lw ? t("generate.rule.attachUsed", { head: lk.attach_head || "", tail: lk.attach_tail || "" }) : t("generate.rule.attachNone");
   return translateApiError({ code: "RULE_PREFIX_ATTACH_LOCKED", params: { prefix: s.prefix, used } }, "");
 });
 /** 本 PI 已用这个前缀（同格式沿用那一版、流水接续）：起始号下限为接续的下一个号，可改大往后跳。 */
@@ -608,12 +603,12 @@ const seqStart = () => {
 const anyGenerated = computed(() => props.lines.some((l) => l.generated_qty > 0));
 /** 编码格式的比较项（流水上限自动突破按前缀，起始号只管下一次生成，都不算） */
 const CFG_KEYS = ["prefix", "base", "seq_len", "with_length", "length_pad", "sep_before", "sep_after", "with_unit", "suffix",
-  "inc_start", "inc_end", "inc_tail", "inc_customers", "inc_pick", "attach_width", "attach_tail"] as const;
+  "inc_start", "inc_end", "inc_tail", "inc_customers", "inc_pick", "with_attach", "attach_head", "attach_tail"] as const;
 const cfgOf = (c: any) => CFG_KEYS.map((k) => {
   const v = c?.[k];
   if (k === "with_length" || k === "with_unit") return !!v;
-  if (k === "attach_width") return Number(v) || 0;
-  if (k === "attach_tail") return Number(c?.attach_width) ? v || "" : "";
+  if (k === "with_attach") return !!v;
+  if (k === "attach_head" || k === "attach_tail") return c?.with_attach ? v || "" : "";
   if (k === "length_pad") return c?.with_length ? Number(v) || 0 : 0;
   if ((k === "sep_before" || k === "sep_after")) return c?.with_length ? v || "" : "";
   if (k === "inc_start" || k === "inc_end" || k === "inc_pick") return v == null ? null : Number(v);
@@ -742,9 +737,12 @@ watch(
     if (!lk || !p) return;
     if (p.base !== lk.base) p.base = lk.base;
     if (p.len !== lk.seq_len) p.len = lk.seq_len;
-    // 附件项次位数同样锁定（组成里有附件项次组件时改为锁定的位数；带不带不自动改，不一致时提示）
+    // 附件项次的连接符同样锁定（组成里有附件项次组件时改为锁定的连接符；带不带不自动改，不一致时提示）
     const a = parts.value.find((x) => x.kind === "ATTACH");
-    if (a && Number(lk.attach_width) > 0 && a.width !== Number(lk.attach_width)) a.width = Number(lk.attach_width);
+    if (a && lk.with_attach) {
+      if (a.head !== (lk.attach_head ?? "")) a.head = lk.attach_head ?? "";
+      if (a.tail !== (lk.attach_tail ?? "")) a.tail = lk.attach_tail ?? "";
+    }
   },
 );
 /** 位数不够装下本 PI 还要的流水（不含余量）：提示改大位数或换进制 */
@@ -772,7 +770,7 @@ async function previewCustom() {
     if (r.inc?.error) sample.error = incErrorText(r.inc.error);
     const list: any[] = r.samples ?? [];
     const len = spec.length_pad ? String(r.sample_length ?? "").padStart(spec.length_pad, "0") : String(r.sample_length ?? "");
-    const att = r.sample_attach != null ? String(r.sample_attach).padStart(Number(spec.attach_width) || 0, "0") : "";
+    const att = r.sample_attach != null ? String(r.sample_attach) : "";
     const toSample = (x: any): Sample | null =>
       x ? { sn: x.sn, segs: sampleSegments(parts.value, partCtx.value, x.sn, x.seq_text, len, r.sample_unit ?? "", att) } : null;
     sample.min = toSample(list[0]);
@@ -816,9 +814,20 @@ async function confirmCustRemoval() {
     return false;
   }
 }
+/** 后连接符不填时保存前再提示一次可能重号（用户确认后照常保存） */
+async function confirmAttachDup() {
+  if (unchanged.value || !attachDup.value) return true;
+  try {
+    await ElMessageBox.confirm(t("generate.rule.attachNoSepConfirm"), t("generate.rule.dialogTitle"), { type: "warning" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 async function save() {
   if (!(await confirmChange())) return;
   if (!(await confirmCustRemoval())) return;
+  if (!(await confirmAttachDup())) return;
   busy.value = "save";
   try {
     const body: Record<string, unknown> = { pi_no: props.pi, lines: refs(), ...(props.slot === 2 ? { slot: 2 } : {}) };
@@ -827,7 +836,7 @@ async function save() {
       body.rule_id = fromRule.value.rule_id;
     } else {
       // 请求体：prefix、base、seq_len、with_length、length_pad、sep_before、sep_after、with_unit、suffix、seq_start，
-      // 另带 seq_grow（上限自动突破，后台不传按关闭）；带附件项次时另带 attach_width、attach_tail
+      // 另带 seq_grow（上限自动突破，后台不传按关闭）；带附件项次时另带 with_attach、attach_head、attach_tail
       // rule_code：新前缀时带上（生成成功后按它存入规则库；留空后台按时间哈希）
       body.custom = { ...fullSpec.value, seq_start: seqStart(), ...(outcome.value?.kind === "NEW" && ruleCode.value ? { rule_code: ruleCode.value } : {}) };
     }
@@ -847,6 +856,7 @@ async function save() {
 .mb { margin-bottom: 12px; }
 .outcome { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .mt { margin-top: 12px; }
+.w80 { width: 80px; }
 .w100 { width: 100px; }
 .w140 { width: 140px; }
 .tip { margin-left: -6px; color: var(--el-text-color-secondary); cursor: help; }

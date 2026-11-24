@@ -716,10 +716,8 @@ def _check(line: Line, reg: dict | None, taken: dict, reg2: dict | None = None) 
     if not line.attach:
         line.issues.append("ATTACH_EMPTY")
     elif attach_key(line.attach) is None:
+        # 规则带附件项次时项次原样写入 SN（前缀与流水之间），须为数字才能与连接符分开，也由这一条保证
         line.issues.append("ATTACH_NOT_NUMERIC")
-    elif any(sp is not None and not codec.attach_fits(line.attach, sp) for sp in specs):
-        # 规则带附件项次（前缀与流水之间，定长）：项次比规则的附件项次位数长时写不进去，须调大位数或换新前缀
-        line.issues.append("ATTACH_TOO_LONG")
 
 
 def _prefix_ok(line: Line, memo: dict | None, res: rules.Resolved | None = None) -> bool:
@@ -731,7 +729,17 @@ def _prefix_ok(line: Line, memo: dict | None, res: rules.Resolved | None = None)
         return rules.inc_usable(res, line.pi)
     spec = res.spec()
     own = res.version["id"] if res.plan == rules.PLAN_CLAIM else None
-    k = (spec.prefix, spec.base, spec.seq_len, spec.charset, spec.attach_width, spec.attach_tail, line.pi, own)
+    k = (
+        spec.prefix,
+        spec.base,
+        spec.seq_len,
+        spec.charset,
+        spec.with_attach,
+        spec.attach_head,
+        spec.attach_tail,
+        line.pi,
+        own,
+    )
     if memo is None or k not in memo:
         ok = rules.prefix_usable(spec.prefix, spec, line.pi, own)
         if memo is None:
@@ -1065,8 +1073,8 @@ def _seg_parts(
     """物料行切到的号段 → (号段, 各段起止号, 米数, 单位)。上限自动突破：用完规则位数后接着加位（最多 12 位），
     号段按位数切开，每段一个位数（生成时挂对应位数的版本）。"""
     if not codec.attach_fits(x.attach, spec):
-        # 兜底（生成条件已拦 ATTACH_TOO_LONG）：附件项次写不进规则的定长附件项次段
-        raise biz(ErrorCode.GEN_ATTACH_TOO_LONG, bill_no=x.bill_no, seq=x.seq, attach=x.attach, width=spec.attach_width)
+        # 兜底（生成条件已拦 ATTACH_NOT_NUMERIC）：附件项次不是数字时不能写进带附件项次的规则
+        raise biz(ErrorCode.GEN_NOT_GENERATABLE, detail=f"{x.bill_no}/{x.seq} ATTACH_NOT_NUMERIC")
     segs = [list(g) for g in raw]
     end = segs[-1][1]
     mx = codec.max_seq_grow(spec) if grow else codec.max_seq(spec)

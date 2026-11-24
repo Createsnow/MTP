@@ -31,8 +31,9 @@ def _spec(b: RuleSpecIn) -> rules.SpecIn:
         b.sep_before,
         b.sep_after,
         b.with_unit,
-        b.attach_width,
+        b.with_attach,
         b.attach_tail,
+        b.attach_head,
     )
 
 

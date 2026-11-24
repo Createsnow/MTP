@@ -223,7 +223,7 @@ def _view(r: dict, bills: BillInfo, s) -> dict:
         "sn2": r.get("sn2") or "",
         "seq_len": None if s is None else s.seq_len,
         "base": None if s is None else s.base,
-        "unit": (None if s is None else codec.unit_of(r["sn"], s, r["length_text"])) or "",
+        "unit": (None if s is None else codec.unit_of(r["sn"], s, r["length_text"], r.get("attach_no"))) or "",
         "seq_text": rules.seq_text(r["rule_version_id"], r["seq_dec"]),
         "seq_dec": util.seq_dec_text(r["seq_pi_no"], r["seq_dec"]),
         "seq_pi_no": r["seq_pi_no"],

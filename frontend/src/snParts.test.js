@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  TEMPLATES, ATTACH_WIDTH_DEFAULT, addIndex, attachText, attachWidthFor, maxSeqOf, seqText, autoIndex, blockReason, defaultParts, formatDate, fromSpec, insertAt, isoWeek, movePart, moveTo, newErrors, newPart,
+  TEMPLATES, addIndex, attachText, attachWarn, maxSeqOf, seqText, autoIndex, blockReason, defaultParts, formatDate, fromSpec, insertAt, isoWeek, movePart, moveTo, newErrors, newPart,
   partValue, partsSig, sampleSegments, todayIn, toSpec,
 } from "./snParts.js";
 
@@ -280,34 +280,46 @@ test("识别码：示例分段按后台预显示的值着色", () => {
   assert.deepEqual(segs, [{ text: "ABC", cls: "" }, { text: "2", cls: "INC" }, { text: "0001", cls: "SEQ" }]);
 });
 
-test("附件项次：放在前缀与流水之间，换算成 attach_width / attach_tail；不带时请求体没有 attach_* 字段", () => {
+test("附件项次：放在前缀与流水之间，前后连接符换算成 attach_head / attach_tail；不带时请求体没有附件项次字段", () => {
   const none = toSpec([P("BILL"), P("SEQ")], ctx);
-  assert.equal("attach_width" in none.spec, false);
-  const r = toSpec([P("TEXT", { text: "AB" }), P("ATTACH", { width: 3 }), P("SEP", { text: "-" }), P("SEQ"), P("LEN"), P("UNIT")], ctx);
+  assert.equal("with_attach" in none.spec, false);
+  // 默认前后连接符都是 -
+  assert.deepEqual([P("ATTACH").head, P("ATTACH").tail], ["-", "-"]);
+  const r = toSpec([P("TEXT", { text: "AB" }), P("ATTACH"), P("SEQ"), P("LEN"), P("UNIT")], ctx);
   assert.deepEqual(codes(r), []);
-  assert.equal(r.spec.prefix, "AB");
-  assert.equal(r.spec.attach_width, 3);
-  assert.equal(r.spec.attach_tail, "-");
-  assert.equal(r.spec.with_length, true);
-  // 拆回：前缀 + 附件项次 + 固定字符 + 流水 + …，再换算相同
+  assert.equal(r.spec.prefix, "AB", "前连接符不算前缀");
+  assert.deepEqual([r.spec.with_attach, r.spec.attach_head, r.spec.attach_tail], [true, "-", "-"]);
+  // 后连接符之后到流水的固定字符并入 attach_tail
+  const r2 = toSpec([P("TEXT", { text: "AB" }), P("ATTACH", { tail: "-" }), P("SEP", { text: "_" }), P("SEQ")], ctx);
+  assert.equal(r2.spec.attach_tail, "-_");
+  // 拆回：前缀 + 附件项次 + 流水 + …，再换算相同
   const back = fromSpec(r.spec, [P("TEXT", { text: "AB" })]);
-  assert.deepEqual(back.map((p) => p.kind), ["TEXT", "ATTACH", "SEP", "SEQ", "LEN", "UNIT"]);
+  assert.deepEqual(back.map((p) => p.kind), ["TEXT", "ATTACH", "SEQ", "LEN", "UNIT"]);
   assert.deepEqual(toSpec(back, ctx).spec, r.spec);
+  // 连接符都可以不填：不是错误，后连接符为空时提示可能重号
+  const r3 = toSpec([P("TEXT", { text: "AB" }), P("ATTACH", { head: "", tail: "" }), P("SEQ")], ctx);
+  assert.deepEqual(codes(r3), []);
+  assert.deepEqual([r3.spec.attach_head, r3.spec.attach_tail], ["", ""]);
+  assert.deepEqual(fromSpec(r3.spec, [P("TEXT", { text: "AB" })]).map((p) => [p.head, p.tail]).filter((x) => x[0] !== undefined), [["", ""]]);
+  assert.equal(attachWarn(r3.spec), true);
+  assert.equal(attachWarn(toSpec([P("TEXT", { text: "AB" }), P("ATTACH", { tail: "0" }), P("SEQ")], ctx).spec), true, "以数字开头同样提示");
+  assert.equal(attachWarn(toSpec([P("TEXT", { text: "AB" }), P("ATTACH", { head: "" }), P("SEQ")], ctx).spec), false, "前连接符不影响");
+  assert.equal(attachWarn(r.spec), false);
+  assert.equal(attachWarn(none.spec), false);
+  assert.ok(codes(toSpec([P("TEXT", { text: "AB" }), P("ATTACH", { head: "x".repeat(17) }), P("SEQ")], ctx)).includes("SEP_TOO_LONG"));
 });
 
-test("附件项次：只能在流水之前、最多一个、在识别码之后、位数 1–16、前缀不能为空", () => {
+test("附件项次：只能在流水之前、最多一个、在识别码之后、前缀不能为空", () => {
   assert.ok(codes(toSpec([P("BILL"), P("SEQ"), P("ATTACH")], ctx)).includes("ATTACH_AFTER_SEQ"));
   assert.ok(codes(toSpec([P("BILL"), P("ATTACH"), P("ATTACH"), P("SEQ")], ctx)).includes("DUPLICATE"));
   assert.ok(codes(toSpec([P("BILL"), P("ATTACH"), P("INC"), P("SEQ")], ctx)).includes("ATTACH_BEFORE_INC"));
-  assert.ok(codes(toSpec([P("BILL"), P("ATTACH", { width: 0 }), P("SEQ")], ctx)).includes("ATTACH_WIDTH"));
-  assert.ok(codes(toSpec([P("BILL"), P("ATTACH", { width: 17 }), P("SEQ")], ctx)).includes("ATTACH_WIDTH"));
   assert.ok(codes(toSpec([P("ATTACH"), P("SEQ")], ctx)).includes("PREFIX_EMPTY"));
-  // 带识别码：前缀 + 识别码 + 固定字符 + 附件项次 + 固定字符 + 流水
-  const r = toSpec([P("TEXT", { text: "C" }), P("INC"), P("SEP", { text: "-" }), P("ATTACH"), P("SEP", { text: "_" }), P("SEQ")], ctx);
+  // 带识别码：前缀 + 识别码 + 固定字符 + 附件项次 + 流水
+  const r = toSpec([P("TEXT", { text: "C" }), P("INC"), P("SEP", { text: "_" }), P("ATTACH"), P("SEQ")], ctx);
   assert.deepEqual(codes(r), []);
   assert.equal(r.spec.prefix, "C");
-  assert.equal(r.spec.inc_tail, "-");
-  assert.equal(r.spec.attach_tail, "_");
+  assert.equal(r.spec.inc_tail, "_");
+  assert.deepEqual([r.spec.attach_head, r.spec.attach_tail], ["-", "-"]);
   // 组件库：附件项次紧挨流水之前（识别码之后）；已有时不能再加
   const ps = [P("TEXT", { text: "C" }), P("INC"), P("SEQ")];
   assert.equal(addIndex(ps, "ATTACH", "SUF", ctx), 2);
@@ -316,12 +328,12 @@ test("附件项次：只能在流水之前、最多一个、在识别码之后�
   assert.equal(autoIndex(withAtt, "INC", ctx), 2);
 });
 
-test("附件项次：默认位数按本 PI 最长的项次，补 0 到位数，示例分段着色", () => {
-  assert.equal(attachWidthFor([]), ATTACH_WIDTH_DEFAULT);
-  assert.equal(attachWidthFor(["1", "10", " 100 "]), 3);
-  assert.equal(attachText({ width: 3 }, "7"), "007");
-  const ps = [P("TEXT", { text: "AB" }), P("ATTACH", { width: 2 }), P("SEQ")];
-  const segs = sampleSegments(ps, ctx, "AB070001", "0001", "", "", "07");
-  assert.deepEqual(segs.map((g) => g.cls), ["", "LINE", "SEQ"]);
-  assert.equal(sampleSegments(ps, ctx, "AB0001", "0001", "", "", "07"), null);
+test("附件项次：原样不补 0，示例分段着色", () => {
+  assert.equal(attachText({ head: "-", tail: "-" }, "1"), "-1-");
+  assert.equal(attachText({ head: "-", tail: "-" }, "100"), "-100-");
+  assert.equal(attachText({ head: "", tail: "" }, " 7 "), "7");
+  const ps = [P("TEXT", { text: "AB" }), P("ATTACH"), P("SEQ")];
+  const segs = sampleSegments(ps, ctx, "AB-10-0001", "0001", "", "", "10");
+  assert.deepEqual(segs.map((g) => [g.text, g.cls]), [["AB", ""], ["-10-", "LINE"], ["0001", "SEQ"]]);
+  assert.equal(sampleSegments(ps, ctx, "AB0001", "0001", "", "", "10"), null);
 });

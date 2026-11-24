@@ -42,42 +42,60 @@ def test_sn_is_prefix_serial_length_unit_suffix():
     assert codec.encode_seq(32, B32) == "0010"
 
 
-#: 前缀 + 附件项次（补足 3 位）+ "-" + 流水(4) + 米数（补足 4 位）+ 单位 + 后缀
-ATT = Spec("AB", "#", 10, 4, "0123456789", True, 4, "", "", True, 3, "-")
+#: 前缀 + 前连接符 + 附件项次（原样）+ 后连接符 + 流水(4) + 米数（补足 4 位）+ 单位 + 后缀
+ATT = Spec("AB", "#", 10, 4, "0123456789", True, 4, "", "", True, True, "-", "_")
+#: 不带前后连接符（后连接符为空时项次与流水可能分不开）
+ATT0 = Spec("AB", "", 10, 4, "0123456789", False, with_attach=True)
 
 
 def test_attach_between_prefix_and_serial():
-    """附件项次：前缀之后、流水之前，左侧补 0 成定长；比位数长不能写；反解、截单位按定长的附件项次段。"""
-    assert ATT.with_attach and ATT.head_len == len("AB") + 3 + 1
-    assert codec.format_sn(5, ATT, "50", "M", "7") == "AB007-00050050M#"
-    assert codec.format_sn(5, ATT, "50", "M", "123") == "AB123-00050050M#"
-    with pytest.raises(codec.AttachTooLong):
-        codec.format_sn(5, ATT, "50", "M", "1234")
-    with pytest.raises(codec.AttachTooLong):
-        codec.format_sn(5, ATT, "50", "M", "")
-    assert codec.attach_fits("12", ATT) and not codec.attach_fits("1234", ATT) and not codec.attach_fits(" ", ATT)
-    assert codec.attach_fits(None, NOLEN), "不带附件项次的规则都能写"
-    assert codec.parse("AB007-00050050M#", ATT) == 5
-    assert codec.parse("AB123-00120050M#", ATT) == 12
-    assert codec.parse("AB007_00050050M#", ATT) is None, "固定字符不符"
-    assert codec.parse("AB07-00050050M#", ATT) is None, "附件项次段长度不符"
-    assert codec.unit_of("AB010-00050050M#", ATT, "50") == "M"
-    # 不带附件项次时与原来相同（固定字符不起作用）
-    assert Spec("AB", "", 10, 4, "0123456789", False, attach_tail="-") == Spec("AB", "", 10, 4, "0123456789", False)
+    """附件项次：前缀之后、流水之前，原样写入（不补 0），前后各有连接符；不是数字不能写；反解、截单位按连接符定位，
+    知道号上的附件项次时按它定位。"""
+    assert codec.format_sn(5, ATT, "50", "M", "7") == "AB_7-00050050M#"
+    assert codec.format_sn(5, ATT, "50", "M", "100") == "AB_100-00050050M#", "1 就是 1，100 就是 100"
+    assert codec.format_sn(5, ATT, "50", "M", "1.5") == "AB_1.5-00050050M#"
+    for bad in ("", "A1", "1-2"):
+        with pytest.raises(codec.AttachInvalid):
+            codec.format_sn(5, ATT, "50", "M", bad)
+    assert codec.attach_fits("12", ATT) and not codec.attach_fits(" ", ATT) and codec.attach_fits(None, NOLEN)
+    assert codec.parse("AB_7-00050050M#", ATT) == 5
+    assert codec.parse("AB_100-00120050M#", ATT) == 12
+    assert codec.parse("AB-7-00050050M#", ATT) is None, "前连接符不符"
+    assert codec.parse("AB_7_00050050M#", ATT) is None, "后连接符不符"
+    assert codec.unit_of("AB_10-00050050M#", ATT, "50") == "M"
+    assert codec.unit_of("AB_10-00050050M#", ATT, "50", "10") == "M"
+    assert ATT.attach_safe and not ATT0.attach_safe and Spec("A", "", 10, 4, "0123456789", False).attach_safe
+    assert not replace(ATT, attach_tail="0").attach_safe, "后连接符以数字开头同样分不开"
+    # 不带连接符：项次 1 + 流水 10001 与项次 11 + 流水 0001 拼成同一个号（页面提示；撞上时号池唯一键拦下）
+    g = replace(ATT0, seq_len=5)
+    assert codec.format_sn(10001, g, attach="1") == codec.format_sn(1, ATT0, attach="11") == "AB110001"
+    # 不知道项次时逐个试；知道号上的项次时按它定位
+    assert codec.parse("AB110001", ATT0) == 1
+    assert codec.parse("AB110001", g, "1") == 10001 and codec.parse("AB110001", ATT0, "11") == 1
+    assert codec.parse("AB110001", ATT0, "1") is None
+    # 不带附件项次时与原来相同（连接符不起作用）
+    assert Spec("AB", "", 10, 4, "0123456789", False, attach_tail="-", attach_head="-") == Spec(
+        "AB", "", 10, 4, "0123456789", False
+    )
     assert codec.format_sn(1, NOLEN, attach="9") == "AVM00001X"
-    assert codec.validate(replace(ATT, attach_width=17)) == ErrorCode.RULE_ATTACH_WIDTH_INVALID
-    assert codec.validate(replace(ATT, attach_tail="x" * 17)) == ErrorCode.RULE_ATTACH_WIDTH_INVALID
-    # 52 + 附件项次段 4 + 流水 4 + 米数补 0 位 4 + 后缀 1 = 65 > 64；不带附件项次时 61 不超
-    assert codec.validate(replace(ATT, prefix="P" * 52)) == ErrorCode.RULE_SN_TOO_LONG, "总长算上附件项次段"
-    assert codec.validate(replace(ATT, prefix="P" * 52, attach_width=0)) is None
+    assert codec.validate(ATT0) is None, "连接符可以不填"
+    assert codec.validate(replace(ATT, attach_head="x" * 17)) == ErrorCode.RULE_ATTACH_SEP_INVALID
+    assert codec.validate(replace(ATT, attach_tail="x" * 17)) == ErrorCode.RULE_ATTACH_SEP_INVALID
+    # 54 + 连接符 2 + 项次至少 1 + 流水 4 + 米数补 0 位 4 + 后缀 1 = 66 > 64；不带附件项次时 63 不超
+    assert codec.validate(replace(ATT, prefix="P" * 54)) == ErrorCode.RULE_SN_TOO_LONG, "总长算上附件项次段"
+    assert codec.validate(replace(ATT, prefix="P" * 54, with_attach=False)) is None
 
 
 def test_schema_columns_stop_at_column_list():
-    """建表脚本的字段清单：到与开头括号配对的右括号为止（分区定义不算），含新增的附件项次两列。"""
+    """建表脚本的字段清单：到与开头括号配对的右括号为止（分区定义不算），含新增的附件项次三列。"""
     from app.db.migrate import schema_columns
 
     names = [n for n, _d in schema_columns("sn_rule_version")]
-    assert names[names.index("with_unit") + 1 : names.index("with_unit") + 3] == ["attach_width", "attach_tail"]
+    assert names[names.index("with_unit") + 1 : names.index("with_unit") + 4] == [
+        "with_attach",
+        "attach_head",
+        "attach_tail",
+    ]
     assert "PARTITION" not in [n for n, _d in schema_columns("sn_audit")]
     assert all(n.islower() for t in schema_tables() for n, _d in schema_columns(t))
 
@@ -404,7 +422,7 @@ def test_migration_flyway_checksum():
     """测试阶段只保留一个 V1__init.sql；校验和按 Flyway 算法固定，改了建表脚本须同步更新这里（并重建测试库）。"""
     ours = {m.script: m for m in migrations()}
     assert list(ours) == ["V1__init.sql"]
-    assert ours["V1__init.sql"].checksum() == -1908091444
+    assert ours["V1__init.sql"].checksum() == 826106475
     statements = ours["V1__init.sql"].statements()
     assert len(statements) == 45
     text = "\n".join(statements)

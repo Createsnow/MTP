@@ -97,8 +97,9 @@ export interface LineRule {
   sep_after?: string;
   with_unit?: boolean;
   suffix: string;
-  /** 附件项次位数（0 = 不带）、附件项次之后流水之前的固定字符 */
-  attach_width?: number;
+  /** 带附件项次、附件项次之后流水之前的连接符 */
+  with_attach?: boolean;
+  attach_head?: string;
   attach_tail?: string;
 }
 
@@ -122,9 +123,11 @@ export interface CustomRule {
   inc_start?: number;
   inc_end?: number;
   inc_tail?: string;
-  /** 附件项次（前缀与流水之间，取物料行的附件项次，左侧补 0 到这个位数）；不带时没有或为 0 */
-  attach_width?: number;
-  /** 附件项次之后、流水之前的固定字符 */
+  /** 带附件项次（前缀与流水之间，原样写入物料行的附件项次）；不带时没有或为 false */
+  with_attach?: boolean;
+  /** 附件项次之后、流水之前的连接符（默认 -） */
+  /** 附件项次的前连接符（前缀与附件项次之间，可为空） */
+  attach_head?: string;
   attach_tail?: string;
   inc_value?: number | null;
   /** 规则编码（选填）：前缀是新的、生成成功存入规则库时用它；不填按 8 位时间哈希，与已有编码相同时自动加 -v1、-v2… */

@@ -299,9 +299,9 @@
       </template>
     </el-drawer>
 
-    <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="ctx.rule_prefix" :prefix-locked="ctx.prefix_locked" :next-seq="ctx.counter?.next_seq" :pi-quota="piQuota" :pi-attaches="piAttaches" @saved="reloadCtx" />
+    <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="ctx.rule_prefix" :prefix-locked="ctx.prefix_locked" :next-seq="ctx.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
     <!-- 双 SN：第二 SN 的规则（同一个对话框，规则选项、默认前缀、锁定前缀取 ctx.rule2） -->
-    <RuleDialog v-if="ctx?.rule2" v-model="ruleDlg.open2" :slot="2" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule2.rule_options" :rule-prefix="ctx.rule2.rule_prefix" :prefix-locked="ctx.rule2.prefix_locked" :next-seq="ctx.rule2.counter?.next_seq" :pi-quota="piQuota" :pi-attaches="piAttaches" @saved="reloadCtx" />
+    <RuleDialog v-if="ctx?.rule2" v-model="ruleDlg.open2" :slot="2" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule2.rule_options" :rule-prefix="ctx.rule2.rule_prefix" :prefix-locked="ctx.rule2.prefix_locked" :next-seq="ctx.rule2.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
 
     <GenConfirmDialog v-model="genDlg" :preview="gen.preview" :unlock-limit="unlockLimit"
       :loading="busy === 'run'" @confirm="runGen" />
@@ -531,8 +531,6 @@ const ruleLines = computed(() => allLines.value.filter((l) => !l.void));
 const piRule = computed<any>(() => ruleLines.value.find((l: any) => l.rule?.prefix)?.rule ?? null);
 /** 本 PI 全部物料行还可生成的数量之和：各物料行共用 PI 的一套流水，规则对话框按它给流水位数的默认值 */
 const piQuota = computed(() => allLines.value.reduce((n, l) => n + (Number(l.quota) || 0), 0));
-/** 本 PI 有效物料行的附件项次：规则对话框按它给附件项次组件的默认位数、提示比位数长的项次 */
-const piAttaches = computed(() => ruleLines.value.map((l) => l.attach_no || "").filter(Boolean));
 const limits = computed(() => ctx.value?.limits || { default: 10000, max: 500000, sync_threshold: 5000 });
 
 async function openDetail(key: { pi?: string; bill_no?: string }) {

@@ -286,7 +286,7 @@ def _seq_len(version_id: int | None) -> int | None:
 def _unit(r: dict) -> str:
     """号上写入的产品单位（按规则版本从 SN 截出；规则不带单位时为空）。"""
     s = rules.cached_spec(r["rule_version_id"])
-    return (None if s is None else codec.unit_of(_text(r["sn"]), s, _text(r["length_text"]))) or ""
+    return (None if s is None else codec.unit_of(_text(r["sn"]), s, _text(r["length_text"]), r.get("attach_no"))) or ""
 
 
 def _base(version_id: int | None) -> int | None:

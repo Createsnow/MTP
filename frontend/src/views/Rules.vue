@@ -217,8 +217,8 @@
           <el-switch v-model="form.with_unit" />
         </el-form-item>
         <!-- 附件项次（前缀与流水之间，在生成页「选规则 → 自定义」里配置）：这里只显示、保存时原样带上 -->
-        <el-form-item v-if="form.attach_width" :label="t('generate.rule.part.ATTACH')">
-          <span class="sn-mono">{{ t("generate.rule.attachUsed", { width: form.attach_width }) }}{{ form.attach_tail ? ` + ${form.attach_tail}` : "" }}</span>
+        <el-form-item v-if="form.with_attach" :label="t('generate.rule.part.ATTACH')">
+          <span class="sn-mono">{{ t("generate.rule.attachUsed", { head: form.attach_head, tail: form.attach_tail }) }}</span>
         </el-form-item>
         <el-form-item>
           <template #label>{{ t("rules.suffix") }}<HelpTip :content="t('rules.suffixHint')" /></template>
@@ -300,7 +300,7 @@ const sampleUnit = ref("");
 /** 规则库流水位数默认 5（自定义规则默认 4，在生成页）。 */
 const EMPTY = {
   rule_code: "", factory_code: "", prefix: "", suffix: "", base: 10, seq_len: 5, charset: "",
-  with_length: true, length_pad: 0, sep_before: "", sep_after: "", with_unit: false, attach_width: 0, attach_tail: "",
+  with_length: true, length_pad: 0, sep_before: "", sep_after: "", with_unit: false, with_attach: false, attach_head: "", attach_tail: "",
 };
 const form = reactive({ ...EMPTY });
 const defaultCharset = computed(() => CHARSETS[form.base]);
@@ -393,7 +393,8 @@ const editHint = computed(() => {
     || c.charset !== charset || !!c.with_length !== len || !!c.with_unit !== form.with_unit
     || (c.length_pad || 0) !== (len ? form.length_pad || 0 : 0)
     || (c.length_sep_before || "") !== (len ? form.sep_before : "") || (c.length_sep_after || "") !== (len ? form.sep_after : "")
-    || (c.attach_width || 0) !== (form.attach_width || 0) || (c.attach_tail || "") !== (form.attach_tail || "");
+    || !!c.with_attach !== !!form.with_attach || (c.attach_tail || "") !== (form.attach_tail || "")
+    || (c.attach_head || "") !== (form.attach_head || "");
   if (!changed) return "";
   // 当前版本已用于生成或已归属 PI：另出一版；否则（含规则库改版后还没人用的当前版本）就地修改
   return c.used || c.claimed_pi ? "NEW_VERSION" : "IN_PLACE";
@@ -426,7 +427,8 @@ function openEdit(row: any) {
   Object.assign(form, {
     prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len, with_length: !!c.with_length,
     length_pad: c.length_pad || 0, sep_before: c.length_sep_before || "", sep_after: c.length_sep_after || "", with_unit: !!c.with_unit,
-    charset: c.charset === CHARSETS[c.base] ? "" : c.charset, attach_width: c.attach_width || 0, attach_tail: c.attach_tail || "",
+    charset: c.charset === CHARSETS[c.base] ? "" : c.charset, with_attach: !!c.with_attach, attach_head: c.attach_head || "",
+    attach_tail: c.attach_tail || "",
   });
   dialog.value = true;
 }
@@ -435,7 +437,7 @@ function openEdit(row: any) {
 const specOf = (c: any) => ({
   prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len, charset: c.charset, with_length: !!c.with_length,
   length_pad: c.length_pad || 0, sep_before: c.length_sep_before || "", sep_after: c.length_sep_after || "", with_unit: !!c.with_unit,
-  attach_width: c.attach_width || 0, attach_tail: c.attach_tail || "",
+  with_attach: !!c.with_attach, attach_head: c.attach_head || "", attach_tail: c.attach_tail || "",
 });
 
 /** 前缀详情：各 PI 占的流水、各规则的开始 SN / 当前最大 SN（GET /rules/prefixes/usage）与所选规则的示例号（前 3 个）。 */
@@ -487,9 +489,9 @@ watch(() => cur.value?.rules, (list) => {
 });
 
 /** 第一个示例号按组成拆段：前缀 / 流水 / 米数（含前后分隔符）/ 单位 / 后缀，只拆示例号本身，不另行拼号。 */
-function splitParts(c: any, s: any, unit: string) {
-  // 附件项次（前缀与流水之间，定长：位数 + 固定字符）
-  const attLen = c.attach_width ? c.attach_width + (c.attach_tail || "").length : 0;
+function splitParts(c: any, s: any, unit: string, attach: string) {
+  // 附件项次（前缀与流水之间）：前连接符 + 示例附件项次（原样）+ 后连接符
+  const attLen = c.with_attach ? (c.attach_head || "").length + (attach || "").length + (c.attach_tail || "").length : 0;
   const out = [{ k: "prefix", label: t("rules.prefix"), text: c.prefix }];
   if (attLen) out.push({ k: "attach", label: t("generate.rule.part.ATTACH"), text: s.sn.slice(c.prefix.length, c.prefix.length + attLen) });
   out.push({ k: "seq", label: t("rules.seqNo"), text: s.seq_text });
@@ -517,7 +519,7 @@ async function loadSample() {
       ...s, prefix: c.prefix, suffix: c.suffix, base: c.base, seq_len: c.seq_len,
       length: c.with_length ? r.sample_length : "", unit: c.with_unit ? r.sample_unit : "",
     }));
-    if (r.samples.length) detail.parts = splitParts(c, r.samples[0], c.with_unit ? r.sample_unit || "" : "");
+    if (r.samples.length) detail.parts = splitParts(c, r.samples[0], c.with_unit ? r.sample_unit || "" : "", r.sample_attach || "");
   } catch (e: any) {
     if (detailRule.value === x) detail.error = e?.message || "";
   } finally {
@@ -528,7 +530,7 @@ async function loadSample() {
 const spec = () => ({
   prefix: form.prefix, suffix: form.suffix, base: form.base, seq_len: form.seq_len, charset: form.charset, with_length: form.with_length,
   length_pad: form.length_pad || 0, sep_before: form.sep_before, sep_after: form.sep_after, with_unit: form.with_unit,
-  attach_width: form.attach_width || 0, attach_tail: form.attach_tail || "",
+  with_attach: !!form.with_attach, attach_head: form.attach_head || "", attach_tail: form.attach_tail || "",
 });
 
 let sampleTimer: number | undefined;

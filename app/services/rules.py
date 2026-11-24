@@ -104,7 +104,8 @@ VERSION_FIELDS = (
     "length_sep_before",
     "length_sep_after",
     "with_unit",
-    "attach_width",
+    "with_attach",
+    "attach_head",
     "attach_tail",
     "used",
     "claimed_pi",
@@ -382,16 +383,17 @@ def spec_of(v: dict) -> codec.Spec:
         v.get("length_sep_before") or "",
         v.get("length_sep_after") or "",
         bool(v.get("with_unit")),
-        int(v.get("attach_width") or 0),
+        bool(v.get("with_attach")),
         v.get("attach_tail") or "",
+        v.get("attach_head") or "",
     )
 
 
 def attach_text(s: codec.Spec) -> str:
-    """附件项次段的说明（锁定提示用）：附件项次（N 位）+ 固定字符 / 不带附件项次。"""
+    """附件项次段的说明（锁定提示用）：前连接符「-」+ 附件项次 + 后连接符「-」/ 不带附件项次。"""
     if not s.with_attach:
         return "不带附件项次"
-    return f"附件项次（{s.attach_width} 位）" + (f" + {s.attach_tail}" if s.attach_tail else "")
+    return f"前连接符「{s.attach_head}」+ 附件项次 + 后连接符「{s.attach_tail}」"
 
 
 def format_text(s: codec.Spec, inc: Inc | None = None) -> str:
@@ -401,10 +403,8 @@ def format_text(s: codec.Spec, inc: Inc | None = None) -> str:
     if inc is not None and inc.tail:
         head.append(inc.tail)
     if s.with_attach:
-        # 附件项次：前缀（及识别码）之后、流水之前，取物料行的附件项次
-        head.append(f"附件项次（{s.attach_width} 位）")
-        if s.attach_tail:
-            head.append(s.attach_tail)
+        # 附件项次：前缀（及识别码）之后、流水之前，取物料行的附件项次（原样），前后各有连接符（可为空）
+        head += [x for x in (s.attach_head, "附件项次", s.attach_tail) if x]
     parts = [*head, f"{s.seq_len} 位 {s.base} 进制流水"]
     if s.with_length:
         if s.sep_before:
@@ -431,9 +431,10 @@ class SpecIn:
     sep_before: str | None = ""
     sep_after: str | None = ""
     with_unit: bool | None = False
-    #: 附件项次位数（前缀与流水之间；0 = 不带）、附件项次之后流水之前的固定字符
-    attach_width: int | None = 0
+    #: 带附件项次（前缀与流水之间，原样写入物料行的附件项次）、附件项次之后流水之前的连接符
+    with_attach: bool | None = False
     attach_tail: str | None = ""
+    attach_head: str | None = ""
 
 
 def normalize(s: SpecIn) -> codec.Spec:
@@ -456,8 +457,9 @@ def normalize(s: SpecIn) -> codec.Spec:
         util.trim(s.sep_before) if with_length else "",
         util.trim(s.sep_after) if with_length else "",
         bool(s.with_unit),
-        s.attach_width or 0,
+        bool(s.with_attach),
         util.trim(s.attach_tail),
+        util.trim(s.attach_head),
     )
     err = codec.validate(spec)
     if err is not None:
@@ -478,11 +480,12 @@ def prefix_taken(prefix: str, memo: dict[str, bool] | None = None) -> bool:
 def same_seq_format(a: codec.Spec, b: codec.Spec) -> bool:
     """流水部分相同：进制、流水位数、字符表，及流水之前的附件项次位数与固定字符（同一前缀下锁定：前缀之后到流水的
     长度固定，同前缀下各版本的号才由流水唯一确定，不会因附件项次段长短不同拼出相同的号）。"""
-    return (a.base, a.seq_len, a.charset, a.attach_width, a.attach_tail) == (
+    return (a.base, a.seq_len, a.charset, a.with_attach, a.attach_head, a.attach_tail) == (
         b.base,
         b.seq_len,
         b.charset,
-        b.attach_width,
+        b.with_attach,
+        b.attach_head,
         b.attach_tail,
     )
 
@@ -1117,7 +1120,7 @@ def preview(
     attach: str | None = None,
 ) -> dict:
     """编辑时的示例号：前 5 个和最大号（米数、单位、附件项次用示例值；
-    附件项次比位数长时按示例值 1）、最大流水（规则位数的）。seq_start：从这个流水起
+    附件项次为空或不是数字时按示例值 1）、最大流水（规则位数的）。seq_start：从这个流水起
     （自定义规则的起始号），不填从 1 起。grow（上限自动突破）：起始号可超过规则位数（按突破后的位数），
     最大号之后另带突破后的第一个号（最大流水 + 1）。
     inc_in（识别码：inc_start、inc_end、inc_tail，inc_customers 适用客户、inc_pick 改选的已释放号段；s.prefix 为
@@ -1190,7 +1193,7 @@ def describe(s: codec.Spec) -> str:
         f"prefix={s.prefix} suffix={s.suffix} base={s.base} len={s.seq_len} with_length={int(s.with_length)} "
         f"length_pad={s.length_pad} sep_before={s.sep_before} sep_after={s.sep_after} "
         f"with_unit={int(s.with_unit)} charset={s.charset}"
-        + (f" attach_width={s.attach_width} attach_tail={s.attach_tail}" if s.with_attach else "")
+        + (f" with_attach=1 attach_head={s.attach_head} attach_tail={s.attach_tail}" if s.with_attach else "")
     )
 
 
@@ -1692,9 +1695,9 @@ def _insert_version(
     """inc：带识别码的版本（spec.prefix 为完整的「前缀 + 自增值 + 固定字符」，inc_value 为取到的值）。"""
     return db.insert(
         "INSERT INTO sn_rule_version(rule_id, version, prefix, suffix, base, seq_len, charset, with_length, "
-        "length_pad, length_sep_before, length_sep_after, with_unit, attach_width, attach_tail, used, claimed_pi, "
-        "derived_from, inc_head, inc_tail, inc_start, inc_end, inc_value, inc_customer, created_by, created_at, "
-        "updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "length_pad, length_sep_before, length_sep_after, with_unit, with_attach, attach_head, attach_tail, used, "
+        "claimed_pi, derived_from, inc_head, inc_tail, inc_start, inc_end, inc_value, inc_customer, created_by, "
+        "created_at, updated_at) VALUES (" + ",".join(["%s"] * 27) + ")",
         rule_id,
         version,
         spec.prefix,
@@ -1707,7 +1710,8 @@ def _insert_version(
         spec.sep_before,
         spec.sep_after,
         1 if spec.with_unit else 0,
-        spec.attach_width,
+        1 if spec.with_attach else 0,
+        spec.attach_head,
         spec.attach_tail,
         1 if used else 0,
         claimed_pi,
@@ -1880,7 +1884,8 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
                 db.exec(
                     "UPDATE sn_rule_version SET prefix = %s, suffix = %s, base = %s, seq_len = %s, charset = %s, "
                     "with_length = %s, length_pad = %s, length_sep_before = %s, length_sep_after = %s, "
-                    "with_unit = %s, attach_width = %s, attach_tail = %s, updated_at = %s WHERE id = %s",
+                    "with_unit = %s, with_attach = %s, attach_head = %s, attach_tail = %s, updated_at = %s "
+                    "WHERE id = %s",
                     spec.prefix,
                     spec.suffix,
                     spec.base,
@@ -1891,7 +1896,8 @@ def update(cu: CurrentUser, rule_id: int, name: str | None, s: SpecIn, category=
                     spec.sep_before,
                     spec.sep_after,
                     1 if spec.with_unit else 0,
-                    spec.attach_width,
+                    1 if spec.with_attach else 0,
+                    spec.attach_head,
                     spec.attach_tail,
                     now,
                     cur["id"],
@@ -2090,8 +2096,9 @@ def _custom_spec(c: dict) -> codec.Spec:
             c.get("sep_before") or "",
             c.get("sep_after") or "",
             c.get("with_unit", False),
-            c.get("attach_width") or 0,
+            bool(c.get("with_attach")),
             c.get("attach_tail") or "",
+            c.get("attach_head") or "",
         )
     )
 
@@ -2170,7 +2177,8 @@ def _custom_resolved(source: str, c: dict, pi: str | None = None) -> Resolved:
         "length_sep_before": spec.sep_before,
         "length_sep_after": spec.sep_after,
         "with_unit": 1 if spec.with_unit else 0,
-        "attach_width": spec.attach_width,
+        "with_attach": 1 if spec.with_attach else 0,
+        "attach_head": spec.attach_head,
         "attach_tail": spec.attach_tail,
         "used": 0,
         "claimed_pi": None,
@@ -2207,7 +2215,7 @@ def _custom_dict(spec: codec.Spec, inc: Inc | None = None, customers=None) -> di
     }
     if spec.with_attach:
         # 附件项次（前缀与流水之间）：不带时没有这两项（与原来相同）
-        out.update({"attach_width": spec.attach_width, "attach_tail": spec.attach_tail})
+        out.update({"with_attach": True, "attach_head": spec.attach_head, "attach_tail": spec.attach_tail})
     if inc is not None:
         out.update(inc.fields())
         if customers is not None:
@@ -2384,7 +2392,8 @@ def info(
         out["sep_after"] = s.sep_after
         out["with_unit"] = s.with_unit
         out["suffix"] = s.suffix
-        out["attach_width"] = s.attach_width
+        out["with_attach"] = s.with_attach
+        out["attach_head"] = s.attach_head
         out["attach_tail"] = s.attach_tail
         # 上限自动突破时为加到 12 位的最大流水
         out["max_seq"] = codec.max_seq_grow(s) if res.seq_grow else codec.max_seq(s)
