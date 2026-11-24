@@ -229,9 +229,8 @@ def check_tables(db: Db) -> None:
     if missing:
         raise MigrationError(
             f"数据库 {db.target.database} 缺少建表脚本里的表 {', '.join(missing)}（库是按旧版建表脚本建的）。"
-            "启动时不补建表：只是 V1 新增了表、原有表没改时按运维手册 8.9 只补建缺失的表"
-            "（uv run python -m devtools.create_missing_tables --yes）；否则测试库按 8.7 保留账户、按 V1 重建其他表"
-            "（uv run python -m devtools.rebuild_keep_accounts），或按 8.1 / 8.2 / 8.3 整体重建"
+            "表结构只按完整的 V1 建，不另补建表：测试库按运维手册 8.7 保留账户（可加 --keep 保留订单快照）、"
+            "按 V1 重建其他表（uv run python -m devtools.rebuild_keep_accounts），或按 8.1 / 8.2 / 8.3 整体重建"
         )
     cols = missing_columns(db)
     if cols:
