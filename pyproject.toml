@@ -1,7 +1,7 @@
 [project]
 name = "sn-center"
 version = "1.0.0"
-description = "多工厂 SN 防重管控 · FastAPI + MySQL 8"
+description = "爱德泰·溯码中台 · FastAPI + MySQL 8"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi",

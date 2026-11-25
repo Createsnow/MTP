@@ -243,7 +243,7 @@ def template() -> Iterator[bytes]:
         cell = ws.cell(row=1, column=i + 1)
         cell.font = Font(bold=True, color=_RED if c.required else _GREY)
         cell.fill = PatternFill("solid", fgColor=_REQUIRED_FILL if c.required else _OPTIONAL_FILL)
-        cell.comment = Comment(f"{'必填' if c.required else '选填'}：{c.hint}\n示例：{c.example}", "SN 中台")
+        cell.comment = Comment(f"{'必填' if c.required else '选填'}：{c.hint}\n示例：{c.example}", "溯码中台")
     ws.freeze_panes = "A2"
     guide = wb.create_sheet("填写说明")
     guide.append(["列名", "是否必填", "填写要求", "示例"])
