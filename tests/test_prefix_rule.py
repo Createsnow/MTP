@@ -225,3 +225,53 @@ def test_released_prefix_allows_overlapping_prefix(w, api, sql):
     assert w.select(p2, [(b2, 1)], custom=custom(pre)).code == "RULE_PREFIX_OVERLAP"
     # 本 PI 有号时也不能回到旧前缀
     assert w.select(pi, [(b, 1)], custom=custom(pre)).code == "RULE_PI_PREFIX_LOCKED"
+
+
+def test_abandoned_prefix_does_not_block_sharing_new_prefix(w, api, sql):
+    """本 PI 前缀腾空后改用与旧前缀互为开头的新前缀：旧前缀没有号、也没有 PI 登记（已废弃），不挡别的 PI 共用新前缀
+    （按规则、按自定义都可以，流水接续）；之后本 PI 要回到旧前缀，与还在用的新前缀互为开头，照常挡住。"""
+    org = w.org(uid("O")[:10])
+    pre = P()
+    _, p1, b1 = mk(w, ("M1", 2), org=org)
+    ok(w.select(p1, [(b1, 1)], custom=custom(pre)))
+    w.generate(p1)
+    ok(w.delete(p1, bills=[b1]))
+    ok(w.select(p1, [(b1, 1)], custom=custom(pre + "X")))
+    w.generate(p1)
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre + "X")
+    _, p2, b2 = mk(w, ("M1", 1), org=org)
+    ok(w.select(p2, [(b2, 1)], rule_id=rid))
+    w.generate(p2)
+    assert sns(sql, p2) == [f"{pre}X0003"], "共用新前缀，流水接续"
+    _, p3, b3 = mk(w, ("M1", 1), org=org)
+    ok(w.select(p3, [(b3, 1)], custom=custom(pre + "X")))
+    w.generate(p3)
+    assert sns(sql, p3) == [f"{pre}X0004"]
+    # 旧前缀仍不能给别的 PI 用
+    old = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre)
+    _, p4, b4 = mk(w, ("M1", 1), org=org)
+    assert w.select(p4, [(b4, 1)], rule_id=old).code == "RULE_PREFIX_OVERLAP"
+    assert w.select(p4, [(b4, 1)], custom=custom(pre)).code == "RULE_PREFIX_OVERLAP"
+    # 本 PI 删光自己的号后要回到旧前缀（本 PI 已有的版本）：别的 PI 还在用新前缀，挡住
+    ok(w.delete(p1, bills=[b1]))
+    assert w.select(p1, [(b1, 1)], rule_id=old).code == "RULE_PREFIX_OVERLAP"
+    assert w.select(p1, [(b1, 1)], custom=custom(pre)).code == "RULE_PREFIX_OVERLAP"
+
+
+def test_rule_select_shares_pi_lock(w, api, sql):
+    """选规则、登记、解除登记与生成共用 PI 操作锁：生成进行中改选会看不到还没提交的号，把登记改成别的前缀。"""
+    from app.platform import locks
+
+    pre = P()
+    _, pi, b = mk(w, ("M1", 1))
+    ok(w.select(pi, [(b, 1)], custom=custom(pre)))
+    rid = w.rule(P(), seq_len=4, with_length=False)
+    held = locks.pi_lock(pi)
+    try:
+        assert w.select(pi, [(b, 1)], custom=custom(pre + "Y")).code == "PI_BUSY"
+        assert w.bind_pi(pi, rid).code == "PI_BUSY"
+        assert w.api.delete(f"/api/rules/pi-binding?pi={pi}", w.admin).code == "PI_BUSY"
+    finally:
+        held.release()
+    assert sql.scalar("SELECT prefix FROM sn_pi_rule WHERE pi_no = %s", pi) == pre
+    ok(w.select(pi, [(b, 1)], custom=custom(pre + "Y")))

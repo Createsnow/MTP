@@ -582,9 +582,23 @@ def _overlapping(prefix: str, pi: str | None = None) -> list[dict]:
         *args,
         *args,
     ):
-        if not prefix_released(r["prefix"], pi):
+        if not prefix_released(r["prefix"], pi) and not prefix_abandoned(r["prefix"]):
             return [r]
     return []
+
+
+def prefix_abandoned(prefix: str) -> bool:
+    """前缀已废弃：前缀下没有任何号（sn_item、sn_item_sub 都没有），版本都已归属 PI（没有尚未归属的规则库版本）且
+    不带识别码，也没有任何 PI 登记它（sn_pi_rule / sn_pi_rule2）。典型的是 PI 前缀腾空后改用了与它互为开头的新前缀
+    （见 prefix_released），旧前缀只留作已删号的记录。废弃的前缀不再挡住与它互为开头的前缀（_overlapping），否则
+    别的 PI 共用那个新前缀时会被它挡住。要重新用废弃的前缀须重新选规则：选规则时连本 PI 已有的版本也查前缀
+    （_resolve_for_select、select_for_lines），这时与它互为开头、还在用的前缀照常挡住。"""
+    vs = db.all("SELECT claimed_pi, inc_head FROM sn_rule_version WHERE prefix = %s", prefix)
+    if not vs or any(v["claimed_pi"] is None or v["inc_head"] is not None for v in vs):
+        return False
+    if db.exists(f"SELECT EXISTS(SELECT 1 FROM {REG_ALL} b WHERE prefix = %s)", prefix):
+        return False
+    return not _live(prefix)
 
 
 def prefix_released(prefix: str, pi: str) -> bool:
@@ -2495,6 +2509,9 @@ def _resolve_for_select(rule: dict, pi: str, source: str) -> Resolved:
         return res
     if res.plan == PLAN_SHARE:
         check_prefix(res.version["prefix"], spec=res.spec(), pi=pi)
+    elif res.plan == PLAN_USE:
+        # 本 PI 已有的版本也查前缀：前缀可能已废弃（prefix_abandoned），期间别的前缀与它互为开头、还在用
+        check_prefix(res.version["prefix"], res.version["id"], spec_of(res.version), pi)
     return res
 
 
@@ -2626,7 +2643,10 @@ def select_for_lines(
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
-    with db.tx():
+    # 与生成、删号、分配、转移共用 PI 操作锁：生成进行中改选时，「本 PI 有号」的判断（_check_locked）
+    # 看不到还没提交的号，会把登记改成别的前缀，生成提交后号在旧前缀、登记却是新前缀（一个 PI 用了两个前缀）。
+    # 拿不到锁报 PI_BUSY
+    with locks.with_pi_lock(pi), db.tx():
         keys = _line_keys(pi, lines)
         cu.check_write(*{line["org_code"] for _, _, line in keys})
         grow = None
@@ -2656,7 +2676,8 @@ def select_for_lines(
                 _adopt(cu, own.rule, pi, {line["org_code"] for line in _pi_lines(pi)})
                 if own.plan == PLAN_SHARE:
                     check_prefix(own.version["prefix"], spec=own.spec(), pi=pi)
-                elif own.plan == PLAN_CLAIM:
+                elif own.plan in (PLAN_CLAIM, PLAN_USE):
+                    # PLAN_USE：本 PI 已有的版本也查前缀（前缀可能已废弃，见 prefix_abandoned）
                     check_prefix(own.version["prefix"], own.version["id"], own.spec(), pi)
                 res = replace(own, seq_start=start)
                 rid, cj = own.rule["id"], None
@@ -2760,7 +2781,8 @@ def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None) -> dict:
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
     _check_pi_scope(cu, pi)
-    with db.tx():
+    # PI 操作锁：同 select_for_lines
+    with locks.with_pi_lock(pi), db.tx():
         rule = get_rule(rule_id)
         check_visible(cu, rule)
         pre = resolve(rule, pi, SRC_PI)
@@ -2776,7 +2798,8 @@ def unbind_pi(cu: CurrentUser, pi_in: str | None) -> dict:
     """解除 PI 的规则登记：本 PI 有号时不能解除（前缀锁定）。"""
     pi = util.trim(pi_in)
     _check_pi_scope(cu, pi)
-    with db.tx():
+    # PI 操作锁：同 select_for_lines（生成进行中解除登记，同样看不到还没提交的号）
+    with locks.with_pi_lock(pi), db.tx():
         b = db.one(f"SELECT * FROM {reg_table()} WHERE pi_no = %s FOR UPDATE", pi)
         if b is not None:
             used = pi_used_prefix(pi)
