@@ -49,8 +49,8 @@ from app.core.errors import ErrorCode, biz
 from app.core.exceptions import BizError
 from app.core.security import CurrentUser
 from app.db.session import db, marks
+from app.modules.order.services import line_void
 from app.modules.org.services import factories
-from app.modules.sn.services import line_void
 from app.platform import audit, locks
 
 #: 分类：新建、修改只能是 PI；NONE 未分类 / CUSTOMER 客户只出现在早先的规则上

@@ -47,6 +47,8 @@ TABLE_OWNER: dict[str, str] = {
     "sn_line_attach": ORDER,
     "sn_line_length": ORDER,
     "sn_line_unit": ORDER,
+    # 物料行失效条件（阶段 4b 由 SN 改归工单：判断的是生产订单物料行的状态）
+    "sn_line_void_rule": ORDER,
     # SN 管理：规则、生成、号池、导入、交付、转移、统计
     **{
         t: SN
@@ -58,7 +60,6 @@ TABLE_OWNER: dict[str, str] = {
             "sn_pi_dual",
             "sn_prefix_counter",
             "sn_prefix_role",
-            "sn_line_void_rule",
             "sn_line_count",
             "sn_pi_counter",
             "sn_gen_preview",
@@ -87,25 +88,23 @@ TABLE_OWNER: dict[str, str] = {
 #: 不参与检查的文件：演示数据（只在 SN_DEMO_SEED=true 的空库上灌数据，按设计写所有模块的表）
 EXEMPT = {"app/platform/demo_seed.py"}
 
-#: 阶段 0 登记的现有跨模块写入（2026-11-25）：(文件, 表) → 收口方式。阶段 2 收口后删除；新代码不得再加。
+#: 阶段 0 登记的现有跨模块写入（2026-11-25）：(文件, 表) → 收口方式。只许减、不许增；新代码不得再加。
 EXCEPTIONS: dict[tuple[str, str], str] = {
+    # 以下都涉及 MES 交付流程或表结构，阶段 4b 暂不收口（见 docs/模块化单体改造方案.md 第 12 章阶段 4）
     (
         "app/modules/order/services/changes.py",
         "sn_item",
-    ): "订单变更改号的暂停标记 → order 发事件 BillSuspendChanged，SN 订阅",
+    ): "订单变更改号的暂停标记 → order 发事件，SN 订阅（涉及暂停交付）",
     (
-        "app/modules/order/services/changes.py",
-        "sn_daily_counter",
-    ): "按天计数写在订单模块 → 移到 platform.metrics.count_daily()",
-    ("app/modules/org/services/factories.py", "sn_item"): "组织开关 MES 时改号状态 → org 发事件 MesToggled，SN 订阅",
+        "app/modules/org/services/factories.py",
+        "sn_item",
+    ): "组织开关 MES 时改号状态 → org 发事件，SN 订阅（涉及 MES 开关）",
     ("app/modules/org/services/factories.py", "sn_push_task"): "组织关 MES 时删推送任务 → 同上",
+    ("app/modules/sn/services/delivery/push.py", "sn_factory"): "推送回写组织的配置状态 → 调 org.api（MES 推送代码）",
     (
-        "app/modules/sn/services/delivery/push.py",
-        "sn_factory",
-    ): "推送回写组织的配置状态 → 调 org.api.set_mes_cfg_status()",
-    ("app/platform/partitions.py", "sn_gen_preview"): "每日维护清理过期预演 → SN 模块注册自己的每日清理任务",
-    ("app/platform/partitions.py", "sn_rate_counter"): "每日维护清理 MES 拉取限流计数 → 同上",
-    ("app/platform/partitions.py", "sn_seq"): "每日维护清理批次号流水 → 同上",
+        "app/platform/partitions.py",
+        "sn_seq",
+    ): "每日维护完成时间记在 sn_seq 的 #daily_maintain 行 → 改用底座的表（须改表结构）",
 }
 
 _WRITE = re.compile(

@@ -66,7 +66,9 @@ class Module:
     open_routers: tuple[APIRouter, ...] = ()
     startup: tuple[Step, ...] = ()
     jobs: tuple[Job, ...] = ()
-    #: 登记应用内事件的订阅（app.platform.events.subscribe）
+    #: 每日维护里执行的任务（app/platform/partitions.py；序号与其他模块的统一排序，在归档之后执行）
+    daily: tuple[Step, ...] = ()
+    #: 登记应用内事件的订阅与扩展点（app.platform.events.subscribe 等）
     subscribe: Callable[[], None] | None = None
 
 

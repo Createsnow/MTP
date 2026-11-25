@@ -16,9 +16,9 @@ from datetime import datetime
 from app.core import utils as util
 from app.core.security import CurrentUser
 from app.db.session import db, marks
-from app.modules.order.services import changes, orders
+from app.modules.order.services import changes, line_void, orders
 from app.modules.org.services import factories
-from app.modules.sn.services import dual, generate, line_void, rules
+from app.modules.sn.services import dual, generate, rules
 
 #: 列表一次最多取的 PI 数；逐行判断「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行做
 LIST_LIMIT = 500

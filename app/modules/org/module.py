@@ -6,6 +6,7 @@ import structlog
 
 from app.core.config import settings
 from app.modules.org.routes import auth, factories, users
+from app.modules.org.services import daily as org_daily
 from app.modules.org.services import users as users_svc
 from app.platform.module import Module, Step
 
@@ -37,4 +38,5 @@ MODULE = Module(
     required=True,
     routers=(auth.router, users.router, factories.router),
     startup=(Step("init_admin", 40, init_admin),),
+    daily=(Step("factory_sync", 20, org_daily.sync_factories),),
 )

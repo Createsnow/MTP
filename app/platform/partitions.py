@@ -3,7 +3,8 @@
 - sn_audit（RANGE COLUMNS created_at）提前建好未来 N 个月分区，兜底分区 pmax 始终为空，拆分几乎零成本
   （sn_item 不分区：号不删不归档，查询也不按月份）；
 - 痕迹保存期（默认 3 年，0 = 永久）之外的整月分区先整体拷入 sn_audit_archive，再 DROP PARTITION；
-- 同步生产组织、每日交付自检；
+- 各模块登记的每日任务（Module.daily：SN 清理过期预演与拉取限流计数、组织同步生产组织、SN 每日交付自检、
+  SN 单据汇总对账），按序号依次执行；
 - 归档表设总保存上限（SN_AUDIT_ARCHIVE_RETENTION_DAYS，默认 5 年，0 = 永久，不短于在线保存期）：
   发生时间超过上限的归档痕迹分批删除，删除本身留痕。
 
@@ -80,8 +81,6 @@ def maintain(daily: bool = True) -> None:
                 return
             _archive(c, settings.audit_retention_days)
             purge_archive(settings.audit_archive_retention_days)
-            c.execute("DELETE FROM sn_gen_preview WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY)")
-            c.execute("DELETE FROM sn_rate_counter WHERE win < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 DAY)")
             _daily_jobs()
             # 做完才记：中途失败（含实例被杀）时下一个实例照常补做
             done = int(time.time())
@@ -100,25 +99,21 @@ def _last_daily(c) -> int | None:
     return None if row is None else int(row["val"])
 
 
-def _daily_jobs() -> None:
-    """每天 2:10 维护任务的其余部分：同步生产组织（F-03）、每日交付自检（5.2.5 第 5 条）、单据汇总对账。
-    各自失败互不影响。"""
-    from app.modules.org.services import factories
-    from app.modules.sn.services import bill_stats, delivery
+#: 各模块登记的每日任务（Module.daily，create_app 时由 set_daily_hooks 设定），按序号执行
+_hooks: tuple = ()
 
-    try:
-        factories.sync_from_k3(CurrentUser.system())
-    except Exception as e:  # noqa: BLE001
-        log.warning("daily_factory_sync_failed", err=str(e))
-    try:
-        delivery.self_check()
-    except Exception:  # noqa: BLE001
-        log.exception("daily_self_check_failed")
-    try:
-        bad = bill_stats.reconcile()
-        log.info("bill_stat_reconciled", mismatched=bad)
-    except Exception:  # noqa: BLE001
-        log.exception("bill_stat_reconcile_failed")
+
+def set_daily_hooks(hooks) -> None:
+    """设定每日任务（app.platform.module.Step：name、order、run）。底座不引用业务模块，由装配时传入。"""
+    global _hooks
+    _hooks = tuple(sorted(hooks, key=lambda h: h.order))
+
+
+def _daily_jobs() -> None:
+    """每天 2:10 维护任务的其余部分：依次执行各模块登记的每日任务（在归档之后、记完成时间之前）。
+    各任务自己处理失败：清理类失败即中止本次维护（下次补做），同步、自检、对账失败只记日志、互不影响。"""
+    for h in _hooks:
+        h.run()
 
 
 def _ensure_audit(c) -> None:

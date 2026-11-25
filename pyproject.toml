@@ -49,7 +49,7 @@ ignore = ["B008"]
 # 阶段 4a 起代码已按模块分包：app/modules/<模块>/{services,routes,module.py,api.py}，底座为 app/{core,db,middleware,
 # models,platform}，HTTP 公共部分在 app/api（deps.py、routes/health.py）。
 # 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座；pallet → box → sn（只经 api.py）。
-# ignore_imports 是阶段 0 登记的现有违规（路径随 4a 搬迁更新），只许减、不许增。只检查直接引用（allow_indirect_imports）。
+# ignore_imports 是阶段 0 登记、阶段 4b 后剩下的违规（都涉及 MES 交付流程），只许减、不许增。只检查直接引用（allow_indirect_imports）。
 # 底座按约定在运行时查找 app.modules 下的模块（app/platform/module.py 的 discover），不静态引用。
 [tool.importlinter]
 root_package = "app"
@@ -62,12 +62,7 @@ type = "forbidden"
 allow_indirect_imports = true
 source_modules = ["app.core", "app.db", "app.middleware", "app.models", "app.platform"]
 forbidden_modules = ["app.modules"]
-ignore_imports = [
-  # 阶段 0 登记的现有违规，收口方式见 devtools/check_table_owners.py 与方案 5.3 节
-  "app.platform.partitions -> app.modules.sn.services.bill_stats",  # 每日维护里的单据汇总对账
-  "app.platform.partitions -> app.modules.sn.services.delivery",  # 每日维护里的交付自检
-  "app.platform.partitions -> app.modules.org.services.factories",  # 每日维护里的同步生产组织
-]
+ignore_imports = []
 
 [[tool.importlinter.contracts]]
 id = "org"
@@ -95,10 +90,7 @@ forbidden_modules = [
 ignore_imports = [
   "app.modules.order.services.changes -> app.modules.sn.services.bill_stats",  # 订单变更后记单据统计
   "app.modules.order.services.changes -> app.modules.sn.services.delivery",  # 解除暂停后启动推送
-  "app.modules.order.services.changes -> app.modules.sn.services.rules",  # 改 PI 时的双 SN 防呆
   "app.modules.order.services.changes -> app.modules.sn.services.transfers",  # 物料变更确认对应时调转移
-  "app.modules.order.services.orders -> app.modules.sn.services.line_void",  # 物料行作废校验
-  "app.modules.order.services.orders -> app.modules.sn.services.rules",  # 订单页显示生效规则
 ]
 
 [[tool.importlinter.contracts]]

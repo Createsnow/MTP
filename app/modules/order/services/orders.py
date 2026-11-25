@@ -31,9 +31,8 @@ from app.core.errors import ErrorCode, biz
 from app.core.exceptions import BizError
 from app.core.security import CurrentUser
 from app.db.session import db, marks
-from app.modules.order.services import changes
+from app.modules.order.services import changes, line_void
 from app.modules.org.services import factories
-from app.modules.sn.services import line_void
 from app.platform import audit, k3, locks
 
 log = structlog.get_logger()
@@ -974,8 +973,9 @@ def lines(bill_no: str | None) -> list[dict]:
 
 
 def lines_of(cu: CurrentUser, bill_no: str | None) -> dict:
-    """右表：该单表头与各物料行（序号、附件项次、物料、米数、产品单位、数量、已生成、可生成、SN 规则）。"""
-    from app.modules.sn.services import rules
+    """右表：该单表头与各物料行（序号、附件项次、物料、米数、产品单位、数量、已生成、可生成、SN 规则）。
+    SN 规则列由 SN 模块经扩展点提供（app/modules/order/extensions.py）。"""
+    from app.modules.order import extensions
 
     ls = lines(bill_no)
     if not ls:
@@ -983,7 +983,7 @@ def lines_of(cu: CurrentUser, bill_no: str | None) -> dict:
     cu.check_read(ls[0]["org_code"])
     keys = [(r["bill_no"], r["seq"]) for r in ls]
     counts, fills, lens, units = line_extras(keys)
-    rmap = rules.line_rules_brief(ls[0]["pi"], keys)
+    rmap = extensions.line_rules(ls[0]["pi"], keys)
     h = ls[0]
     return {
         "bill_no": h["bill_no"],

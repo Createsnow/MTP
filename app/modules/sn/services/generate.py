@@ -49,9 +49,9 @@ from app.core.errors import ErrorCode, biz
 from app.core.exceptions import BizError
 from app.core.security import CurrentUser
 from app.db.session import ER_LOCK_NOWAIT, db, error_no, is_deadlock, is_duplicate, marks, retry_deadlock
-from app.modules.order.services import changes, orders
+from app.modules.order.services import changes, line_void, orders
 from app.modules.org.services import factories
-from app.modules.sn.services import bill_stats, line_void, rules, seg
+from app.modules.sn.services import bill_stats, rules, seg
 from app.platform import audit, locks
 
 log = structlog.get_logger()

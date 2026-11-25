@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.core import scheduler
 from app.modules.sn.routes import allocation, delivery, generate, mes, rules, sn, sn_export, sn_import, transfers
-from app.modules.sn.services import bill_stats
+from app.modules.sn.services import bill_stats, daily, order_hooks
 from app.modules.sn.services import delivery as delivery_svc
 from app.modules.sn.services import generate as generate_svc
 from app.platform.module import Job, Module, Step
@@ -34,9 +34,15 @@ MODULE = Module(
         sn.router,
     ),
     open_routers=(mes.router,),
+    subscribe=order_hooks.register,
     startup=(
         Step("bill_stats_fill", 20, bill_stats.ensure_filled),
         Step("gen_recover", 30, generate_svc.recover_interrupted),
+    ),
+    daily=(
+        Step("sn_cleanup", 10, daily.cleanup),
+        Step("delivery_self_check", 30, daily.self_check),
+        Step("bill_stat_reconcile", 40, daily.reconcile),
     ),
     jobs=(
         Job("gen_recover", 20, start_gen_recover),

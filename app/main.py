@@ -178,6 +178,9 @@ def create_app() -> FastAPI:
     setup_logging(json_output=settings.production)
     mods = modules.load()
     events.reset()
+    daily = [s for m in mods for s in m.daily]
+    modules.check_unique(daily, "每日任务")
+    partitions.set_daily_hooks(daily)
     for m in mods:
         if m.subscribe is not None:
             m.subscribe()

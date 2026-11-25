@@ -30,7 +30,7 @@ from app.core.security import CurrentUser
 from app.db.session import db, marks
 from app.modules.org.services import factories
 from app.modules.sn.services import bill_stats
-from app.platform import audit, k3
+from app.platform import audit, k3, metrics
 
 log = structlog.get_logger()
 
@@ -72,14 +72,8 @@ _UNDELIVERED = "(status IN ('PENDING_ALLOC','ALLOCATED') OR (status = 'TO_PUSH' 
 # ================================================================== 计数 / 状态
 
 
-def count_daily(kind: str, factory: str = "") -> None:
-    db.exec(
-        "INSERT INTO sn_daily_counter(day, kind, factory_code, n) VALUES (%s,%s,%s,1) "
-        "ON DUPLICATE KEY UPDATE n = n + 1",
-        util.today(),
-        kind,
-        factory,
-    )
+#: 按天计数已移到底座（app/platform/metrics.py，表 sn_daily_counter 归底座）；保留这个名字，原有调用不用改
+count_daily = metrics.count_daily
 
 
 def bill_states(bills: list[str]) -> dict[str, dict]:
@@ -696,14 +690,12 @@ def handle(cu: CurrentUser, alert_id: int, action: str | None, note: str | None,
                 col = {PI: "pi", CUSTOMER: "customer_code"}.get(a["alert_type"])
                 snap = db.one("SELECT * FROM sn_prd_mo WHERE bill_no = %s LIMIT 1", no)
                 if a["alert_type"] == PI:
-                    # 双 SN 防呆：业务上不会出现单 SN 与双 SN 的 PI 之间改 PI；万一金蝶数据出错，不能确认
-                    # （否则同一张单据里有带第二 SN 和不带第二 SN 的号）
+                    # 改 PI 前的检查由其他模块经扩展点登记（SN 的双 SN 防呆，见 sn/services/order_hooks.py）
                     old = (ledger(no) or {}).get("pi") or a["before_value"]
                     new = snap["pi"] if snap else a["after_value"]
-                    from app.modules.sn.services import rules
+                    from app.modules.order import extensions
 
-                    if old != new and rules.is_dual(old) != rules.is_dual(new):
-                        raise biz(ErrorCode.ALERT_DUAL_MISMATCH, pi=old, new_pi=new)
+                    extensions.check_pi_change(old, new)
                 if col is not None:
                     db.exec(
                         f"UPDATE sn_bill_ledger SET {col} = %s, updated_at = %s WHERE bill_no = %s",
