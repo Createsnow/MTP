@@ -5,6 +5,8 @@
 - 一个 PI 一个规则前缀：选规则（select_for_lines / bind_pi）即登记在 PI 上（sn_pi_rule：前缀、规则库规则或自定义规则
   参数、起始号），本 PI 全部物料行、之后同步进来的单据都用它。本 PI 有号（生成过、没全删）时前缀锁定
   （RULE_PI_PREFIX_LOCKED），没号时可以改选；改选须对本 PI 全部单据的生产组织都有授权。
+  前缀已腾空（这个前缀下没有任何号、没有别的 PI 用过或登记过，见 prefix_released）时，本 PI 同前缀可以改流水格式
+  （规则的当前版本随之换成新格式），也可以改用与它一个是另一个开头的前缀。
 - 一个前缀一条规则（sn_rule.prefix 唯一；带识别码的为前缀层文本）：规则是前缀的档案，各 PI 在这个前缀下用的版本
   都挂在这条规则上。规则库新建规则即新建前缀；生成过号的规则不能改前缀、进制、流水位数、字符表（须新建规则）。
 - 规则版本首次用于生成时归属该 PI。别的 PI 选同一条规则时共用前缀，生成时为它另出同前缀、同格式的版本
@@ -538,6 +540,9 @@ def _prefix_rules(
         raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=prefix, other=inc["inc_head"], pi=inc["claimed_pi"] or "-")
     every = db.all("SELECT * FROM sn_rule_version WHERE prefix = %s" + (" FOR UPDATE" if lock else ""), prefix)
     by_id = {v["id"]: v for v in every}
+    # 前缀已腾空、只归本 PI（见 prefix_released）：本 PI 可以改进制、流水位数、字符表、附件项次段
+    free = pi is not None and spec is not None and prefix_released(prefix, pi)
+    currents: dict[int, dict | None] = {}
     for v in every:
         if v["id"] == exclude_version:
             continue
@@ -547,26 +552,66 @@ def _prefix_rules(
             raise biz(ErrorCode.RULE_PREFIX_CONFLICT, prefix=prefix)
         # 突破版本（同前缀、由原版本加位而来）按原版本的流水格式比较
         b = by_id.get(v["derived_from"]) or v
-        if spec is not None and not same_seq_format(spec_of(b), spec):
-            raise format_locked(prefix, spec_of(b), spec)
-    for v in _overlapping(prefix):
+        if spec is None or free or same_seq_format(spec_of(b), spec) or _retired(b, currents):
+            continue
+        raise format_locked(prefix, spec_of(b), spec)
+    for v in _overlapping(prefix, pi):
         # 不论是否同一 PI：不同前缀一个是另一个的开头时，流水不同也可能拼出相同的号（如 P1+03+后缀 5 与 P103+5）
         raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=prefix, other=v["prefix"], pi=v["claimed_pi"] or "-")
 
 
-def _overlapping(prefix: str) -> list[dict]:
+def _overlapping(prefix: str, pi: str | None = None) -> list[dict]:
     """与 prefix 一个是另一个开头的别的前缀（最多一行，取最早建的版本，与原来整表扫描时报的是同一个）。
     两头都走前缀索引 ix_rule_prefix，不随规则版本数变慢：以 prefix 开头的更长前缀按 LIKE 'prefix%' 取索引区间；
-    是 prefix 开头的更短前缀就是 prefix 的各个真前缀，按等值查。"""
+    是 prefix 开头的更短前缀就是 prefix 的各个真前缀，按等值查。
+    pi 给出时不算已腾空、只归 pi 的前缀（见 prefix_released：本 PI 号全删掉、没有别的 PI 用过或登记过的旧前缀）。"""
     heads = [prefix[:k] for k in range(1, len(prefix))]
     longer = "SELECT id, prefix, claimed_pi FROM sn_rule_version WHERE prefix LIKE %s AND prefix <> %s"
     shorter = f" UNION ALL SELECT id, prefix, claimed_pi FROM sn_rule_version WHERE prefix IN ({marks(len(heads))})"
-    return db.all(
-        "SELECT prefix, claimed_pi FROM (" + longer + (shorter if heads else "") + ") o ORDER BY id LIMIT 1",
-        util.like_prefix(prefix),
-        prefix,
-        *heads,
-    )
+    args = [util.like_prefix(prefix), prefix, *heads]
+    union = "(" + longer + (shorter if heads else "") + ") o"
+    if pi is None:
+        return db.all("SELECT prefix, claimed_pi FROM " + union + " ORDER BY id LIMIT 1", *args)
+    # 每个前缀取最早建的版本，按建的先后逐个看，第一个不是本 PI 已腾空的即冲突（没有已腾空的时与上面报的是同一个）
+    for r in db.all(
+        "SELECT o.prefix, o.claimed_pi FROM "
+        + union
+        + " JOIN (SELECT MIN(id) mid FROM "
+        + union.replace(" o", " o2")
+        + " GROUP BY prefix) f ON f.mid = o.id ORDER BY o.id",
+        *args,
+        *args,
+    ):
+        if not prefix_released(r["prefix"], pi):
+            return [r]
+    return []
+
+
+def prefix_released(prefix: str, pi: str) -> bool:
+    """前缀已腾空、只归 pi：这个前缀下已经没有任何号（sn_item、sn_item_sub 都没有），前缀下的版本都归属 pi
+    （没有别的 PI 用过、没有尚未归属的规则库版本），也没有别的 PI 登记过它（sn_pi_rule / sn_pi_rule2）。
+    这时本 PI 改选不受这个前缀牵制：可以改进制、流水位数、字符表、附件项次段（_prefix_rules，改后规则的当前版本
+    跟着换，见 _attach），也可以改用与它一个是另一个开头的前缀（_overlapping）。带识别码的号段不在此列（有自己的
+    释放规则，见 _released）。"""
+    vs = db.all("SELECT claimed_pi, inc_head FROM sn_rule_version WHERE prefix = %s", prefix)
+    if not vs or any(v["claimed_pi"] != pi or v["inc_head"] is not None for v in vs):
+        return False
+    if db.exists(f"SELECT EXISTS(SELECT 1 FROM {REG_ALL} b WHERE prefix = %s AND pi_no <> %s)", prefix, pi):
+        return False
+    return not _live(prefix)
+
+
+def _retired(b: dict, currents: dict[int, dict | None]) -> bool:
+    """已退役的版本：归属某张 PI、流水格式与所在规则的当前版本不同（前缀已腾空时本 PI 换了格式，旧格式的版本
+    只留作已删号的记录，见 _attach），不再锁定这个前缀的格式。同一前缀下有号的版本都与当前版本同格式（换格式
+    须前缀已腾空，换后当前版本跟着换），所以按当前版本比较即按现用格式比较。currents：同一次判断里规则只查一次。"""
+    if b["claimed_pi"] is None or b.get("inc_head") is not None:
+        return False
+    if b["rule_id"] not in currents:
+        r = db.one("SELECT * FROM sn_rule WHERE id = %s", b["rule_id"])
+        currents[b["rule_id"]] = None if r is None or r["prefix"] != b["prefix"] else current_version(r)
+    cur = currents[b["rule_id"]]
+    return cur is not None and cur["id"] != b["id"] and not same_seq_format(spec_of(cur), spec_of(b))
 
 
 def _heads(text: str) -> list[str]:
@@ -1070,10 +1115,12 @@ def _customer_inc_default(pi: str) -> dict | None:
 
 def pi_prefix_locked(pi: str) -> dict[str, dict]:
     """本 PI 已占用的前缀 → 锁定的格式（同 pi_prefix 的 custom：本 PI 这个前缀最新的版本，不算上限自动突破另出的版本）。
-    号全部删掉后前缀仍归属本 PI、进制和流水位数仍锁定（check_prefix）：生成页「选规则」前缀是其中之一时按这个格式，
-    免得按默认位数保存时报 RULE_PREFIX_FORMAT_LOCKED。"""
+    号全部删掉后前缀仍归属本 PI；还有别的 PI 用过或登记过这个前缀时进制和流水位数仍锁定（check_prefix）：生成页
+    「选规则」前缀是其中之一时按这个格式，免得按默认位数保存时报 RULE_PREFIX_FORMAT_LOCKED。前缀已腾空、只归本 PI
+    （prefix_released）时不锁定，不列出。"""
     out: dict[str, dict] = {}
     memo: dict[str, bool] = {}
+    free: dict[str, bool] = {}
     for v in db.all(
         "SELECT v.* FROM sn_rule_version v LEFT JOIN sn_rule_version p ON p.id = v.derived_from "
         "AND p.prefix = v.prefix AND p.seq_len <> v.seq_len JOIN sn_rule r ON r.id = v.rule_id "
@@ -1087,6 +1134,12 @@ def pi_prefix_locked(pi: str) -> dict[str, dict]:
         if inc is not None and _released(v, inc_customers_of(inc.head), memo):
             # 已释放的识别码号段（客户已移出适用客户、号已全删掉）不再归本 PI，不显示、不锁定
             continue
+        if inc is None:
+            if v["prefix"] not in free:
+                free[v["prefix"]] = prefix_released(v["prefix"], pi)
+            if free[v["prefix"]]:
+                # 前缀已腾空、只归本 PI（号全删掉、没有别的 PI 用过或登记过）：格式不锁定，可以改
+                continue
         out[v["prefix"]] = _custom_dict(spec_of(v))
         if inc is not None:
             # 带识别码：页面组成里的前缀是前缀层文本，按它也能找到本 PI 号段锁定的格式
@@ -2971,16 +3024,23 @@ def _attach(cu: CurrentUser, pi: str, rule_id: int, spec: codec.Spec, orgs: set[
     now = util.now()
     mine = db.all("SELECT * FROM sn_rule_version WHERE rule_id = %s AND claimed_pi = %s ORDER BY id DESC", rule_id, pi)
     hit = next((v for v in mine if spec_of(v) == spec and base_of(v)["id"] == v["id"]), None)
+    t = db.one(
+        "SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = %s FOR UPDATE",
+        rule_id,
+        rule["current_version"],
+    )
+    # 换了流水格式（进制、流水位数、字符表、附件项次段）：只有前缀已腾空、只归本 PI 时才过得了 check_prefix
+    # （prefix_released）。规则的当前版本跟着换成本 PI 这次用的版本，之后别的 PI 选这条规则按新格式共用，
+    # 旧格式的版本只留作已删号的记录（_retired）
+    reformat = t is not None and not same_seq_format(spec_of(t), spec)
     if hit is not None:
         db.exec("UPDATE sn_rule_version SET used = 1, updated_at = %s WHERE id = %s", now, hit["id"])
         vid = hit["id"]
         note = f"沿用 v{hit['version']}"
+        if reformat:
+            db.exec("UPDATE sn_rule SET current_version = %s WHERE id = %s", hit["version"], rule_id)
+            note += f"，前缀已腾空，当前版本改为 v{hit['version']}"
     else:
-        t = db.one(
-            "SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = %s FOR UPDATE",
-            rule_id,
-            rule["current_version"],
-        )
         claimed = (
             t is not None
             and t["claimed_pi"] is None
@@ -2999,10 +3059,21 @@ def _attach(cu: CurrentUser, pi: str, rule_id: int, spec: codec.Spec, orgs: set[
             note = f"首次归属 v{t['version']}"
         else:
             n = _next_version(rule_id)
+            # 换格式另出的版本不记 derived_from（同前缀、位数不同时会被当成上限自动突破的版本，见 is_grow_version）
             vid = _insert_version(
-                cu, rule_id, n, spec, now, used=True, claimed_pi=pi, derived_from=None if t is None else t["id"]
+                cu,
+                rule_id,
+                n,
+                spec,
+                now,
+                used=True,
+                claimed_pi=pi,
+                derived_from=None if t is None or reformat else t["id"],
             )
             note = f"v{n} {describe(spec)}"
+            if reformat:
+                db.exec("UPDATE sn_rule SET current_version = %s WHERE id = %s", n, rule_id)
+                note += f"，前缀已腾空、换了流水格式，当前版本改为 v{n}"
     if rule["factory_code"] is not None and not orgs <= {rule["factory_code"]}:
         db.exec("UPDATE sn_rule SET factory_code = NULL WHERE id = %s", rule_id)
     audit.record(

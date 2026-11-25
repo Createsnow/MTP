@@ -127,3 +127,101 @@ def test_unused_library_rule_prefix_taken_by_custom_attaches(w, api, sql):
     assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", p2) == rid
     w.generate(p1)
     assert sns(sql, p1) == [f"{pre}0002"]
+
+
+# ---------------------------------------------------------------------- 前缀已腾空（2026-11-25）
+
+
+def _ctx(api, w, pi: str) -> dict:
+    return ok(api.get(f"/api/generate/context?pi={pi}", w.admin)).body
+
+
+def test_released_prefix_allows_format_change_after_delete(w, api, sql):
+    """本 PI 号全删掉、没有别的 PI 用过或登记过：同前缀可以改流水位数（不再提示须换新前缀），生成按新格式；
+    规则的当前版本换成新格式，之后别的 PI 选这条规则按新格式共用；再删光可以改回原格式。"""
+    org = w.org(uid("O")[:10])
+    pre = P()
+    _, pi, b = mk(w, ("M1", 2), org=org)
+    ok(w.select(pi, [(b, 1)], custom=custom(pre)))
+    w.generate(pi)
+    assert _ctx(api, w, pi)["prefix_locked"].get(pre), "有号时格式锁定"
+    ok(w.delete(pi, bills=[b]))
+    assert pre not in _ctx(api, w, pi)["prefix_locked"], "前缀已腾空：格式不锁定"
+    ok(w.select(pi, [(b, 1)], custom=custom(pre, seq_len=6)))
+    w.generate(pi)
+    assert sns(sql, pi) == [f"{pre}000001", f"{pre}000002"]
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre)
+    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE prefix = %s", pre) == 1, "仍是一个前缀一条规则"
+    cur = sql.one(
+        "SELECT v.* FROM sn_rule_version v JOIN sn_rule r ON r.id = v.rule_id AND v.version = r.current_version "
+        "WHERE r.id = %s",
+        rid,
+    )
+    assert (cur["seq_len"], cur["claimed_pi"], cur["derived_from"]) == (6, pi, None), "当前版本换成新格式"
+    # 有号后又锁定：改回 4 位须换新前缀
+    assert w.select(pi, [(b, 1)], custom=custom(pre)).code == "RULE_PREFIX_FORMAT_LOCKED"
+    # 别的 PI 选这条规则：按新格式共用，流水接续
+    _, p2, b2 = mk(w, ("M1", 1), org=org)
+    ok(w.select(p2, [(b2, 1)], rule_id=rid))
+    w.generate(p2)
+    assert sns(sql, p2) == [f"{pre}000003"]
+    # 别的 PI 用旧格式：锁定
+    _, p3, b3 = mk(w, ("M1", 1), org=org)
+    assert w.select(p3, [(b3, 1)], custom=custom(pre)).code == "RULE_PREFIX_FORMAT_LOCKED"
+
+
+def test_released_prefix_revert_format(w, api, sql):
+    """前缀腾空后换格式，再删光改回原格式：沿用原来那一版，当前版本改回它。"""
+    pre = P()
+    _, pi, b = mk(w, ("M1", 2))
+    ok(w.select(pi, [(b, 1)], custom=custom(pre)))
+    w.generate(pi)
+    ok(w.delete(pi, bills=[b]))
+    ok(w.select(pi, [(b, 1)], custom=custom(pre, seq_len=6)))
+    w.generate(pi)
+    ok(w.delete(pi, bills=[b]))
+    ok(w.select(pi, [(b, 1)], custom=custom(pre)))
+    w.generate(pi)
+    assert sns(sql, pi) == [f"{pre}0001", f"{pre}0002"]
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre)
+    assert sql.scalar("SELECT current_version FROM sn_rule WHERE id = %s", rid) == 1
+    assert sql.count("SELECT COUNT(*) FROM sn_rule_version WHERE rule_id = %s", rid) == 2, "沿用原来那一版"
+
+
+def test_prefix_not_released_when_other_pi_used_or_registered(w, api, sql):
+    """别的 PI 用过（号还在）或登记过这个前缀：本 PI 号全删掉后格式仍锁定，前缀仍挡住互为开头的前缀。"""
+    org = w.org(uid("O")[:10])
+    pre = P()
+    _, p1, b1 = mk(w, ("M1", 2), org=org)
+    _, p2, b2 = mk(w, ("M1", 2), org=org)
+    ok(w.select(p1, [(b1, 1)], custom=custom(pre)))
+    w.generate(p1)
+    # 别的 PI 只登记、没生成
+    ok(w.select(p2, [(b2, 1)], custom=custom(pre)))
+    ok(w.delete(p1, bills=[b1]))
+    assert _ctx(api, w, p1)["prefix_locked"].get(pre), "别的 PI 登记过：仍锁定"
+    assert w.select(p1, [(b1, 1)], custom=custom(pre, seq_len=6)).code == "RULE_PREFIX_FORMAT_LOCKED"
+    assert w.select(p1, [(b1, 1)], custom=custom(pre + "X")).code == "RULE_PREFIX_OVERLAP"
+    # 别的 PI 生成了（号还在）
+    w.generate(p2)
+    assert w.select(p1, [(b1, 1)], custom=custom(pre, seq_len=6)).code == "RULE_PREFIX_FORMAT_LOCKED"
+    assert w.select(p1, [(b1, 1)], custom=custom(pre + "X")).code == "RULE_PREFIX_OVERLAP"
+
+
+def test_released_prefix_allows_overlapping_prefix(w, api, sql):
+    """本 PI 号全删掉后可以改用与旧前缀一个是另一个开头的前缀；之后别的 PI 不能再用旧前缀（与新前缀互为开头）。"""
+    org = w.org(uid("O")[:10])
+    pre = P()
+    _, pi, b = mk(w, ("M1", 2), org=org)
+    ok(w.select(pi, [(b, 1)], custom=custom(pre)))
+    w.generate(pi)
+    ok(w.delete(pi, bills=[b]))
+    ok(w.select(pi, [(b, 1)], custom=custom(pre + "X")))
+    w.generate(pi)
+    assert sns(sql, pi) == [f"{pre}X0001", f"{pre}X0002"]
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", pre)
+    _, p2, b2 = mk(w, ("M1", 1), org=org)
+    assert w.select(p2, [(b2, 1)], rule_id=rid).code == "RULE_PREFIX_OVERLAP"
+    assert w.select(p2, [(b2, 1)], custom=custom(pre)).code == "RULE_PREFIX_OVERLAP"
+    # 本 PI 有号时也不能回到旧前缀
+    assert w.select(pi, [(b, 1)], custom=custom(pre)).code == "RULE_PI_PREFIX_LOCKED"

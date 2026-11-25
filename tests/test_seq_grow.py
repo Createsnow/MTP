@@ -183,22 +183,21 @@ def test_grow_delivery_serial_and_export(w, api, sql):
 
 
 def test_locked_prefix_format_after_all_sns_deleted(w, api, sql):
-    """号全部删掉后前缀仍归属本 PI、进制和流水位数仍锁定：生成页上下文 prefix_locked 给出锁定的格式
-    （rule_prefix 仍为登记的前缀与格式）；按默认 4 位保存报 RULE_PREFIX_FORMAT_LOCKED，
-    按锁定的 5 位可保存，接在前缀最大号之后。"""
+    """号全部删掉、前缀只归本 PI（没有别的 PI 用过或登记过，前缀已腾空）：进制和流水位数不再锁定，生成页上下文
+    prefix_locked 不列出它（rule_prefix 仍为登记的前缀与格式）；按 4 位保存可以，再生成从 1 起、按新位数。
+    别的 PI 用过或登记过时仍锁定，见 test_prefix_rule.test_prefix_not_released_when_other_pi_used_or_registered。"""
     org, pi, bill = mk(w, ("M1", 3))
     p = bill[-7:]
     ok(w.select(pi, [(bill, 1)], custom=m(prefix=p, base=10, seq_len=5, with_length=False)))
     w.generate(pi)
+    assert ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["prefix_locked"][p]["seq_len"] == 5, "有号时锁定"
     ok(w.delete(pi, bills=[bill], reason="t"))
     ctx = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))
     assert (ctx["rule_prefix"]["prefix"], ctx["rule_prefix"]["custom"]["seq_len"]) == (p, 5)
-    assert ctx["prefix_locked"][p]["seq_len"] == 5 and ctx["prefix_locked"][p]["base"] == 10
-    c = m(prefix=p, base=10, seq_len=4, with_length=False, seq_grow=True)
-    assert w.select(pi, [(bill, 1)], custom=c).code == "RULE_PREFIX_FORMAT_LOCKED"
-    ok(w.select(pi, [(bill, 1)], custom={**ctx["prefix_locked"][p], "seq_grow": True}))
+    assert p not in ctx["prefix_locked"], "前缀已腾空：不锁定"
+    ok(w.select(pi, [(bill, 1)], custom=m(prefix=p, base=10, seq_len=4, with_length=False, seq_grow=True)))
     w.generate(pi)
-    assert sns(sql, pi) == [f"{p}{i:05d}" for i in (1, 2, 3)], "号全删光：前缀最大号退回 0，再生成从 1 起"
+    assert sns(sql, pi) == [f"{p}{i:04d}" for i in (1, 2, 3)], "号全删光：前缀最大号退回 0，再生成从 1 起、按新位数"
     # 上限自动突破另出的版本不列为锁定格式（锁定的仍是原版本的位数）
     _, pi2, bill2 = mk(w, ("M1", 101), org=org)
     p2 = P()
