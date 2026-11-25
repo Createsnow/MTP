@@ -24,6 +24,8 @@ export const api = {
   login: (emp_no: string, password: string) =>
     http.post<any, any>("/auth/login", { emp_no, password }, { headers: { "X-SN-Client": "web" } }),
   me: () => get("/auth/me"),
+  /** 启用的业务模块（后端 SN_MODULES）：前端据此显示菜单。 */
+  modules: () => http.get<{ modules: string[] }, { modules: string[] }>("/modules", { silent: true }),
   changePassword: (old_password: string, new_password: string) => post("/auth/password", { old_password, new_password }),
   setLang: (lang: string | null) => put("/auth/lang", { lang }),
   users: (params?: Q) => get("/users", params),

@@ -1,0 +1,1066 @@
+[
+  {
+    "kind": "route",
+    "path": "/openapi.json",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "endpoint": "fastapi.applications.FastAPI.setup.<locals>.openapi"
+  },
+  {
+    "kind": "route",
+    "path": "/docs",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "endpoint": "fastapi.applications.FastAPI.setup.<locals>.swagger_ui_html"
+  },
+  {
+    "kind": "route",
+    "path": "/docs/oauth2-redirect",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "endpoint": "fastapi.applications.FastAPI.setup.<locals>.swagger_ui_redirect"
+  },
+  {
+    "kind": "route",
+    "path": "/redoc",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "endpoint": "fastapi.applications.FastAPI.setup.<locals>.redoc_html"
+  },
+  {
+    "kind": "route",
+    "path": "/health/live",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.health.live"
+  },
+  {
+    "kind": "route",
+    "path": "/api/health",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.health.ready"
+  },
+  {
+    "kind": "route",
+    "path": "/health/ready",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.health.ready"
+  },
+  {
+    "kind": "route",
+    "path": "/api/auth/login",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.auth.login"
+  },
+  {
+    "kind": "route",
+    "path": "/api/auth/me",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.auth.me"
+  },
+  {
+    "kind": "route",
+    "path": "/api/auth/password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.auth.change_password"
+  },
+  {
+    "kind": "route",
+    "path": "/api/auth/lang",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.auth.set_lang"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.users.user_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.users.user_create"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users/{id}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.users.user_update"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users/{id}/disable",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.users.user_disable"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users/{id}/enable",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.users.user_enable"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users/{id}/reset-password",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.users.user_reset"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users/{id}/reset-secret",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.users.user_reset_secret"
+  },
+  {
+    "kind": "route",
+    "path": "/api/users/{id}/secret",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.users.user_view_secret"
+  },
+  {
+    "kind": "route",
+    "path": "/api/factories",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.factories.factory_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/factories/sync",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.factories.factory_sync"
+  },
+  {
+    "kind": "route",
+    "path": "/api/factories/{code}/mes-config",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.factories.factory_config"
+  },
+  {
+    "kind": "route",
+    "path": "/api/factories/{code}/mes-test",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.factories.factory_test"
+  },
+  {
+    "kind": "route",
+    "path": "/api/factories/{code}/mes-toggle",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.factories.factory_toggle_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/factories/{code}/mes-toggle",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.factories.factory_toggle"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/meta",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_meta"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/sync-progress",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_sync_progress"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/customers",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_customers"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/departments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_departments"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/targets",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_targets"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/{bill_no}/lines",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_lines"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/sync",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.orders.order_sync"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/compare",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.orders.order_compare"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/page-sync",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.orders.order_page_sync"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/sync-config",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_sync_config"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/sync-config",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.orders.order_sync_config_save"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/rebuild",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.orders.order_rebuild"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/attach",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.orders.order_attach"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/length",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.orders.order_length"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/unit",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.orders.order_unit"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/alerts",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.orders.order_alerts"
+  },
+  {
+    "kind": "route",
+    "path": "/api/orders/alerts/{id}/handle",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.orders.order_alert_handle"
+  },
+  {
+    "kind": "route",
+    "path": "/api/k3-config",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.k3_config.k3_config_view"
+  },
+  {
+    "kind": "route",
+    "path": "/api/k3-config/test",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.k3_config.k3_config_test"
+  },
+  {
+    "kind": "route",
+    "path": "/api/k3-config/reset",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.k3_config.k3_config_reset"
+  },
+  {
+    "kind": "route",
+    "path": "/api/k3-config",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.k3_config.k3_config_save"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.rules.rule_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/prefixes",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.rules.rule_prefixes"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/prefixes/usage",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.rules.rule_prefix_usage"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/prefixes/grow",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.rules.rule_prefix_grow"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.rules.rule_create"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/{id:int}",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.rules.rule_update"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/{id:int}/inc-customers",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.rules.rule_inc_customers"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/{id:int}/inc-customers/impact",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.rules.rule_inc_customers_impact"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/{id:int}",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.routes.rules.rule_delete"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/preview",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.rules.rule_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/options",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.rules.rule_options"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/line-select",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.rules.rule_line_select"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/pi-binding",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.rules.rule_pi_bind"
+  },
+  {
+    "kind": "route",
+    "path": "/api/rules/pi-binding",
+    "methods": [
+      "DELETE"
+    ],
+    "endpoint": "app.api.routes.rules.rule_pi_unbind"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/pis",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_pis"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/context",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_context"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/dual",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_dual"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/preview",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/gaps",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_gaps"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/segments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_segments"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/segments/sns",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_segment_sns"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/run",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_run"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/jobs",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_jobs"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/batches/{batch}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_progress"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/batches/{batch}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_cancel"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/delete/preview",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_delete_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/delete",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_delete"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/deleted",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_deleted"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/revoke-config",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.generate.gen_revoke_config"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/void-rule",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.generate.gen_void_rule"
+  },
+  {
+    "kind": "route",
+    "path": "/api/generate/void-rule",
+    "methods": [
+      "PUT"
+    ],
+    "endpoint": "app.api.routes.generate.gen_void_rule_save"
+  },
+  {
+    "kind": "route",
+    "path": "/api/allocation/bills",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.allocation.alloc_bills"
+  },
+  {
+    "kind": "route",
+    "path": "/api/allocation/context",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.allocation.alloc_context"
+  },
+  {
+    "kind": "route",
+    "path": "/api/allocation/preview",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.allocation.alloc_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/allocation/allocate",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.allocation.alloc_run"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/batches",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.delivery.batch_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/batches/{batch_no}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.delivery.batch_get"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/batches/{batch_no}/items",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.delivery.batch_items"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/batches/{batch_no}/export",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.delivery.batch_export"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/batches/{batch_no}/confirm",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.delivery.batch_confirm"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/batches/{batch_no}/void",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.delivery.batch_void"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/resume",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.delivery.push_resume"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/remaining",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.delivery.push_remaining"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/alerts",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.delivery.alert_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/delivery/alerts/{id}/handle",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.delivery.alert_handle"
+  },
+  {
+    "kind": "route",
+    "path": "/api/export/bills",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_export.export_bills"
+  },
+  {
+    "kind": "route",
+    "path": "/api/export/lines",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_export.export_lines"
+  },
+  {
+    "kind": "route",
+    "path": "/api/export/segments",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_export.export_segments"
+  },
+  {
+    "kind": "route",
+    "path": "/api/export/items",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_export.export_items"
+  },
+  {
+    "kind": "route",
+    "path": "/api/export/file",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_export.export_file"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn-import/template",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_import.import_template"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn-import/check",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.sn_import.import_check"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn-import",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.sn_import.import_run"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn-import/imports/{import_no}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_import.import_summary"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn-import/imports/{import_no}/delete",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.sn_import.import_delete"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn-import/items",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn_import.import_items"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.all_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/preview",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.transfers.auto_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.transfers.auto_transfer"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/locate",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.locate"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/sources",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.sources"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/bill/preview",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.transfers.bill_preview"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/bill",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.transfers.bill_transfer"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/bill",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.bill_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/bill/{id:int}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.bill_get"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/bill/{id}/items",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.bill_items"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/org/candidates",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.transfers.org_candidates"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/org/direct",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.transfers.org_direct"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/org",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.org_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/org/{id:int}",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.org_get"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/org/{id}/items",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.org_items"
+  },
+  {
+    "kind": "route",
+    "path": "/api/transfers/org/{id}/out-list",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.transfers.org_out_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn.sn_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn/export-check",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn.sn_export_check"
+  },
+  {
+    "kind": "route",
+    "path": "/api/sn/export",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.sn.sn_export"
+  },
+  {
+    "kind": "route",
+    "path": "/api/audits",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.audits.audit_list"
+  },
+  {
+    "kind": "route",
+    "path": "/api/audits/export-check",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.audits.audit_export_check"
+  },
+  {
+    "kind": "route",
+    "path": "/api/audits/export",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.audits.audit_export"
+  },
+  {
+    "kind": "route",
+    "path": "/api/audits/meta",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.audits.audit_meta"
+  },
+  {
+    "kind": "route",
+    "path": "/api/dashboard",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.api.routes.dashboard.dashboard_load"
+  },
+  {
+    "kind": "route",
+    "path": "/api/mes/v1/batches/next",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.mes.next_batch"
+  },
+  {
+    "kind": "route",
+    "path": "/api/mes/v1/receipts",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.mes.receipt"
+  },
+  {
+    "kind": "route",
+    "path": "/api/mes/v1/sn/delivered",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.mes.delivered"
+  },
+  {
+    "kind": "route",
+    "path": "/api/mes/v1/batches/items",
+    "methods": [
+      "POST"
+    ],
+    "endpoint": "app.api.routes.mes.batch_items"
+  },
+  {
+    "kind": "route",
+    "path": "/",
+    "methods": [
+      "GET"
+    ],
+    "endpoint": "app.main.create_app.<locals>.root"
+  },
+  {
+    "kind": "mount",
+    "path": "/assets"
+  }
+]

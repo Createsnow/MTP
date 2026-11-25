@@ -1,8 +1,10 @@
 """爱德泰·溯码中台（当前业务模块：SN 管理）· FastAPI + MySQL 8。
 
-启动顺序：检查签名密钥 → 建表 / 升级（Flyway 兼容）→ 回收中断的生成任务
+装配：业务模块在 app/modules/<模块>/module.py 声明自己的路由、启动步骤与后台任务（app/platform/module.py），
+这里按 SN_MODULES 加载启用的模块，与底座的步骤合在一起按序号执行；新增模块不改本文件。
+启动顺序：检查签名密钥 → 建表 / 升级（Flyway 兼容）→ 单据统计补齐 → 回收中断的生成任务
           → 建首个管理员 → 维护月分区 → 可选演示数据
-          → 定时任务：每日维护（分区、归档、生产组织同步、交付自检）、比对同步、推送调度、回收中断的生成任务。
+          → 定时任务：每日维护（分区、归档、生产组织同步、交付自检）、回收中断的生成任务、比对同步、推送调度、单据统计。
 多实例：各实例都可启动这些定时任务；命名锁防同时执行，每日维护与比对同步另按上次执行时间去重，推送任务按租约分配。
 请求链路：RequestIdMiddleware（请求号 / 缓存写请求体）→ CORS → 路由（鉴权依赖）→ services → MySQL。
 """
@@ -23,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.deps import run_sync
-from app.api.routes import api_router, health
+from app.api.routes import health
 from app.core import scheduler
 from app.core.config import reload_settings, settings
 from app.core.errors import ErrorCode, biz
@@ -33,8 +35,11 @@ from app.core.security import CurrentUser
 from app.db import init_db
 from app.db.session import PoolExhausted, db, is_integrity, is_lock_conflict
 from app.middleware.request_id import WRITE_METHODS, RequestIdMiddleware
+from app.platform import events
+from app.platform import module as modules
+from app.platform.module import Job, Module, Step
 from app.services import audit as audit_svc
-from app.services import bill_stats, delivery, demo_seed, generate, locks, orders, partitions, users
+from app.services import demo_seed, locks, partitions
 
 log = structlog.get_logger()
 
@@ -102,29 +107,44 @@ def check_secret() -> None:
     log.warning("weak_secret", problem=problem, note="ENVIRONMENT=production 时将拒绝启动")
 
 
-def init_admin() -> None:
-    """按 .env 建系统管理员（空库）或重置它（SN_RESET_ADMIN=true）。不强制改密，所以生产环境不允许默认密码。"""
-    reset = settings.get_bool("SN_RESET_ADMIN", False)
-    if not reset and not users.needs_bootstrap():
-        return
-    problem = settings.admin_password_problem()
-    if problem is not None:
-        if settings.production:
-            raise RuntimeError(f"{problem}：生产环境必须在 .env 里设置 SN_INIT_ADMIN_PASSWORD")
-        log.warning("weak_admin_password", problem=problem, note="ENVIRONMENT=production 时将拒绝启动")
-    emp = settings.init_admin_emp_no
-    if reset:
-        users.reset_admin(settings.init_admin_password)
-        log.warning("admin_reset", emp_no=emp, note="password=SN_INIT_ADMIN_PASSWORD; remove SN_RESET_ADMIN now")
-    elif users.bootstrap_admin(settings.init_admin_password):
-        log.warning("bootstrap_admin", emp_no=emp, note="password=SN_INIT_ADMIN_PASSWORD")
-
-
 #: 启动初始化锁最长等待秒数：多进程（SN_WORKERS）、多实例同时启动时依次初始化
 STARTUP_LOCK_SECONDS = 180
 
 
-def startup() -> None:
+def _demo_seed() -> None:
+    if settings.demo_seed:
+        demo_seed.seed_if_empty()
+
+
+#: 底座的启动步骤（序号与各模块的步骤统一排序：10 建表 → 20、30 SN → 40 组织 → 50 分区 → 60 演示数据）
+PLATFORM_STEPS = (
+    Step("init_db", 10, init_db),
+    Step("maintain", 50, lambda: partitions.maintain(daily=settings.maintain_enabled)),
+    Step("demo_seed", 60, _demo_seed),
+)
+
+
+def _start_daily():
+    return scheduler.start_daily(settings.partition_cron, partitions.maintain) if settings.maintain_enabled else None
+
+
+#: 底座的后台任务：每日维护（序号与各模块的任务统一排序）
+PLATFORM_JOBS = (Job("daily", 10, _start_daily),)
+
+
+def startup_steps(mods: list[Module]) -> list[Step]:
+    steps = [*PLATFORM_STEPS, *(s for m in mods for s in m.startup)]
+    modules.check_unique(steps, "启动步骤")
+    return sorted(steps, key=lambda s: s.order)
+
+
+def jobs(mods: list[Module]) -> list[Job]:
+    js = [*PLATFORM_JOBS, *(j for m in mods for j in m.jobs)]
+    modules.check_unique(js, "后台任务")
+    return sorted(js, key=lambda j: j.order)
+
+
+def startup(mods: list[Module]) -> None:
     check_secret()
     db.configure(settings.db_target(), settings.db_pool_size)
     # 建表、建首个管理员、演示数据都是「先看空不空、再写」：几个进程同时启动时会都看到空库、都去写，
@@ -133,13 +153,8 @@ def startup() -> None:
     if held is None:
         raise RuntimeError(f"等待其他进程完成启动初始化超过 {STARTUP_LOCK_SECONDS} 秒")
     try:
-        init_db()
-        bill_stats.ensure_filled()
-        generate.recover_interrupted()
-        init_admin()
-        partitions.maintain(daily=settings.maintain_enabled)
-        if settings.demo_seed:
-            demo_seed.seed_if_empty()
+        for step in startup_steps(mods):
+            step.run()
     finally:
         held.release()
     log.info("sn_center_ready", retention_days=settings.audit_retention_days)
@@ -147,38 +162,26 @@ def startup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await run_sync(startup)
-    daily = scheduler.start_daily(settings.partition_cron, partitions.maintain) if settings.maintain_enabled else None
-    # 别的实例被杀留下的 RUNNING 生成任务：每分钟检查一次（拿得到 PI 操作锁才回收，不会碰正在执行的任务）
-    gen_recover = scheduler.start_every(
-        generate.RECOVER_INTERVAL_SECONDS, generate.recover_interrupted, "sn-gen-recover"
-    )
-    # 定时比对同步：每分钟检查一次是否到期（间隔、暂停在生产订单页「同步设置」改，下一分钟内生效）
-    order_sync = (
-        scheduler.start_every(orders.SCHEDULE_TICK_SECONDS, orders.run_scheduled, "sn-order-sync")
-        if settings.get_bool("SN_SYNC_ENABLED", True)
-        else None
-    )
-    push = delivery.start_scheduler()
-    stats = bill_stats.start_scheduler()
+    mods = app.state.modules
+    await run_sync(startup, mods)
+    started = [x for x in (j.start() for j in jobs(mods)) if x is not None]
     try:
         yield
     finally:
-        # 后台生成任务由线程池自行跑完（解释器退出前会等待）
-        gen_recover.stop()
-        stats.stop()
-        if daily is not None:
-            daily.stop()
-        if order_sync is not None:
-            order_sync.stop()
-        if push is not None:
-            push.stop()
+        # 后台生成任务由线程池自行跑完（解释器退出前会等待）；stop() 只置停止标志，先后无关
+        for x in reversed(started):
+            x.stop()
         db.close()
 
 
 def create_app() -> FastAPI:
     reload_settings()
     setup_logging(json_output=settings.production)
+    mods = modules.load()
+    events.reset()
+    for m in mods:
+        if m.subscribe is not None:
+            m.subscribe()
     docs = settings.docs_enabled
     app = FastAPI(
         title=settings.app_name,
@@ -200,6 +203,9 @@ def create_app() -> FastAPI:
         ],
         swagger_ui_parameters={"persistAuthorization": True},
     )
+
+    app.state.modules = mods
+    log.info("modules_enabled", modules=[m.name for m in mods])
 
     app.add_middleware(
         CORSMiddleware,
@@ -314,7 +320,7 @@ def create_app() -> FastAPI:
         return JSONResponse(_body("INTERNAL", "Internal Server Error"), status_code=500)
 
     app.include_router(health.router)
-    app.include_router(api_router, prefix="/api")
+    app.include_router(modules.api_router(mods), prefix="/api")
 
     @app.get("/", include_in_schema=False)
     async def root():

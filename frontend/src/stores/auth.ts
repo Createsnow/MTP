@@ -81,6 +81,7 @@ export const useAuthStore = defineStore("auth", () => {
     persist(res.token, res.user);
     const pref = normalizeLocale(res.user?.lang);
     if (pref) setLocale(pref);
+    await loadModules();
   }
 
   /** 改密成功后不发新令牌：本账户所有页面（含本页）退出，用新密码重新登录。 */
@@ -94,6 +95,27 @@ export const useAuthStore = defineStore("auth", () => {
     const me = await api.me();
     profile.value = me;
     saveSession(null, me);
+    await loadModules();
+  }
+
+  /** 启用的业务模块（GET /api/modules）：没取到之前为 null，菜单全部显示（与模块化之前一样）。 */
+  const modules = ref<string[] | null>(null);
+  let modulesPending: Promise<void> | null = null;
+  function loadModules(): Promise<void> {
+    modulesPending = api
+      .modules()
+      .then((r) => {
+        modules.value = r.modules;
+      })
+      .catch(() => {
+        /* 取不到时不按模块过滤菜单 */
+      });
+    return modulesPending;
+  }
+  /** 路由守卫用：已登录但还没取过模块清单时先取一次（刷新页面后直接打开某页也按模块拦截）。 */
+  function ensureModules(): Promise<void> {
+    if (!token.value || modules.value) return Promise.resolve();
+    return modulesPending ?? loadModules();
   }
 
   async function changeLocale(locale: Locale) {
@@ -111,12 +133,14 @@ export const useAuthStore = defineStore("auth", () => {
   function clear() {
     token.value = "";
     profile.value = null;
+    modules.value = null;
+    modulesPending = null;
     clearSession();
   }
 
   return {
     token, profile, role, isAdmin, isSuperAdmin, isOperator, isManager, canManageUsers, isAuditor, boundFactory, scopeFactories, scopeNames, bound,
-    multiScope, canAct, canWrite,
+    multiScope, canAct, canWrite, modules, ensureModules,
     login, changePassword, refresh, changeLocale, clear,
   };
 });

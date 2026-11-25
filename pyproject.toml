@@ -45,10 +45,11 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 ignore = ["B008"]
 
 # ---------------------------------------------------------------------------------------------------------------
-# 模块边界检查（docs/模块化单体改造方案.md 第 6 章、阶段 0）：uv run lint-imports
-# 现在代码还没搬进 app/modules/，契约按「文件 → 模块」的现有归属写；ignore_imports 是阶段 0 登记的现有违规，
-# 只许减、不许增（新代码不得再加）。阶段 2 收口后清零；目录搬迁后改为按包写契约。
-# 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座。只检查直接引用（allow_indirect_imports），阶段 2 后收紧。
+# 模块边界检查（docs/模块化单体改造方案.md 第 6 章）：uv run lint-imports
+# 代码还没搬进 app/modules/（阶段 4），契约按「文件 → 模块」的现有归属写：每个模块 = 它的服务文件 + 路由文件 +
+# app/modules/<模块>/（装配声明）。ignore_imports 是阶段 0 登记的现有违规，只许减、不许增（新代码不得再加），阶段 4 清零。
+# 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座。只检查直接引用（allow_indirect_imports），阶段 4 后收紧。
+# 底座按约定在运行时查找 app.modules 下的模块（app/platform/module.py 的 discover），不静态引用。
 [tool.importlinter]
 root_package = "app"
 include_external_packages = false
@@ -59,19 +60,21 @@ name = "底座不引用业务模块"
 type = "forbidden"
 allow_indirect_imports = true
 source_modules = [
-  "app.core", "app.db", "app.middleware", "app.models",
-  "app.services.audit", "app.services.locks", "app.services.files", "app.services.partitions",
-  "app.services.k3", "app.services.mes_client",
+  "app.core", "app.db", "app.middleware", "app.models", "app.platform", "app.services.audit", "app.services.locks",
+  "app.services.files", "app.services.partitions", "app.services.k3", "app.services.mes_client",
 ]
 forbidden_modules = [
-  "app.api.routes",
-  "app.services.factories", "app.services.users",
-  "app.services.orders", "app.services.changes", "app.services.k3_config",
+  "app.services.factories", "app.services.users", "app.api.routes.auth", "app.api.routes.users",
+  "app.api.routes.factories", "app.modules.org", "app.services.orders", "app.services.changes",
+  "app.services.k3_config", "app.api.routes.orders", "app.api.routes.k3_config", "app.modules.order",
   "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
   "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
   "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
-  "app.services.seg", "app.services.line_void", "app.services.deletion",
-  "app.services.audit_query", "app.services.dashboard",
+  "app.services.seg", "app.services.line_void", "app.services.deletion", "app.api.routes.rules",
+  "app.api.routes.generate", "app.api.routes.allocation", "app.api.routes.delivery", "app.api.routes.sn_export",
+  "app.api.routes.sn_import", "app.api.routes.transfers", "app.api.routes.sn", "app.api.routes.mes",
+  "app.modules.sn", "app.services.audit_query", "app.api.routes.audits", "app.modules.log", "app.services.dashboard",
+  "app.api.routes.dashboard", "app.modules.dashboard", "app.modules",
 ]
 ignore_imports = [
   # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
@@ -85,14 +88,20 @@ id = "org"
 name = "组织 / 账户模块不引用工单、SN、日志、看板"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = ["app.services.factories", "app.services.users"]
+source_modules = [
+  "app.services.factories", "app.services.users", "app.api.routes.auth", "app.api.routes.users",
+  "app.api.routes.factories", "app.modules.org",
+]
 forbidden_modules = [
-  "app.services.orders", "app.services.changes", "app.services.k3_config",
-  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
-  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
-  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
-  "app.services.seg", "app.services.line_void", "app.services.deletion",
-  "app.services.audit_query", "app.services.dashboard",
+  "app.services.orders", "app.services.changes", "app.services.k3_config", "app.api.routes.orders",
+  "app.api.routes.k3_config", "app.modules.order", "app.services.rules", "app.services.generate",
+  "app.services.workbench", "app.services.allocation", "app.services.delivery", "app.services.transfers",
+  "app.services.query", "app.services.sn_export", "app.services.sn_import", "app.services.sn_sheet",
+  "app.services.bill_stats", "app.services.dual", "app.services.seg", "app.services.line_void",
+  "app.services.deletion", "app.api.routes.rules", "app.api.routes.generate", "app.api.routes.allocation",
+  "app.api.routes.delivery", "app.api.routes.sn_export", "app.api.routes.sn_import", "app.api.routes.transfers",
+  "app.api.routes.sn", "app.api.routes.mes", "app.modules.sn", "app.services.audit_query", "app.api.routes.audits",
+  "app.modules.log", "app.services.dashboard", "app.api.routes.dashboard", "app.modules.dashboard",
 ]
 ignore_imports = [
   # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
@@ -104,13 +113,19 @@ id = "order"
 name = "工单模块不引用 SN、日志、看板"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = ["app.services.orders", "app.services.changes", "app.services.k3_config"]
+source_modules = [
+  "app.services.orders", "app.services.changes", "app.services.k3_config", "app.api.routes.orders",
+  "app.api.routes.k3_config", "app.modules.order",
+]
 forbidden_modules = [
   "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
   "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
   "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
-  "app.services.seg", "app.services.line_void", "app.services.deletion",
-  "app.services.audit_query", "app.services.dashboard",
+  "app.services.seg", "app.services.line_void", "app.services.deletion", "app.api.routes.rules",
+  "app.api.routes.generate", "app.api.routes.allocation", "app.api.routes.delivery", "app.api.routes.sn_export",
+  "app.api.routes.sn_import", "app.api.routes.transfers", "app.api.routes.sn", "app.api.routes.mes",
+  "app.modules.sn", "app.services.audit_query", "app.api.routes.audits", "app.modules.log", "app.services.dashboard",
+  "app.api.routes.dashboard", "app.modules.dashboard",
 ]
 ignore_imports = [
   # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
@@ -131,9 +146,15 @@ source_modules = [
   "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
   "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
   "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
-  "app.services.seg", "app.services.line_void", "app.services.deletion",
+  "app.services.seg", "app.services.line_void", "app.services.deletion", "app.api.routes.rules",
+  "app.api.routes.generate", "app.api.routes.allocation", "app.api.routes.delivery", "app.api.routes.sn_export",
+  "app.api.routes.sn_import", "app.api.routes.transfers", "app.api.routes.sn", "app.api.routes.mes",
+  "app.modules.sn",
 ]
-forbidden_modules = ["app.services.audit_query", "app.services.dashboard"]
+forbidden_modules = [
+  "app.services.audit_query", "app.api.routes.audits", "app.modules.log", "app.services.dashboard",
+  "app.api.routes.dashboard", "app.modules.dashboard",
+]
 ignore_imports = []
 
 [[tool.importlinter.contracts]]
@@ -141,14 +162,19 @@ id = "log"
 name = "日志模块只依赖底座与组织"
 type = "forbidden"
 allow_indirect_imports = true
-source_modules = ["app.services.audit_query"]
+source_modules = [
+  "app.services.audit_query", "app.api.routes.audits", "app.modules.log",
+]
 forbidden_modules = [
-  "app.services.orders", "app.services.changes", "app.services.k3_config",
-  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
-  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
-  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
-  "app.services.seg", "app.services.line_void", "app.services.deletion",
-  "app.services.dashboard",
+  "app.services.orders", "app.services.changes", "app.services.k3_config", "app.api.routes.orders",
+  "app.api.routes.k3_config", "app.modules.order", "app.services.rules", "app.services.generate",
+  "app.services.workbench", "app.services.allocation", "app.services.delivery", "app.services.transfers",
+  "app.services.query", "app.services.sn_export", "app.services.sn_import", "app.services.sn_sheet",
+  "app.services.bill_stats", "app.services.dual", "app.services.seg", "app.services.line_void",
+  "app.services.deletion", "app.api.routes.rules", "app.api.routes.generate", "app.api.routes.allocation",
+  "app.api.routes.delivery", "app.api.routes.sn_export", "app.api.routes.sn_import", "app.api.routes.transfers",
+  "app.api.routes.sn", "app.api.routes.mes", "app.modules.sn", "app.services.dashboard", "app.api.routes.dashboard",
+  "app.modules.dashboard",
 ]
 ignore_imports = []
 
@@ -159,7 +185,11 @@ type = "forbidden"
 allow_indirect_imports = true
 source_modules = [
   "app.services.orders", "app.services.changes", "app.services.k3_config", "app.services.users",
-  "app.services.audit_query", "app.services.dashboard",
+  "app.services.audit_query", "app.services.dashboard", "app.api.routes.auth", "app.api.routes.users",
+  "app.api.routes.orders", "app.api.routes.k3_config", "app.api.routes.audits", "app.api.routes.dashboard",
+  "app.modules.org", "app.modules.order", "app.modules.log", "app.modules.dashboard", "app.platform",
 ]
-forbidden_modules = ["app.services.mes_client", "app.api.routes.mes"]
+forbidden_modules = [
+  "app.services.mes_client", "app.api.routes.mes",
+]
 ignore_imports = []

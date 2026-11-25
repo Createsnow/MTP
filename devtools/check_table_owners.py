@@ -150,7 +150,7 @@ def module_of(rel: str) -> str | None:
     if parts[:2] == ["app", "services"]:
         name = parts[2].removesuffix(".py")
         return FILE_MODULE.get(name)
-    if parts[1] in ("core", "db", "middleware", "models"):
+    if parts[1] in ("core", "db", "middleware", "models", "platform"):
         return PLATFORM
     return None
 

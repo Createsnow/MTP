@@ -5,7 +5,7 @@
 总部按金蝶生产订单的物料行统一生成 SN，分配到订单的生产组织：**对接 MES 的组织由本系统分批推送（MES 也可主动取批），已分配的号都可在 SN 分配页的「已分配」页签下载**；每一批都有回执或人工处理的出口，**SN 全局不重复、同一枚号不会重复交付**。
 
 - 前端：Vue 3 + TypeScript + Vite + Element Plus（简体中文 / English / Tiếng Việt）
-- 后端：Python 3.12 + FastAPI + PyMySQL + structlog（`app/{api,core,db,middleware,models,schemas,services}`；SQL 直接写在 services 里）
+- 后端：Python 3.12 + FastAPI + PyMySQL + structlog（模块化单体：`app/modules/*` 登记各业务模块，`app/platform` 装配；代码仍在 `app/{api,core,db,middleware,models,schemas,services}`，SQL 直接写在 services 里）
 - 数据库：**MySQL 8**（启动时自动建表，Flyway 兼容的 `flyway_schema_history`；操作痕迹按月分区）；业务时间一律按 UTC 存储，页面按生产组织的时区显示
 - 外部：金蝶 K3 Cloud 生产订单 / 组织机构（只读同步到本地快照）；各生产组织的 MES（推送 + 拉取 + 回执）
 
@@ -93,8 +93,11 @@ MES 方未接入时的联调方法见 [MES 联调指南](<docs/MES 联调指南.
 
 ```
 app/                         FastAPI 后端
-  main.py                    应用装配、错误处理、单端口托管前端、启动任务
-  api/                       deps.py（鉴权依赖）、routes/（各接口）
+  main.py                    装配（按 SN_MODULES 加载模块）、错误处理、单端口托管前端
+  platform/                  底座：module.py（模块描述与装配、GET /api/modules）、events.py（应用内事件）
+  modules/                   业务模块的装配声明：org / order / sn / log / dashboard 各一个 module.py（路由、启动步骤、后台任务、依赖）；
+                             以后的箱号 box、托号 pallet 在这里新建
+  api/                       deps.py（鉴权依赖）、routes/（各接口，由各模块的 module.py 登记）
   core/                      配置、.env、错误码、异常、SN 编码、口令与令牌、日志、定时任务
   db/                        MySQL 连接池与事务、建表迁移、migration/V1__init.sql
   middleware/ models/ schemas/
@@ -104,6 +107,7 @@ app/                         FastAPI 后端
 tests/                       pytest：单元测试 + 集成测试（真实 MySQL + 假金蝶 + 模拟 MES）
 devtools/                    联调工具（不随应用部署）：mes_mock.py 模拟 MES、mes_conformance.py MES 接口契约测试、rebuild_import_table.py 只重建 SN 导入表、rebuild_keep_accounts.py 保留账户、按 V1 重建其他表
 frontend/                    Vue 3 + Vite + Element Plus
+  src/modules/               各模块的菜单 menu.ts（router/index.ts 自动收集，按 GET /api/modules 显示）
   src/views/                 各页面；页面的子组件放在同名小写目录（views/generate、views/query、views/transfer）
   src/components/            共用组件；components/batch 为交付批次详情与人工确认、作废（分配、转移、查询页共用）
   scripts/                   多语言词条源表（ui_messages.py 公共、ui/*.py 各页面、error_messages.py 错误码）与生成脚本

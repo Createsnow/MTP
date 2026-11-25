@@ -1,4 +1,4 @@
-"""读取 sn-center/.env。不依赖第三方库，启动脚本和金蝶查询都能用。"""
+"""读取仓库根目录的 .env。不依赖第三方库，启动脚本和金蝶查询都能用。"""
 
 from __future__ import annotations
 

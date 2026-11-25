@@ -1,87 +1,37 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 
-/** 系统管理员（唯一）、管理员、普通操作员、审计员。管理员 = 普通操作员 + 操作日志 + 账户管理（限授权组织）。 */
-const ADMIN = ["admin"];
-const OPS = ["admin", "manager", "operator"];
-const AUDIT = ["admin", "manager", "auditor"];
-const ALL = ["admin", "manager", "operator", "auditor"];
-/** 账户管理：系统管理员账户 + 管理员（userManage 再按 store.canManageUsers 校验）。 */
-const USER_MANAGE = ["admin", "manager"];
+import { assembleMenu, moduleEnabled } from "@/menuModules.js";
+import type { MenuGroup, MenuItem, ModuleMenu } from "./types";
 
-/** 菜单项对当前账户可见：角色在内，且满足 superAdmin（只系统管理员账户）/ userManage（能管理账户）。 */
-export function menuAllowed(m: { roles?: string[]; superAdmin?: boolean; userManage?: boolean }, store: { role: string; isSuperAdmin: boolean; canManageUsers: boolean }) {
-  return !!m.roles?.includes(store.role) && (!m.superAdmin || store.isSuperAdmin) && (!m.userManage || store.canManageUsers);
+export type { MenuGroup, MenuItem } from "./types";
+
+/** 菜单项对当前账户可见：所属模块已启用（GET /api/modules），角色在内，且满足 superAdmin（只系统管理员账户）/ userManage（能管理账户）。 */
+export function menuAllowed(
+  m: { roles?: string[]; superAdmin?: boolean; userManage?: boolean; module?: string; soon?: boolean },
+  store: { role: string; isSuperAdmin: boolean; canManageUsers: boolean; modules?: string[] | null },
+) {
+  return (
+    moduleEnabled(m, store.modules) &&
+    !!m.roles?.includes(store.role) &&
+    (!m.superAdmin || store.isSuperAdmin) &&
+    (!m.userManage || store.canManageUsers)
+  );
 }
 
 /**
- * 菜单按业务模块分组（工单、SN、箱号、托号、日志、账户、组织）；soon = 建设中的占位页（菜单标「建设中」）。
- * 新模块在这里加一组，页面放 views/<模块>/；已有页面的路径不变（页面间链接、书签照常可用）。
+ * 菜单按业务模块分组（工单、SN、箱号、托号、日志、账户、组织）：每个模块在 src/modules/<模块>/menu.ts 声明一组，
+ * 这里自动收集、按 order 排序（见 menuModules.js）。新模块只新建 menu.ts，不改本文件；已有页面的路径不变。
  */
-export type MenuItem = { path: string; title: string; icon: string; roles: string[]; superAdmin?: boolean; userManage?: boolean; soon?: boolean };
-export type MenuGroup = { group: string; icon?: string; items: MenuItem[] };
-
-export const MENU: MenuGroup[] = [
-  { group: "nav.groupWork", items: [
-    { path: "/", title: "nav.dashboard", icon: "Odometer", roles: ALL },
-  ] },
-  { group: "nav.groupOrder", icon: "Tickets", items: [
-    { path: "/orders", title: "nav.orders", icon: "Tickets", roles: OPS },
-  ] },
-  { group: "nav.groupSn", icon: "Stamp", items: [
-    { path: "/generate", title: "nav.generate", icon: "Finished", roles: OPS },
-    { path: "/sn-import", title: "nav.snImport", icon: "Upload", roles: OPS },
-    { path: "/allocate", title: "nav.allocate", icon: "Promotion", roles: OPS },
-    { path: "/transfer", title: "nav.transfer", icon: "Switch", roles: OPS },
-    { path: "/query", title: "nav.query", icon: "Search", roles: ALL },
-    { path: "/rules", title: "nav.rules", icon: "SetUp", roles: OPS },
-  ] },
-  { group: "nav.groupBox", icon: "Box", items: [
-    { path: "/box/generate", title: "nav.boxGenerate", icon: "Finished", roles: OPS, soon: true },
-    { path: "/box/transfer", title: "nav.boxTransfer", icon: "Switch", roles: OPS, soon: true },
-    { path: "/box/query", title: "nav.boxQuery", icon: "Search", roles: ALL, soon: true },
-    { path: "/box/rules", title: "nav.boxRules", icon: "SetUp", roles: OPS, soon: true },
-  ] },
-  { group: "nav.groupPallet", icon: "Van", items: [
-    { path: "/pallet/generate", title: "nav.palletGenerate", icon: "Finished", roles: OPS, soon: true },
-    { path: "/pallet/transfer", title: "nav.palletTransfer", icon: "Switch", roles: OPS, soon: true },
-    { path: "/pallet/query", title: "nav.palletQuery", icon: "Search", roles: ALL, soon: true },
-  ] },
-  { group: "nav.groupLog", icon: "Notebook", items: [
-    { path: "/audit", title: "nav.audit", icon: "Notebook", roles: AUDIT },
-  ] },
-  { group: "nav.groupAccount", icon: "User", items: [
-    { path: "/users", title: "nav.users", icon: "User", roles: USER_MANAGE, userManage: true },
-    { path: "/user-groups", title: "nav.userGroups", icon: "UserFilled", roles: ADMIN, superAdmin: true },
-  ] },
-  { group: "nav.groupOrg", icon: "OfficeBuilding", items: [
-    { path: "/factories", title: "nav.factories", icon: "OfficeBuilding", roles: ADMIN },
-    { path: "/departments", title: "nav.departments", icon: "School", roles: OPS },
-  ] },
-];
+const files = import.meta.glob<{ default: ModuleMenu }>("../modules/*/menu.ts", { eager: true });
+export const MENU = assembleMenu(Object.values(files).map((f) => f.default)) as MenuGroup[];
 
 const placeholder = () => import("@/views/Placeholder.vue");
 
-const views: Record<string, () => Promise<unknown>> = {
-  "/": () => import("@/views/Dashboard.vue"),
-  "/orders": () => import("@/views/Orders.vue"),
-  "/generate": () => import("@/views/Generate.vue"),
-  "/sn-import": () => import("@/views/SnImport.vue"),
-  "/allocate": () => import("@/views/Allocate.vue"),
-  "/rules": () => import("@/views/Rules.vue"),
-  "/transfer": () => import("@/views/Transfer.vue"),
-  "/query": () => import("@/views/Query.vue"),
-  "/audit": () => import("@/views/Audit.vue"),
-  "/users": () => import("@/views/Users.vue"),
-  "/user-groups": () => import("@/views/UserGroups.vue"),
-  "/factories": () => import("@/views/Factories.vue"),
-  "/departments": () => import("@/views/Departments.vue"),
-};
-
-const children = MENU.flatMap((g) => g.items.map((m) => ({ ...m, group: g.group }))).map((m) => ({
+const children = MENU.flatMap((g) => g.items.map((m: MenuItem) => ({ ...m, group: g.group }))).map((m) => ({
   path: m.path === "/" ? "" : m.path.slice(1),
-  component: views[m.path] ?? placeholder,
-  meta: { roles: m.roles, title: m.title, group: m.group, superAdmin: !!m.superAdmin, userManage: !!m.userManage, soon: !!m.soon },
+  component: m.view ?? placeholder,
+  meta: { roles: m.roles, title: m.title, group: m.group, superAdmin: !!m.superAdmin, userManage: !!m.userManage, soon: !!m.soon, module: m.module },
 }));
 
 const router = createRouter({
@@ -96,14 +46,16 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const store = useAuthStore();
   if (to.meta.public) return true;
   if (!store.token) return { name: "login", query: { redirect: to.fullPath } };
+  await store.ensureModules();
   const roles = to.meta.roles as string[] | undefined;
   if (roles && !roles.includes(store.role)) return { path: "/" };
   if (to.meta.superAdmin && !store.isSuperAdmin) return { path: "/" };
   if (to.meta.userManage && !store.canManageUsers) return { path: "/" };
+  if (!moduleEnabled(to.meta as { module?: string; soon?: boolean }, store.modules)) return { path: "/" };
   return true;
 });
 
