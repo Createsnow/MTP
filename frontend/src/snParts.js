@@ -11,22 +11,33 @@
  *   它之前的组件为前缀层（prefix，防重只看它），它与流水之间的固定字符为 inc_tail；值由后台按客户编码下的 PI
  *   依次取（已用最大值 + 1，只预显示，生成时才占用），前缀 + 自增值为本 PI 独占的号段，流水从 1 开始。
  *   不带识别码时请求体与原来相同（没有 inc_* 字段）。
+ * - ATTACH 附件项次（前连接符 head、后连接符 tail，默认都是 -，都可以不填）：最多一个，只能在流水之前（前缀与流水之间；
+ *   带识别码时在识别码之后）；生成时取物料行的附件项次原样写入（不补 0：1 就是 1，10 就是 10）。它之前的组件为前缀
+ *   （带识别码时为识别码的固定字符），head 为 attach_head，tail + 它与流水之间的固定字符为 attach_tail；同一前缀下锁定。
+ *   后连接符不填（或以数字、小数点开头）时项次与流水分不开，可能重号（attachWarn，页面提示，不拦）；前连接符不影响。
+ *   不带时请求体与原来相同（没有 with_attach / attach_head / attach_tail 字段）。
  *
  * 按位置换算（后台编码：前缀 + 流水 + 米数前分隔符 + 米数 + 米数后分隔符 + 单位 + 后缀）：
  * 流水之前 → prefix；流水与米数之间 → sep_before；米数与单位之间 → sep_after；最后一个米数 / 单位 / 流水之后 → suffix。
  * 所以米数、单位须在流水之后、单位在米数之后；不带米数时流水与单位之间不能有组件。
  *
  * @typedef {{ id: number, kind: string, text?: string, cut?: "ALL"|"LAST"|"FIRST", n?: number, fmt?: string,
- *   date?: string, base?: number, len?: number, start?: number|null, grow?: boolean, pad?: number, end?: number }} Part
+ *   date?: string, base?: number, len?: number, start?: number|null, grow?: boolean, pad?: number, end?: number,
+ *   sep?: string }} Part
  * @typedef {{ pi?: string, billNo?: string, incText?: string }} PartCtx
  * @typedef {{ prefix: string, base: number, seq_len: number, with_length: boolean, length_pad: number,
  *   sep_before: string, sep_after: string, with_unit: boolean, suffix: string, seq_start: number|null,
- *   seq_grow: boolean, inc_start?: number, inc_end?: number, inc_tail?: string }} CustomSpec
+ *   seq_grow: boolean, inc_start?: number, inc_end?: number, inc_tail?: string, with_attach?: boolean,
+ *   attach_head?: string, attach_tail?: string }} CustomSpec
  */
 
-export const KINDS = ["TEXT", "SEP", "PI", "BILL", "DATE", "INC", "SEQ", "LEN", "UNIT"];
+export const KINDS = ["TEXT", "SEP", "PI", "BILL", "DATE", "INC", "ATTACH", "SEQ", "LEN", "UNIT"];
 /** 只能有一个的组件 */
-export const SINGLE = ["SEQ", "LEN", "UNIT", "INC"];
+export const SINGLE = ["SEQ", "LEN", "UNIT", "INC", "ATTACH"];
+/** 附件项次前、后连接符的默认值；后连接符第一个字符是这些字符（或不填）时可能重号（项次只有数字和小数点，后台
+ *  encoding._ATTACH_CHARS） */
+export const ATTACH_SEP_DEFAULT = "-";
+const ATTACH_CHARS = "0123456789.";
 /** 识别码的结束值上限（最多 3 位，后台 rules.INC_MAX） */
 export const INC_MAX = 999;
 /** 分隔符选项（不含空格：前缀、后缀首尾的空格后台会去掉） */
@@ -101,6 +112,7 @@ export function newPart(kind, today = "") {
     case "LEN": return withId({ kind, pad: 0 });
     case "UNIT": return withId({ kind });
     case "INC": return withId({ kind, start: 0, end: 9 });
+    case "ATTACH": return withId({ kind, head: ATTACH_SEP_DEFAULT, tail: ATTACH_SEP_DEFAULT });
     default: throw new Error(`unknown part ${kind}`);
   }
 }
@@ -153,6 +165,17 @@ export function defaultParts() {
   return [newPart("BILL"), newPart("SEQ")];
 }
 
+/** 附件项次组件的文本：前连接符 + 附件项次原样（不补 0）+ 后连接符。 */
+export function attachText(p, attach) {
+  return (p?.head ?? "").trim() + String(attach ?? "").trim() + (p?.tail ?? "").trim();
+}
+
+/** 后连接符不填（或以数字、小数点开头）：项次长短不同时与流水分不开，可能重号（只提示，不拦）。spec 为 toSpec 的结果。 */
+export function attachWarn(spec) {
+  const t = spec?.attach_tail ?? "";
+  return !!spec?.with_attach && (!t || ATTACH_CHARS.includes(t[0]));
+}
+
 /** 识别码的位数（结束值的位数）。 */
 export const incWidth = (p) => String(Math.max(Number(p?.end) || 0, 0)).length;
 /** 自增值文本：左侧补 0 到结束值的位数。 */
@@ -193,7 +216,9 @@ export function fromSpec(spec, head) {
   });
   // 识别码：前缀层（head）之后、流水之前，后面接它与流水之间的固定字符
   const inc = s.inc_end != null ? [withId({ kind: "INC", start: Number(s.inc_start) || 0, end: Number(s.inc_end) }), ...textParts(s.inc_tail)] : [];
-  const out = [...head, ...inc, seq];
+  // 附件项次：前缀（及识别码）之后、流水之前，后面接它与流水之间的固定字符
+  const att = s.with_attach ? [withId({ kind: "ATTACH", head: s.attach_head ?? "", tail: s.attach_tail ?? "" })] : [];
+  const out = [...head, ...inc, ...att, seq];
   if (s.with_length) {
     out.push(...textParts(s.sep_before), withId({ kind: "LEN", pad: Number(s.length_pad) || 0 }), ...textParts(s.sep_after));
   }
@@ -219,7 +244,7 @@ export function toSpec(parts, ctx = {}) {
   const before = iSeq >= 0 ? parts.slice(0, iSeq) : parts;
   const after = iSeq >= 0 ? parts.slice(iSeq + 1) : [];
   if (iSeq >= 0 && before.some((p) => p.kind === "LEN" || p.kind === "UNIT")) errors.push({ code: "AFTER_SEQ" });
-  // 识别码：只能在流水之前；之前的为前缀层（防重），之后到流水为 inc_tail
+  // 识别码：只能在流水之前；之前的为前缀层（防重），之后到流水（或附件项次）为 inc_tail
   const iInc = before.findIndex((p) => p.kind === "INC");
   const incPart = iInc >= 0 ? before[iInc] : null;
   if (after.some((p) => p.kind === "INC")) errors.push({ code: "INC_AFTER_SEQ" });
@@ -227,8 +252,21 @@ export function toSpec(parts, ctx = {}) {
     const st = Number(incPart.start), en = Number(incPart.end);
     if (!Number.isInteger(st) || !Number.isInteger(en) || st < 0 || en > INC_MAX || st > en) errors.push({ code: "INC_RANGE", max: INC_MAX });
   }
-  const head = incPart ? before.slice(0, iInc) : before;
-  const incTail = incPart ? join(before.slice(iInc + 1)).trim() : "";
+  // 附件项次：只能在流水之前（前缀与流水之间），带识别码时在识别码之后；之后到流水为 attach_tail
+  const iAtt = before.findIndex((p) => p.kind === "ATTACH");
+  const attPart = iAtt >= 0 ? before[iAtt] : null;
+  if (after.some((p) => p.kind === "ATTACH")) errors.push({ code: "ATTACH_AFTER_SEQ" });
+  if (attPart && incPart && iAtt < iInc) errors.push({ code: "ATTACH_BEFORE_INC" });
+
+  const attOk = attPart && !(incPart && iAtt < iInc);
+  const headEnd = incPart ? iInc : attOk ? iAtt : before.length;
+  const head = before.slice(0, headEnd);
+  const incTail = incPart ? join(before.slice(iInc + 1, attOk ? iAtt : before.length)).trim() : "";
+  // 连接符 + 它与流水之间的固定字符：必填，第一个字符不能是数字或小数点，不超过 SEP_MAX 位
+  // 前连接符；后连接符 + 它与流水之间的固定字符（都可为空，后连接符为空时可能重号，见 attachWarn）
+  const attachHead = attOk ? (attPart.head ?? "").trim() : "";
+  const attachTail = attOk ? ((attPart.tail ?? "") + join(before.slice(iAtt + 1))).trim() : "";
+  if (attachHead.length > SEP_MAX || attachTail.length > SEP_MAX) errors.push({ code: "SEP_TOO_LONG", max: SEP_MAX });
   const iLen = after.findIndex((p) => p.kind === "LEN");
   const iUnit = after.findIndex((p) => p.kind === "UNIT");
   let sepBefore = "";
@@ -271,6 +309,7 @@ export function toSpec(parts, ctx = {}) {
     seq_grow: seq.grow !== false,
   };
   if (incPart) Object.assign(spec, { inc_start: Number(incPart.start) || 0, inc_end: Number(incPart.end), inc_tail: incTail });
+  if (attPart) Object.assign(spec, { with_attach: true, attach_head: attachHead, attach_tail: attachTail });
   return { spec, errors };
 }
 
@@ -305,10 +344,12 @@ export function newErrors(parts, cand, ctx = {}) {
 }
 
 /** 「+ 组件」（不指定位置）时的位置：流水放在米数 / 单位之前，米数放在单位之前，单位不带米数时放最后、放不下则紧跟流水，
- *  识别码紧挨流水之前（前缀之后），其余放最后。 */
+ *  附件项次紧挨流水之前，识别码紧挨流水之前（已有附件项次时在它之前），其余放最后。 */
 export function autoIndex(parts, kind, ctx = {}) {
   const end = parts.length;
-  if (kind === "INC") {
+  if (kind === "INC" || kind === "ATTACH") {
+    const a = kind === "INC" ? parts.findIndex((p) => p.kind === "ATTACH") : -1;
+    if (a >= 0) return a;
     const s = parts.findIndex((p) => p.kind === "SEQ");
     return s >= 0 ? s : end;
   }
@@ -360,12 +401,14 @@ export function partsSig(parts) {
 }
 
 /**
- * 示例号分段（按组件着色）：seqText 为流水文本，length / unit 为示例米数（已补 0）/ 单位。
- * cls：SEQ 为流水，LINE 为米数 / 单位，INC 为识别码，其余为空。拼起来与 sn 不一致时返回 null（调用方原样显示 sn）。
+ * 示例号分段（按组件着色）：seqText 为流水文本，length / unit 为示例米数（已补 0）/ 单位，attach 为示例附件项次（原样，
+ * 附件项次组件的文本另带它的连接符）。
+ * cls：SEQ 为流水，LINE 为附件项次 / 米数 / 单位，INC 为识别码，其余为空。拼起来与 sn 不一致时返回 null（调用方原样显示 sn）。
  */
-export function sampleSegments(parts, ctx, sn, seqText, length, unit) {
+export function sampleSegments(parts, ctx, sn, seqText, length, unit, attach = "") {
   const segs = parts.map((p) => {
     if (p.kind === "SEQ") return { text: seqText, cls: "SEQ" };
+    if (p.kind === "ATTACH") return { text: attachText(p, attach), cls: "LINE" };
     if (p.kind === "LEN") return { text: length, cls: "LINE" };
     if (p.kind === "UNIT") return { text: unit, cls: "LINE" };
     if (p.kind === "INC") return { text: partValue(p, ctx) ?? "", cls: "INC" };

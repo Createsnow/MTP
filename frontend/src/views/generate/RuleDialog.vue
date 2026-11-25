@@ -114,6 +114,7 @@
               :title="addBlock[k] ? reasonText(addBlock[k]) : undefined" @click="addPart(k)">
               <span>＋ {{ t(`generate.rule.part.${k}`) }}</span>
               <small v-if="addBlock[k] === 'TAKEN'">{{ t("generate.rule.taken") }}</small>
+              <small v-else-if="k === 'ATTACH'">{{ t("generate.rule.toBeforeSeq") }}</small>
               <small v-else-if="g.key === 'LINE'">{{ t("generate.rule.toSuf") }}</small>
             </button>
           </template>
@@ -140,6 +141,9 @@
               <span class="no">{{ i + 1 }}</span>
               <span class="kt" :class="`c-${chipType(p.kind)}`">{{ t(`generate.rule.part.${p.kind}`) }}
                 <el-tooltip v-if="p.kind === 'INC'" placement="top" :content="t('generate.rule.incTip')">
+                  <el-icon class="q"><QuestionFilled /></el-icon>
+                </el-tooltip>
+                <el-tooltip v-if="p.kind === 'ATTACH'" placement="top" :content="t('generate.rule.attachTip')">
                   <el-icon class="q"><QuestionFilled /></el-icon>
                 </el-tooltip>
               </span>
@@ -229,6 +233,21 @@
                     </el-select>
                   </span>
                 </template>
+                <template v-else-if="p.kind === 'ATTACH'">
+                  <!-- 附件项次：取物料行的附件项次原样（不补 0），前、后连接符默认 -，都可以不填；后连接符不填（或以数字、
+                       小数点开头）时提示可能重号（不拦）。前缀已归属本 PI 时按它锁定的连接符，置灰 -->
+                  <span class="fi" :title="attachLockTitle">
+                    {{ t("generate.rule.attachHead") }}
+                    <el-input v-model="p.head" :maxlength="SEP_MAX" size="small" class="w80 mono-in" :disabled="!!locked"
+                      :placeholder="t('common.optional')" />
+                  </span>
+                  <span class="fi" :title="attachLockTitle">
+                    {{ t("generate.rule.attachTail") }}
+                    <el-input v-model="p.tail" :maxlength="SEP_MAX" size="small" class="w80 mono-in" :disabled="!!locked"
+                      :placeholder="t('common.optional')" />
+                  </span>
+                  <span v-if="attachDup" class="fi seq-short">{{ t("generate.rule.attachNoSep") }}</span>
+                </template>
                 <template v-else-if="p.kind === 'LEN'">
                   <span class="fi">
                     {{ t("generate.rule.lengthPad") }}
@@ -277,7 +296,8 @@ import { useTime } from "@/composables/useTime";
 import { translateApiError } from "@/i18n";
 import {
   CUTS, DATE_FMTS, INC_MAX, PAD_MAX, PREFIX_MAX, SEP_MAX, SEPS, SEQ_LEN_MAX, TEMPLATES, TEXT_MAX,
-  SEQ_LEN_DEFAULT, addIndex, blockReason, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue, partsSig, sampleSegments,
+  SEQ_LEN_DEFAULT, addIndex, attachText, attachWarn, blockReason, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue,
+  partsSig, sampleSegments,
   seqLenFor, seqNeed, seqText as seqTextOf, textPart, todayIn, toSpec,
 } from "@/snParts.js";
 import type { CustomRule, OrderLine } from "@/types/api";
@@ -289,7 +309,7 @@ type RulePrefix = { prefix: string; custom: CustomRule | null; seq_grow?: boolea
 /** SN 组成的一个组件（见 snParts.js） */
 type Part = {
   id: number; kind: string; text?: string; cut?: string; n?: number; fmt?: string; date?: string;
-  base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number;
+  base?: number; len?: number; start?: number | null; grow?: boolean; pad?: number; end?: number; head?: string; tail?: string;
 };
 /** 识别码的预显示（/rules/preview 的 inc，见 rules.preview）：本 PI 将取的值、号段前缀；取不到值时 error 为原因；
  *  current 为已生效的适用客户（前缀还没有规则时为 null），free 为已释放、可以改选的号段 */
@@ -299,8 +319,9 @@ type IncPreview = {
 };
 type Seg = { text: string; cls: string };
 type Sample = { sn: string; segs: Seg[] | null };
-/** 三段：前缀（流水之前）/ 流水 / 后缀（流水之后，含米数、单位） */
-type SecKey = "PRE" | "SEQ" | "SUF";
+/** 分段：前缀（流水之前；带附件项次时为附件项次之前）/ 附件项次（附件项次及它与流水之间的固定字符，有附件项次时才有）/
+ *  流水 / 后缀（流水之后，含米数、单位） */
+type SecKey = "PRE" | "ATT" | "SEQ" | "SUF";
 /** prefixLocked：本 PI 已占用的前缀 → 锁定的格式（ctx.prefix_locked，见 rules.pi_prefix_locked；号全部删掉后仍锁定）；
  *  nextSeq：本 PI 接续的下一个号（ctx.counter.next_seq），已用前缀时起始号的下限；
  *  piQuota：本 PI 全部物料行还可生成的数量之和（各行订单数量 − 本单已生成），按它定流水位数的默认值 */
@@ -333,7 +354,7 @@ const GROUPS = [
   { key: "FIX", kinds: ["TEXT", "SEP"] },
   { key: "DOC", kinds: ["PI", "BILL", "DATE"] },
   { key: "AUTO", kinds: ["INC"] },
-  { key: "LINE", kinds: ["LEN", "UNIT"] },
+  { key: "LINE", kinds: ["ATTACH", "LEN", "UNIT"] },
 ];
 const LEGEND = ["FIX", "INC", "SEQ", "LINE"];
 
@@ -396,7 +417,7 @@ const partCtx = computed(() => ({
 const built = computed(() => toSpec(parts.value, partCtx.value));
 const errorText = computed(() => {
   const e = built.value.errors[0];
-  return e ? t(`generate.rule.err.${e.code}`, e) : "";
+  return e ? t(`generate.rule.err.${e.code}`, e) : attachLockError.value;
 });
 const today = () => todayIn(offset.value);
 const tplOn = computed(() => {
@@ -425,20 +446,27 @@ function chipValue(p: Part) {
     return seqText(Number.isSafeInteger(st) && st > startMin.value ? st : startMin.value, Number(p.base) || 10, Number(p.len) || 4, !!p.grow);
   }
   if (p.kind === "LEN") return p.pad ? (l?.length ?? "").padStart(p.pad, "0") : l?.length ?? "";
+  if (p.kind === "ATTACH") return attachText(p, l?.attach_no);
   return l?.unit ?? "";
 }
 const chipType = (k: string) =>
-  k === "SEQ" ? "SEQ" : k === "LEN" || k === "UNIT" ? "LINE" : k === "SEP" ? "SEP" : k === "INC" ? "INC" : "FIX";
+  k === "SEQ" ? "SEQ" : k === "ATTACH" || k === "LEN" || k === "UNIT" ? "LINE" : k === "SEP" ? "SEP" : k === "INC" ? "INC" : "FIX";
 
 /** 流水的位置；没有流水时（不应出现）全部算前缀 */
 const seqAt = computed(() => {
   const i = parts.value.findIndex((p) => p.kind === "SEQ");
   return i < 0 ? parts.value.length : i;
 });
-const secOf = (i: number): SecKey => (i < seqAt.value ? "PRE" : i === seqAt.value ? "SEQ" : "SUF");
-/** 组件清单的三段（i 为在整条组成里的下标，序号 = i + 1） */
+/** 附件项次的位置（在流水之前才算；没有为 -1）：它和它与流水之间的固定字符单独成段，不算前缀 */
+const attAt = computed(() => {
+  const i = parts.value.findIndex((p) => p.kind === "ATTACH");
+  return i >= 0 && i < seqAt.value ? i : -1;
+});
+const secOf = (i: number): SecKey =>
+  i < seqAt.value ? (attAt.value >= 0 && i >= attAt.value ? "ATT" : "PRE") : i === seqAt.value ? "SEQ" : "SUF";
+/** 组件清单的分段（i 为在整条组成里的下标，序号 = i + 1）；没有附件项次时没有 ATT 段 */
 const sections = computed(() =>
-  (["PRE", "SEQ", "SUF"] as SecKey[]).map((key) => {
+  (["PRE", "ATT", "SEQ", "SUF"] as SecKey[]).filter((k) => k !== "ATT" || attAt.value >= 0).map((key) => {
     const rows = parts.value.map((p, i) => ({ p, i })).filter((r) => secOf(r.i) === key);
     return { key, rows, text: rows.map((r) => chipValue(r.p)).join("") };
   }),
@@ -479,7 +507,10 @@ function applyTpl(k: keyof typeof TEMPLATES) {
 }
 function addPart(kind: string) {
   if (addBlock.value[kind]) return;
-  setParts(insertAt(parts.value, addIndex(parts.value, kind, target.value, partCtx.value), newPart(kind, today())));
+  const p: Part = newPart(kind, today());
+  // 附件项次：连接符默认 -（前缀已归属本 PI、带附件项次时按它锁定的连接符）
+  if (kind === "ATTACH" && locked.value?.with_attach) Object.assign(p, { head: locked.value.attach_head ?? "", tail: locked.value.attach_tail ?? "" });
+  setParts(insertAt(parts.value, addIndex(parts.value, kind, target.value, partCtx.value), p));
 }
 /** 上移 / 下移第 i 个组件（d = -1 / 1）：越过流水即在前缀、后缀之间换段；放不下时按钮置灰 */
 const moveTarget = (i: number, d: number) => (d < 0 ? i - 1 : i + 2);
@@ -545,6 +576,19 @@ const lockTitle = computed(() =>
     )
     : undefined,
 );
+/** 后连接符不填（或以数字、小数点开头）：项次与流水分不开，可能重号（只提示，保存时再确认一次） */
+const attachDup = computed(() => attachWarn(built.value.spec));
+/** 前缀已归属本 PI 时附件项次段锁定（带不带、连接符与它相同）：不同时的提示，并且不能保存 */
+const attachLockTitle = computed(() => (locked.value ? attachLockError.value || undefined : undefined));
+const attachLockError = computed(() => {
+  const lk = locked.value;
+  if (!lk) return "";
+  const s = built.value.spec;
+  const w = !!s.with_attach, lw = !!lk.with_attach;
+  if (w === lw && (!w || ((s.attach_head || "") === (lk.attach_head || "") && (s.attach_tail || "") === (lk.attach_tail || "")))) return "";
+  const used = lw ? t("generate.rule.attachUsed", { head: lk.attach_head || "", tail: lk.attach_tail || "" }) : t("generate.rule.attachNone");
+  return translateApiError({ code: "RULE_PREFIX_ATTACH_LOCKED", params: { prefix: s.prefix, used } }, "");
+});
 /** 本 PI 已用这个前缀（同格式沿用那一版、流水接续）：起始号下限为接续的下一个号，可改大往后跳。 */
 const prefixUsed = computed(() => !!props.rulePrefix?.custom && built.value.spec.prefix === props.rulePrefix.prefix);
 /** 前缀已登记（本 PI 登记的前缀）：自动突破按前缀统一设置，在规则库改 */
@@ -559,10 +603,12 @@ const seqStart = () => {
 const anyGenerated = computed(() => props.lines.some((l) => l.generated_qty > 0));
 /** 编码格式的比较项（流水上限自动突破按前缀，起始号只管下一次生成，都不算） */
 const CFG_KEYS = ["prefix", "base", "seq_len", "with_length", "length_pad", "sep_before", "sep_after", "with_unit", "suffix",
-  "inc_start", "inc_end", "inc_tail", "inc_customers", "inc_pick"] as const;
+  "inc_start", "inc_end", "inc_tail", "inc_customers", "inc_pick", "with_attach", "attach_head", "attach_tail"] as const;
 const cfgOf = (c: any) => CFG_KEYS.map((k) => {
   const v = c?.[k];
   if (k === "with_length" || k === "with_unit") return !!v;
+  if (k === "with_attach") return !!v;
+  if (k === "attach_head" || k === "attach_tail") return c?.with_attach ? v || "" : "";
   if (k === "length_pad") return c?.with_length ? Number(v) || 0 : 0;
   if ((k === "sep_before" || k === "sep_after")) return c?.with_length ? v || "" : "";
   if (k === "inc_start" || k === "inc_end" || k === "inc_pick") return v == null ? null : Number(v);
@@ -598,7 +644,7 @@ const codeError = computed(() =>
 const canSave = computed(() => {
   if (!props.lines.length || mode.value !== "CUSTOM") return false;
   if (unchanged.value) return !fromRule.value.inc_error;
-  return !built.value.errors.length && !!built.value.spec.prefix && !sample.error && !codeError.value;
+  return !built.value.errors.length && !!built.value.spec.prefix && !sample.error && !codeError.value && !attachLockError.value;
 });
 
 /** 打开即在自定义页签：前缀为默认前缀；其他组件按本 PI 已用这个前缀的格式（保存时沿用那一版），
@@ -691,6 +737,12 @@ watch(
     if (!lk || !p) return;
     if (p.base !== lk.base) p.base = lk.base;
     if (p.len !== lk.seq_len) p.len = lk.seq_len;
+    // 附件项次的连接符同样锁定（组成里有附件项次组件时改为锁定的连接符；带不带不自动改，不一致时提示）
+    const a = parts.value.find((x) => x.kind === "ATTACH");
+    if (a && lk.with_attach) {
+      if (a.head !== (lk.attach_head ?? "")) a.head = lk.attach_head ?? "";
+      if (a.tail !== (lk.attach_tail ?? "")) a.tail = lk.attach_tail ?? "";
+    }
   },
 );
 /** 位数不够装下本 PI 还要的流水（不含余量）：提示改大位数或换进制 */
@@ -702,13 +754,15 @@ async function previewCustom() {
   sample.brk = null;
   sample.error = "";
   const { spec, errors } = built.value;
-  if (errors.length || !spec.prefix) return;
+  if (errors.length || !spec.prefix || attachLockError.value) return;
   try {
     const l = props.lines[0];
     // 后台返回从起始号起的前 5 个号与最大号：取第一个为最小、最后一个为最大
     const r = await api.previewRule({
       // 示例从实际的第一个号起：填了起始号按它，已用前缀没填按接续的下一个号
       ...spec, seq_start: seqStart() ?? (startMin.value > 1 ? startMin.value : undefined), length: l?.length || undefined, unit: l?.unit || undefined,
+      // 附件项次：示例按第一个物料行的（比位数长时后台用示例值 1）
+      attach: l?.attach_no || undefined,
       // 带识别码：按本 PI 将取的值出示例（后台按客户编码下的 PI 取，只预显示）
       ...(spec.inc_end != null ? { pi_no: props.pi, inc_customers: incCustomers.value, inc_pick: incPick.value } : {}),
     });
@@ -716,8 +770,9 @@ async function previewCustom() {
     if (r.inc?.error) sample.error = incErrorText(r.inc.error);
     const list: any[] = r.samples ?? [];
     const len = spec.length_pad ? String(r.sample_length ?? "").padStart(spec.length_pad, "0") : String(r.sample_length ?? "");
+    const att = r.sample_attach != null ? String(r.sample_attach) : "";
     const toSample = (x: any): Sample | null =>
-      x ? { sn: x.sn, segs: sampleSegments(parts.value, partCtx.value, x.sn, x.seq_text, len, r.sample_unit ?? "") } : null;
+      x ? { sn: x.sn, segs: sampleSegments(parts.value, partCtx.value, x.sn, x.seq_text, len, r.sample_unit ?? "", att) } : null;
     sample.min = toSample(list[0]);
     // 上限自动突破：后台在规则位数的最大号之后另带突破后的第一个号（最大流水 + 1）
     const top = Number(r.max_seq);
@@ -759,9 +814,20 @@ async function confirmCustRemoval() {
     return false;
   }
 }
+/** 后连接符不填时保存前再提示一次可能重号（用户确认后照常保存） */
+async function confirmAttachDup() {
+  if (unchanged.value || !attachDup.value) return true;
+  try {
+    await ElMessageBox.confirm(t("generate.rule.attachNoSepConfirm"), t("generate.rule.dialogTitle"), { type: "warning" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 async function save() {
   if (!(await confirmChange())) return;
   if (!(await confirmCustRemoval())) return;
+  if (!(await confirmAttachDup())) return;
   busy.value = "save";
   try {
     const body: Record<string, unknown> = { pi_no: props.pi, lines: refs(), ...(props.slot === 2 ? { slot: 2 } : {}) };
@@ -770,7 +836,7 @@ async function save() {
       body.rule_id = fromRule.value.rule_id;
     } else {
       // 请求体：prefix、base、seq_len、with_length、length_pad、sep_before、sep_after、with_unit、suffix、seq_start，
-      // 另带 seq_grow（上限自动突破，后台不传按关闭）
+      // 另带 seq_grow（上限自动突破，后台不传按关闭）；带附件项次时另带 with_attach、attach_head、attach_tail
       // rule_code：新前缀时带上（生成成功后按它存入规则库；留空后台按时间哈希）
       body.custom = { ...fullSpec.value, seq_start: seqStart(), ...(outcome.value?.kind === "NEW" && ruleCode.value ? { rule_code: ruleCode.value } : {}) };
     }
@@ -790,6 +856,7 @@ async function save() {
 .mb { margin-bottom: 12px; }
 .outcome { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .mt { margin-top: 12px; }
+.w80 { width: 80px; }
 .w100 { width: 100px; }
 .w140 { width: 140px; }
 .tip { margin-left: -6px; color: var(--el-text-color-secondary); cursor: help; }
@@ -838,6 +905,8 @@ async function save() {
 .grp.g-SEQ .br { border-color: var(--el-color-primary); }
 .grp.g-SEQ .gt { color: var(--el-color-primary); }
 .grp.g-SUF .br { border-style: dashed; }
+.grp.g-ATT .br { border-color: var(--el-color-warning); }
+.grp.g-ATT .gt { color: var(--el-color-warning-dark-2); }
 .bs { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .bs .n { font-size: 10px; line-height: 1; color: var(--el-text-color-regular); }
 .bs .v { font-size: 22px; line-height: 1.3; padding: 0 2px; border-radius: 3px; border-bottom: 3px solid transparent; white-space: nowrap; }
@@ -876,6 +945,8 @@ async function save() {
 .sh .cnt.bad { color: var(--el-color-danger); }
 .sh.sh-SEQ { background: var(--el-color-primary-light-9); }
 .sh.sh-SEQ b { color: var(--el-color-primary); }
+.sh.sh-ATT { background: var(--el-color-warning-light-9); }
+.sh.sh-ATT b { color: var(--el-color-warning-dark-2); }
 .empty-row { padding: 8px 12px 8px 50px; font-size: 12px; color: var(--el-text-color-regular); border-bottom: 1px solid var(--el-border-color-lighter); }
 .row { min-height: 44px; padding-top: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--el-border-color-lighter); }
 .list > :last-child { border-bottom: none; }

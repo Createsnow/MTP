@@ -1,7 +1,8 @@
 """SN 查询与导出（F-18）。只读；按账户可看范围过滤；按条件分页读取，不把全部号装入内存。
 
-SN 明细：按生产组织、客户、PI、单据编号、物料、米数、状态、完整 SN 精确筛选，另可按流水范围查
-（须填 PI；起止可填流水号或完整 SN，两端都含；只查本 PI 自己生成的流水；附小计）。
+SN 明细：PI、单据编号按部分字符查（包含所输字符即可，区分大小写，见 _contains）；生产组织、客户、物料、米数、状态、
+完整 SN 精确筛选；另可按流水范围查（须填 PI，此时 PI 按完整 PI 精确匹配；起止可填流水号或完整 SN，两端都含；
+只查本 PI 自己生成的流水；附小计）。普通操作员「同一 PI 各组织」只读查看时 PI 也按完整 PI 精确匹配（只放开这一张 PI）。
 页面只列号本身的信息（流水、PI、单据、物料、米数、客户、生产组织、状态、生成 / 分配时间），
 不列交付方式、交付批次、推送类型等交付业务信息（交付批次在「交付批次」页签看；导出列同 SN 导出，不变）。
 生产组织：已分配的号取号上的组织；待分配的号还没有（号上为空），取所在单据的组织（已出号单据台账），
@@ -25,6 +26,10 @@ from app.db.session import db, marks
 from app.services import factories, files, rules, sn_import, sn_sheet
 
 COUNT_CAP = 100_000
+
+#: PI、单据编号部分字符查询：先从单据汇总取出包含所输字符的 PI / 单据编号，不超过这么多个时按索引查号池；
+#: 超过时（如只输了一两个字符、命中很多单据）直接对号池按 LIKE 查（与不填条件时一样要扫整个号池）
+MATCH_CAP = 1000
 
 _ATTACH = "TRIM(i.attach_no)"
 #: 列表按附件项次从小到大（SQL 里排好再分页）：与生成排号同一比较（generate.attach_order）——按数字比
@@ -123,6 +128,28 @@ def seq_range(f: Filter) -> tuple[str, int | None, int | None] | None:
     return pi, lo, hi
 
 
+def _contains(col: str, key: str, text: str) -> tuple[str, list]:
+    """PI / 单据编号部分字符查询：号池里 col 包含 text（区分大小写，与 SN 分配页左侧单据列表的搜索同一口径）。
+
+    号池按 PI、单据编号有索引，但「包含」用不上索引；先在单据汇总（sn_bill_stat，每个 PI + 单据 + 组织一行，
+    比号池小几百倍）及其待重算标记（sn_bill_stat_dirty）里找出包含 text 的值——两张表合起来覆盖号池里全部
+    （PI，单据），见 bill_stats 的不变式——再按索引 IN 查号池。命中超过 MATCH_CAP 个时直接对号池 LIKE。
+    完整输入时命中的就是原来精确匹配的那些号（另加编号里包含它的其他 PI / 单据）。key 为两张汇总表里的同名列。"""
+    like = util.like_any(text)
+    vals = db.column(
+        f"SELECT {key} FROM sn_bill_stat WHERE {key} LIKE %s "
+        f"UNION SELECT {key} FROM sn_bill_stat_dirty WHERE {key} LIKE %s LIMIT %s",
+        like,
+        like,
+        MATCH_CAP + 1,
+    )
+    if len(vals) > MATCH_CAP:
+        return f" AND {col} LIKE %s", [like]
+    if not vals:
+        return " AND 1=0", []
+    return f" AND {col} IN ({marks(len(vals))})", list(vals)
+
+
 def _where(cu: CurrentUser, f: Filter) -> tuple[str, list, tuple | None]:
     sql = " WHERE 1=1"
     args: list = []
@@ -137,14 +164,25 @@ def _where(cu: CurrentUser, f: Filter) -> tuple[str, list, tuple | None]:
         args += fargs
     for col, v in (
         ("i.customer_code", f.customer_code),
-        # 流水范围按流水归属 PI 查（含已改 PI 转走的号），不再按当前 PI 过滤
-        ("i.pi_no", None if f.has_range else f.pi_no),
-        ("i.bill_no", f.bill_no),
         ("i.length_text", f.length),
     ):
         if not util.blank(v):
             sql += f" AND {col} = %s"
             args.append(v.strip())
+    # 流水范围按流水归属 PI 查（含已改 PI 转走的号），不再按当前 PI 过滤
+    if not f.has_range and not util.blank(f.pi_no):
+        if sc.all_factories_of_pi:
+            # 同一 PI 各组织只读查看：read_scope 只核对了这一张 PI，须精确匹配，不能用部分字符带出别的 PI
+            sql += " AND i.pi_no = %s"
+            args.append(f.pi_no.strip())
+        else:
+            s_, a_ = _contains("i.pi_no", "pi_no", f.pi_no.strip())
+            sql += s_
+            args += a_
+    if not util.blank(f.bill_no):
+        s_, a_ = _contains("i.bill_no", "bill_no", f.bill_no.strip())
+        sql += s_
+        args += a_
     if not util.blank(f.sn):
         # 完整 SN：第一 SN，或双 SN 的第二 SN
         sql += " AND (i.sn = %s OR i.id = (SELECT s2.item_id FROM sn_item_sub s2 WHERE s2.sn2 = %s))"
@@ -223,7 +261,7 @@ def _view(r: dict, bills: BillInfo, s) -> dict:
         "sn2": r.get("sn2") or "",
         "seq_len": None if s is None else s.seq_len,
         "base": None if s is None else s.base,
-        "unit": (None if s is None else codec.unit_of(r["sn"], s, r["length_text"])) or "",
+        "unit": (None if s is None else codec.unit_of(r["sn"], s, r["length_text"], r.get("attach_no"))) or "",
         "seq_text": rules.seq_text(r["rule_version_id"], r["seq_dec"]),
         "seq_dec": util.seq_dec_text(r["seq_pi_no"], r["seq_dec"]),
         "seq_pi_no": r["seq_pi_no"],

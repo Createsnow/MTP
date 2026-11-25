@@ -121,11 +121,16 @@ class ErrorCode(Enum):
     RULE_CHARSET_LENGTH = (400, "字符表的字符数必须等于进制")
     RULE_CHARSET_INVALID = (400, "字符表不能含空格")
     RULE_CHARSET_DUPLICATE = (400, "字符表不能有重复字符")
-    RULE_SN_TOO_LONG = (400, "前缀 + 流水 + 分隔符 + 米数 + 单位 + 后缀总长不能超过 64")
+    RULE_SN_TOO_LONG = (400, "前缀 + 附件项次 + 流水 + 分隔符 + 米数 + 单位 + 后缀总长不能超过 64")
     RULE_PREFIX_FORMAT_LOCKED = (
         409,
         "前缀 {prefix} 已按 {base} 进制、{seq_len} 位流水使用；同一前缀下进制、流水位数、字符表不能改，须换新前缀",
     )
+    RULE_PREFIX_ATTACH_LOCKED = (
+        409,
+        "前缀 {prefix} 已按「{used}」使用；同一前缀下带不带附件项次、附件项次的前后连接符不能改，须换新前缀",
+    )
+    RULE_ATTACH_SEP_INVALID = (400, "附件项次的前、后连接符各不超过 16 个字符")
     RULE_PREFIX_OVERLAP = (409, "前缀 {prefix} 与 PI {pi} 的前缀 {other} 一个是另一个的开头，可能编出相同的号，请更换")
     RULE_USED_FORMAT_LOCKED = (
         409,

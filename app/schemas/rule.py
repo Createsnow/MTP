@@ -14,6 +14,11 @@ class RuleSpecIn(In):
     sep_after: str | None = ""
     #: 带单位（物料行的产品单位）
     with_unit: bool | None = False
+    #: 带附件项次（前缀与流水之间，原样写入物料行的附件项次；不传 = 不带）
+    with_attach: bool | None = False
+    #: 附件项次的前连接符（前缀与附件项次之间）、后连接符（附件项次与流水之间），都可为空（页面默认 -）
+    attach_head: str | None = ""
+    attach_tail: str | None = ""
 
 
 class RuleIn(RuleSpecIn):
@@ -35,9 +40,10 @@ class RuleUpdateIn(RuleSpecIn):
 
 
 class RulePreviewIn(RuleSpecIn):
-    #: 示例米数（不填用 100）、示例单位（不填用 M）
+    #: 示例米数（不填用 100）、示例单位（不填用 M）、示例附件项次（不填或不是数字时用 1）
     length: str | None = None
     unit: str | None = None
+    attach: str | None = None
     #: 示例从这个流水（十进制）起（生成页自定义规则的起始号）；不填从 1 起
     seq_start: int | None = None
     #: 上限自动突破（生成页自定义规则的开关）：示例另带规则位数的最大号与突破后的第一个号；不传 = 关闭
@@ -70,6 +76,12 @@ class CustomRuleIn(In):
     sep_after: str | None = ""
     with_unit: bool | None = False
     suffix: str | None = None
+    #: 附件项次（前缀与流水之间；带识别码时在识别码及其固定字符之后）：生成时取物料行的附件项次原样写入（不补 0），
+    #: attach_head / attach_tail 为附件项次的前、后连接符（都可为空，页面默认 -；后连接符为空时可能撞号，页面提示）。
+    #: 不传 = 不带（与原来相同）。同一前缀下带不带附件项次、前后连接符锁定
+    with_attach: bool | None = None
+    attach_head: str | None = None
+    attach_tail: str | None = None
     #: 起始号（十进制流水，选填）：首次用这条自定义规则生成、从 PI 最大号之后编号时，第一个号不小于它；
     #: 不是格式的一部分（同格式不同起始号仍是同一条规则），本 PI 已用过这个前缀时流水接续、不起作用
     seq_start: int | None = None

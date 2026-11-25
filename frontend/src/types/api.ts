@@ -97,6 +97,10 @@ export interface LineRule {
   sep_after?: string;
   with_unit?: boolean;
   suffix: string;
+  /** 带附件项次、附件项次之后流水之前的连接符 */
+  with_attach?: boolean;
+  attach_head?: string;
+  attach_tail?: string;
 }
 
 /** 自定义规则：前缀 + 流水 + 米数前分隔符 + 米数（补 0）+ 米数后分隔符 + 单位 + 后缀 */
@@ -119,6 +123,12 @@ export interface CustomRule {
   inc_start?: number;
   inc_end?: number;
   inc_tail?: string;
+  /** 带附件项次（前缀与流水之间，原样写入物料行的附件项次）；不带时没有或为 false */
+  with_attach?: boolean;
+  /** 附件项次之后、流水之前的连接符（默认 -） */
+  /** 附件项次的前连接符（前缀与附件项次之间，可为空） */
+  attach_head?: string;
+  attach_tail?: string;
   inc_value?: number | null;
   /** 规则编码（选填）：前缀是新的、生成成功存入规则库时用它；不填按 8 位时间哈希，与已有编码相同时自动加 -v1、-v2… */
   rule_code?: string;

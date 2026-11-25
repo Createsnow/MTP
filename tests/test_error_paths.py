@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from conftest import BILLS, emp, m, ok, q, uid
+from conftest import BILLS, emp, m, mark_bill_stat, ok, q, uid
 
 
 def P() -> str:
@@ -95,6 +95,8 @@ def test_duplicate_full_sn_rolls_back_whole_generation(w, sql):
         first,
         pi1,
     )
+    # 直接改了号池（没走程序、没有标脏）：标为待重算，免得后台重算恰好先处理了 PI1 的标记时，收尾核对汇总不一致
+    mark_bill_stat(sql)
     r = w.api.post("/api/generate/run", m(token=pv["token"]), w.admin)
     assert r.code == "GEN_DUPLICATE_SN" and r.body["params"] == {"sn": first, "pi": pi1}
     assert sql.count("SELECT COUNT(*) FROM sn_item WHERE pi_no = %s", pi2) == 0, "整次回滚"

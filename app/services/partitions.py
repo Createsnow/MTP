@@ -22,7 +22,7 @@ from app.core import utils as util
 from app.core.config import settings
 from app.core.security import CurrentUser
 from app.db.session import db
-from app.services import audit
+from app.services import audit, locks
 
 log = structlog.get_logger()
 
@@ -63,8 +63,10 @@ def maintain(daily: bool = True) -> None:
 
     启动时与每天 SN_PARTITION_CRON 各调用一次；SN_MAINTAIN_ENABLED=false 的实例只在启动时建分区。
     """
+    # 锁名带库名：同一台 MySQL 上别的库（开发 / 测试 / 正式）同一时刻做维护时，本库不会被跳过（见 locks 文首）
+    lock = locks.lock_name("partition")
     with db.connection() as conn, conn.cursor() as c:
-        c.execute("SELECT GET_LOCK('sn_partition', 0) AS ok")
+        c.execute("SELECT GET_LOCK(%s, 0) AS ok", (lock,))
         if c.fetchone()["ok"] != 1:
             log.info("partition_maintain_skipped", reason="other instance holds lock")
             return
@@ -88,7 +90,7 @@ def maintain(daily: bool = True) -> None:
                 (DAILY_MARK, done, done),
             )
         finally:
-            c.execute("SELECT RELEASE_LOCK('sn_partition')")
+            c.execute("SELECT RELEASE_LOCK(%s)", (lock,))
 
 
 def _last_daily(c) -> int | None:

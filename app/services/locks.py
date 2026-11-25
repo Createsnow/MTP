@@ -1,5 +1,9 @@
 """跨实例互斥：MySQL 命名锁（GET_LOCK），每把锁占一条独立连接，持锁连接断开时服务端自动释放。
 
+命名锁在 MySQL 里是整台服务器共用的、不分库：同一台 MySQL 上的开发、测试、正式库（sn_dev / sn_test / sn_prod）
+如果锁名相同，一个环境在同步订单、生成某张 PI 时，别的环境也被挡住（页面显示「同步进行中」、PI 忙）。所以锁名都带上
+当前库名（lock_name），每个库各用各的锁；同一个库的多个进程、多个实例之间照常互斥。
+
 - PI 操作锁（5.2.9 第 1 条）：同一 PI 的生成（含取消）、撤销生成、分配、转单、转组织确认（含直接转移）
   同一时刻只执行一个，后到的立即提示稍后再试（不排队）。后台生成把锁交给后台线程，结束时释放。
 - 组织建批锁（F-12 取批规则第 6 条）：MES 取批时查未确认批次与建批在同一把锁内，并发取批不会各建一批。
@@ -20,9 +24,15 @@ from app.core.errors import ErrorCode, biz
 from app.db.session import db
 
 
+def lock_name(kind: str, key: str = "", database: str | None = None) -> str:
+    """命名锁的锁名：sn_<kind>_ + md5(库名 / 键)。带库名：同一台 MySQL 上不同的库互不影响（见文首）。
+    命名锁最长 64 字符：库名与键做摘要。database 不传为当前连接的库（db.target.database）。"""
+    name = database if database is not None else db.target.database
+    return f"sn_{kind}_" + hashlib.md5(f"{name}/{key}".encode()).hexdigest()
+
+
 def _name(kind: str, key: str) -> str:
-    # 命名锁最长 64 字符：键做摘要
-    return f"sn_{kind}_" + hashlib.md5(key.encode("utf-8")).hexdigest()
+    return lock_name(kind, key)
 
 
 class Held:

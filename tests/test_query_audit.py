@@ -266,3 +266,64 @@ def test_sn_list_sorted_by_pi_then_attach_no(w, api):
     assert [x["sn"] for x in one] == [x["sn"] for x in got if x["pi_no"] == pa], "按 PI 查同一顺序"
     rg = ok(api.get(f"/api/sn?pi={pa}&seq_from=1&seq_to=7&page_size=100", w.admin))["items"]
     assert [x["attach_no"] for x in rg] == ["1", "2", "2", "2", "10", "10", "20"], "流水范围也按附件项次"
+
+
+def _make_named(w, org, pi, bill, qty):
+    w.order(bill, org, "C1", pi, ("M1", qty))
+    ok(w.bind_pi(pi, w.rule(P())))
+    w.generate(pi)
+
+
+def test_pi_and_bill_partial_match(w, api, monkeypatch):
+    """SN 查询的 PI、单据编号按部分字符查（包含即可）；% _ 按原字符；命中多时改为直接 LIKE，结果相同。"""
+    from app.services import query
+
+    org = w.org(uid("O")[:10])
+    pi, bill = uid("PI"), uid("MO")
+    pi2, bill2 = pi + "X", bill + "X"  # 编号里包含前一张的 PI / 单据
+    _make_named(w, org, pi, bill, 2)
+    _make_named(w, org, pi2, bill2, 3)
+
+    def bills_of(qs):
+        r = ok(api.get("/api/sn?page_size=100&" + qs, w.admin))
+        return sorted({(x["pi_no"], x["bill_no"]) for x in r["items"]}), r["total"]
+
+    both = sorted([(pi, bill), (pi2, bill2)])
+    for cap in (query.MATCH_CAP, 0):  # 0：命中数超上限，直接对号池 LIKE
+        monkeypatch.setattr(query, "MATCH_CAP", cap)
+        assert bills_of(f"pi={pi[2:-3]}") == (both, 5), "PI 中间几位"
+        assert bills_of(f"pi={pi}") == (both, 5), "完整 PI 也带出编号包含它的 PI"
+        assert bills_of(f"pi={pi2}") == ([(pi2, bill2)], 3)
+        assert bills_of(f"bill_no={bill[-6:]}") == (both, 5), "单据编号后几位"
+        assert bills_of(f"bill_no={bill2[-4:]}") == ([(pi2, bill2)], 3)
+        assert bills_of(f"pi={pi[-5:]}&bill_no={bill2[-2:]}") == ([(pi2, bill2)], 3), "两个条件同时满足"
+        assert bills_of(f"pi={pi.lower()}") == ([], 0), "区分大小写（同 SN 分配页单据搜索）"
+        assert bills_of("pi=" + pi[:2] + "%25") == ([], 0), "% 按原字符，不是通配符"
+        assert bills_of("bill_no=" + bill[:2] + "_") == ([], 0), "_ 按原字符"
+        assert bills_of(f"pi={uid('NOPE')}") == ([], 0)
+
+    monkeypatch.setattr(query, "MATCH_CAP", 1000)
+    # 导出与列表同一套条件
+    r = api.client.get(f"/api/sn/export?bill_no={bill[-6:]}", headers={"Authorization": f"Bearer {w.admin}"})
+    assert len(xlsx_rows(r.content)) == 1 + 5
+    # 流水范围：PI 仍按完整 PI（只查这一张 PI 的流水）
+    rg = ok(api.get(f"/api/sn?pi={pi}&seq_from=1&seq_to=9", w.admin))
+    assert rg["total"] == 2 and {x["pi_no"] for x in rg["items"]} == {pi}
+
+
+def test_pi_all_keeps_exact_pi(w, api):
+    """普通操作员「同一 PI 各组织」只读查看：只放开核对过的这一张 PI，部分字符不能带出别的 PI。"""
+    a = w.org(uid("O")[:10])
+    b = w.org(uid("O")[:10])
+    pi, bill = uid("PI"), uid("MO")
+    _make_named(w, a, pi, bill, 2)
+    w.allocate(pi)
+    _make_named(w, b, pi + "X", bill + "X", 3)  # 别的组织、PI 包含 pi
+    w.allocate(pi + "X")
+    op = w.user(emp("F"), "operator", a)
+    r = ok(api.get(f"/api/sn?pi={pi}&pi_all=true&page_size=100", op))
+    assert r["total"] == 2 and {x["pi_no"] for x in r["items"]} == {pi}
+    assert api.get(f"/api/sn?pi={pi[:-3]}&pi_all=true", op).code == "QUERY_PI_NOT_OWNED", "部分字符不放开"
+    # 不切换时只看授权组织：部分字符也带不出别的组织的号
+    r = ok(api.get(f"/api/sn?pi={pi}&page_size=100", op))
+    assert r["total"] == 2 and {x["pi_no"] for x in r["items"]} == {pi}
