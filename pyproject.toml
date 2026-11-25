@@ -16,6 +16,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "import-linter>=2.17",
   "pytest",
   "ruff",
 ]
@@ -42,3 +43,123 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 # FastAPI 依赖注入写在参数默认值里
 ignore = ["B008"]
+
+# ---------------------------------------------------------------------------------------------------------------
+# 模块边界检查（docs/模块化单体改造方案.md 第 6 章、阶段 0）：uv run lint-imports
+# 现在代码还没搬进 app/modules/，契约按「文件 → 模块」的现有归属写；ignore_imports 是阶段 0 登记的现有违规，
+# 只许减、不许增（新代码不得再加）。阶段 2 收口后清零；目录搬迁后改为按包写契约。
+# 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座。只检查直接引用（allow_indirect_imports），阶段 2 后收紧。
+[tool.importlinter]
+root_package = "app"
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+id = "platform"
+name = "底座不引用业务模块"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = [
+  "app.core", "app.db", "app.middleware", "app.models",
+  "app.services.audit", "app.services.locks", "app.services.files", "app.services.partitions",
+  "app.services.k3", "app.services.mes_client",
+]
+forbidden_modules = [
+  "app.api.routes",
+  "app.services.factories", "app.services.users",
+  "app.services.orders", "app.services.changes", "app.services.k3_config",
+  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
+  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
+  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
+  "app.services.seg", "app.services.line_void", "app.services.deletion",
+  "app.services.audit_query", "app.services.dashboard",
+]
+ignore_imports = [
+  # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
+  "app.services.partitions -> app.services.bill_stats",  # 每日维护里的单据汇总对账 → SN 模块注册自己的每日任务
+  "app.services.partitions -> app.services.delivery",  # 每日维护里的交付自检 → 同上
+  "app.services.partitions -> app.services.factories",  # 每日维护里的同步生产组织 → 组织模块注册自己的每日任务
+]
+
+[[tool.importlinter.contracts]]
+id = "org"
+name = "组织 / 账户模块不引用工单、SN、日志、看板"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["app.services.factories", "app.services.users"]
+forbidden_modules = [
+  "app.services.orders", "app.services.changes", "app.services.k3_config",
+  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
+  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
+  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
+  "app.services.seg", "app.services.line_void", "app.services.deletion",
+  "app.services.audit_query", "app.services.dashboard",
+]
+ignore_imports = [
+  # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
+  "app.services.factories -> app.services.bill_stats",  # 组织开关 MES 时改号状态后记单据统计 → 改为发事件 MesToggled，SN 订阅处理
+]
+
+[[tool.importlinter.contracts]]
+id = "order"
+name = "工单模块不引用 SN、日志、看板"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["app.services.orders", "app.services.changes", "app.services.k3_config"]
+forbidden_modules = [
+  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
+  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
+  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
+  "app.services.seg", "app.services.line_void", "app.services.deletion",
+  "app.services.audit_query", "app.services.dashboard",
+]
+ignore_imports = [
+  # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
+  "app.services.changes -> app.services.bill_stats",  # 订单变更后记单据统计 → 改为发事件，SN 订阅
+  "app.services.changes -> app.services.delivery",  # 解除暂停后启动推送 → 改为发事件 BillSuspendChanged，SN 订阅
+  "app.services.changes -> app.services.rules",  # 改 PI 时的双 SN 防呆 → SN 提供 api.is_dual 或订阅事件
+  "app.services.changes -> app.services.transfers",  # 物料变更确认对应时调转移 → SN 订阅订单事件
+  "app.services.orders -> app.services.line_void",  # 物料行作废校验 → 归属待定（SN 或工单），阶段 2 定
+  "app.services.orders -> app.services.rules",  # 订单页显示生效规则 → 由 SN 提供组合接口
+]
+
+[[tool.importlinter.contracts]]
+id = "sn"
+name = "SN 模块不引用日志、看板"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = [
+  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
+  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
+  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
+  "app.services.seg", "app.services.line_void", "app.services.deletion",
+]
+forbidden_modules = ["app.services.audit_query", "app.services.dashboard"]
+ignore_imports = []
+
+[[tool.importlinter.contracts]]
+id = "log"
+name = "日志模块只依赖底座与组织"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["app.services.audit_query"]
+forbidden_modules = [
+  "app.services.orders", "app.services.changes", "app.services.k3_config",
+  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
+  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
+  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
+  "app.services.seg", "app.services.line_void", "app.services.deletion",
+  "app.services.dashboard",
+]
+ignore_imports = []
+
+[[tool.importlinter.contracts]]
+id = "mes-frozen"
+name = "MES 接口（已联调冻结）只被 SN 交付与组织的 MES 配置引用"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = [
+  "app.services.orders", "app.services.changes", "app.services.k3_config", "app.services.users",
+  "app.services.audit_query", "app.services.dashboard",
+]
+forbidden_modules = ["app.services.mes_client", "app.api.routes.mes"]
+ignore_imports = []

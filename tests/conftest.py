@@ -1,6 +1,7 @@
 """集成测试基础设施：真实 MySQL（默认 127.0.0.1:3306/sndb_test_py，可用 SN_TEST_DB_* 覆盖）+ 假金蝶 HTTP 服务。
 
-连不上 MySQL 时集成测试整体跳过。测试库在会话开始时整体重建；各用例用唯一的 PI / 单号互不干扰。
+连不上 MySQL 时集成测试整体跳过（SN_TEST_REQUIRE_DB=1 时改为失败，CI 用）。
+测试库在会话开始时整体重建；各用例用唯一的 PI / 单号互不干扰。
 与 Java 的 ITBase 一一对应。
 """
 
@@ -346,6 +347,9 @@ def xlsx_rows(content: bytes) -> list[list]:
 @pytest.fixture(scope="session")
 def app_client():
     if not mysql_available():
+        if os.environ.get("SN_TEST_REQUIRE_DB") == "1":
+            # CI 设置：连不上库不能悄悄跳过集成测试（MES 契约测试也在其中）
+            pytest.fail(f"MySQL {HOST} 不可用（SN_TEST_REQUIRE_DB=1）")
         pytest.skip(f"MySQL {HOST} 不可用，跳过集成测试")
     with raw_conn(None) as c, c.cursor() as cur:
         cur.execute(f"DROP DATABASE IF EXISTS {DB}")

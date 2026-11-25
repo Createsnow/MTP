@@ -1,0 +1,23 @@
+# 代码所有者（docs/模块化单体改造方案.md 第 11.2 节）：改到下列文件的 PR 必须由对应负责人评审。
+# 生效条件：仓库设置 → Branches → 分支保护里勾选「Require review from Code Owners」。
+#
+# 待填：把下面的 <负责人> 换成真实的 GitHub 账号（如 @someone）或团队（如 @Createsnow/sn-team），再去掉行首的 #。
+# 没填之前本文件不起作用。
+#
+# ---- MES 接口（已与 MES 联调通过，冻结）：契约基准、MES 路由、推送 / 拉取 / 回执、MES 客户端
+# /tests/contract/                  <SN 负责人>
+# /tests/test_mes_contract.py       <SN 负责人>
+# /app/api/routes/mes.py            <SN 负责人>
+# /app/services/delivery/           <SN 负责人>
+# /app/services/mes_client.py       <SN 负责人>
+# /docs/MES*.md                     <SN 负责人>
+#
+# ---- 建表脚本与模块边界规则
+# /app/db/migration/                <底座负责人> <SN 负责人>
+# /devtools/check_table_owners.py   <底座负责人>
+# /pyproject.toml                   <底座负责人>
+#
+# ---- 底座
+# /app/core/                        <底座负责人>
+# /app/db/                          <底座负责人>
+# /app/main.py                      <底座负责人>

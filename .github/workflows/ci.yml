@@ -1,0 +1,81 @@
+# 溯码中台 CI（docs/模块化单体改造方案.md 第 11.1 节、阶段 0）：每次推送与 PR 都跑，不通过不能合并（分支保护在仓库设置里开）。
+# - backend：ruff、模块边界（import-linter、表归属）、全部 pytest（真实 MySQL 8；含 MES 接口契约测试 tests/test_mes_contract.py）
+# - frontend：多语言文件与词条源一致、前端单元测试、类型检查 + 构建
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      # 只连 CI 里临时起的库；测试会整库重建 sndb_test_py
+      SN_TEST_DB_HOST: 127.0.0.1:3306
+      SN_TEST_DB_NAME: sndb_test_py
+      SN_TEST_DB_USER: root
+      SN_TEST_DB_PASSWORD: ci-root-password
+      SN_TEST_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: 安装依赖
+        run: uv sync --frozen
+      - name: ruff
+        run: |
+          uv run ruff check app tests devtools
+          uv run ruff format --check app tests devtools
+      - name: 模块依赖方向（import-linter）
+        run: uv run lint-imports
+      - name: 表归属
+        run: uv run python -m devtools.check_table_owners
+      - name: pytest（单元 + 集成 + MES 契约）
+        run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci --no-audit --no-fund
+      - name: 多语言文件与词条源一致
+        run: |
+          python3 scripts/gen_locales.py
+          git diff --exit-code -- src/locales || (echo "改了词条 / 错误码后要运行 python3 frontend/scripts/gen_locales.py 并提交生成结果" && exit 1)
+      - name: 前端单元测试
+        run: node --test src/*.test.js
+      - name: 类型检查 + 构建
+        run: npm run build

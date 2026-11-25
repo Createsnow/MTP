@@ -1,0 +1,611 @@
+{
+  "①推送-连接测试 PING": {
+    "headers": {
+      "accept": "application/json",
+      "accept-encoding": "gzip",
+      "authorization": "Bearer <令牌>",
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": "<有值>",
+      "x-sn-attempt": "1"
+    },
+    "body": {
+      "schemaVersion": "= 1.0",
+      "batchNo": "str",
+      "batchType": "= PING",
+      "orgCode": "str",
+      "toOrgCode": "null",
+      "count": "int",
+      "createdAt": "str",
+      "itemsDigest": "str",
+      "items": []
+    }
+  },
+  "①推送-交付批次 NEW（Bearer 令牌）": {
+    "headers": {
+      "accept": "application/json",
+      "accept-encoding": "gzip",
+      "authorization": "Bearer <令牌>",
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": "<有值>",
+      "x-sn-attempt": "1"
+    },
+    "body": {
+      "schemaVersion": "= 1.0",
+      "batchNo": "str",
+      "batchType": "= NEW",
+      "orgCode": "str",
+      "toOrgCode": "null",
+      "pi": "str",
+      "count": "int",
+      "createdAt": "str",
+      "itemsDigest": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "str",
+          "customerCode": "str",
+          "sn2": "null"
+        }
+      ]
+    }
+  },
+  "①推送-交付批次 NEW（HMAC 签名、gzip）": {
+    "headers": {
+      "accept": "application/json",
+      "accept-encoding": "gzip",
+      "content-encoding": "gzip",
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": "<有值>",
+      "x-sn-attempt": "1",
+      "x-sn-signature": "<有值>",
+      "x-sn-timestamp": "<有值>"
+    },
+    "body": {
+      "schemaVersion": "= 1.0",
+      "batchNo": "str",
+      "batchType": "= NEW",
+      "orgCode": "str",
+      "toOrgCode": "null",
+      "pi": "str",
+      "count": "int",
+      "createdAt": "str",
+      "itemsDigest": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "str",
+          "customerCode": "str",
+          "sn2": "null"
+        }
+      ]
+    }
+  },
+  "①推送-转出批次 TRANSFER_OUT": {
+    "body": {
+      "schemaVersion": "= 1.0",
+      "batchNo": "str",
+      "batchType": "= TRANSFER_OUT",
+      "orgCode": "str",
+      "toOrgCode": "str",
+      "pi": "str",
+      "count": "int",
+      "createdAt": "str",
+      "itemsDigest": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "str",
+          "customerCode": "str",
+          "sn2": "null"
+        }
+      ]
+    }
+  },
+  "①推送-转入批次 TRANSFER_IN": {
+    "body": {
+      "schemaVersion": "= 1.0",
+      "batchNo": "str",
+      "batchType": "= TRANSFER_IN",
+      "orgCode": "str",
+      "toOrgCode": "null",
+      "pi": "str",
+      "count": "int",
+      "createdAt": "str",
+      "itemsDigest": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "str",
+          "customerCode": "str",
+          "sn2": "null"
+        }
+      ]
+    }
+  },
+  "①推送-交付批次 NEW（双 SN）": {
+    "body": {
+      "schemaVersion": "= 1.0",
+      "batchNo": "str",
+      "batchType": "= NEW",
+      "orgCode": "str",
+      "toOrgCode": "null",
+      "pi": "str",
+      "count": "int",
+      "createdAt": "str",
+      "itemsDigest": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "null",
+          "customerCode": "str",
+          "sn2": "str"
+        }
+      ]
+    }
+  },
+  "②取下一批-未确认的推送批次": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "batch": {
+        "schemaVersion": "= 1.0",
+        "batchNo": "str",
+        "batchType": "= NEW",
+        "orgCode": "str",
+        "toOrgCode": "null",
+        "pi": "str",
+        "count": "int",
+        "createdAt": "str",
+        "itemsDigest": "str",
+        "items": [
+          {
+            "sn": "str",
+            "rev": "int",
+            "serial": "str",
+            "serialDec": "str",
+            "serialPi": "str",
+            "pi": "str",
+            "billNo": "str",
+            "billSeq": "int",
+            "attachNo": "str",
+            "materialCode": "str",
+            "length": "str",
+            "customerCode": "str",
+            "sn2": "null"
+          }
+        ]
+      },
+      "remaining": "int",
+      "paused": "int"
+    }
+  },
+  "②取下一批-再取（同一批）": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "batch": {
+        "schemaVersion": "= 1.0",
+        "batchNo": "str",
+        "batchType": "= NEW",
+        "orgCode": "str",
+        "toOrgCode": "null",
+        "pi": "str",
+        "count": "int",
+        "createdAt": "str",
+        "itemsDigest": "str",
+        "items": [
+          {
+            "sn": "str",
+            "rev": "int",
+            "serial": "str",
+            "serialDec": "str",
+            "serialPi": "str",
+            "pi": "str",
+            "billNo": "str",
+            "billSeq": "int",
+            "attachNo": "str",
+            "materialCode": "str",
+            "length": "str",
+            "customerCode": "str",
+            "sn2": "null"
+          }
+        ]
+      },
+      "remaining": "int",
+      "paused": "int"
+    }
+  },
+  "②取下一批-按批次号取回": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "batch": {
+        "schemaVersion": "= 1.0",
+        "batchNo": "str",
+        "batchType": "= NEW",
+        "orgCode": "str",
+        "toOrgCode": "null",
+        "pi": "str",
+        "count": "int",
+        "createdAt": "str",
+        "itemsDigest": "str",
+        "items": [
+          {
+            "sn": "str",
+            "rev": "int",
+            "serial": "str",
+            "serialDec": "str",
+            "serialPi": "str",
+            "pi": "str",
+            "billNo": "str",
+            "billSeq": "int",
+            "attachNo": "str",
+            "materialCode": "str",
+            "length": "str",
+            "customerCode": "str",
+            "sn2": "null"
+          }
+        ]
+      },
+      "remaining": "int",
+      "paused": "int"
+    }
+  },
+  "③回执-参数不合法": {
+    "status": 400,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_REQUEST",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "details": [
+        {
+          "field": "= code",
+          "reason": "str"
+        }
+      ]
+    }
+  },
+  "③回执-缺批次号": {
+    "status": 400,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_REQUEST",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": [
+        {
+          "field": "= batchNo",
+          "reason": "str"
+        }
+      ]
+    }
+  },
+  "③回执-批次不存在": {
+    "status": 404,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= BATCH_NOT_FOUND",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "③回执-不支持 gzip": {
+    "status": 400,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_REQUEST",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "③回执-首次确认 OK": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "batchResult": "= SUCCESS",
+      "firstConfirmation": "bool"
+    }
+  },
+  "③回执-重复提交": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "batchResult": "= SUCCESS",
+      "firstConfirmation": "bool"
+    }
+  },
+  "②取下一批-已确认的批次号": {
+    "status": 409,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= BATCH_CONFIRMED",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "②取下一批-新建拉取批次 PL-": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "batch": {
+        "schemaVersion": "= 1.0",
+        "batchNo": "str",
+        "batchType": "= NEW",
+        "orgCode": "str",
+        "toOrgCode": "null",
+        "pi": "str",
+        "count": "int",
+        "createdAt": "str",
+        "itemsDigest": "str",
+        "items": [
+          {
+            "sn": "str",
+            "rev": "int",
+            "serial": "str",
+            "serialDec": "str",
+            "serialPi": "str",
+            "pi": "str",
+            "billNo": "str",
+            "billSeq": "int",
+            "attachNo": "str",
+            "materialCode": "str",
+            "length": "str",
+            "customerCode": "str",
+            "sn2": "null"
+          }
+        ]
+      },
+      "remaining": "int",
+      "paused": "int"
+    }
+  },
+  "②取下一批-没有可取的": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= NO_BATCH",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "batch": "null",
+      "remaining": "int",
+      "paused": "int"
+    }
+  },
+  "②取下一批-参数类型不对": {
+    "status": 400,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_REQUEST",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": [
+        {
+          "field": "= pi",
+          "reason": "str"
+        }
+      ]
+    }
+  },
+  "④已交付的号-分页（有下一页）": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "str",
+          "customerCode": "str",
+          "sn2": "null",
+          "status": "= PUSHED",
+          "batchNo": "str",
+          "deliveredAt": "str"
+        }
+      ],
+      "nextCursor": "str"
+    }
+  },
+  "④已交付的号-参数类型不对": {
+    "status": 400,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_REQUEST",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": [
+        {
+          "field": "= cursor",
+          "reason": "str"
+        }
+      ]
+    }
+  },
+  "⑤批次里的号-分页（有下一页）": {
+    "status": 200,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= OK",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "items": [
+        {
+          "sn": "str",
+          "rev": "int",
+          "serial": "str",
+          "serialDec": "str",
+          "serialPi": "str",
+          "pi": "str",
+          "billNo": "str",
+          "billSeq": "int",
+          "attachNo": "str",
+          "materialCode": "str",
+          "length": "str",
+          "customerCode": "str",
+          "sn2": "null",
+          "status": "= PUSHED",
+          "batchNo": "str",
+          "deliveredAt": "str"
+        }
+      ],
+      "nextCursor": "str"
+    }
+  },
+  "⑤批次里的号-缺批次号": {
+    "status": 400,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_REQUEST",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": [
+        {
+          "field": "= batchNo",
+          "reason": "str"
+        }
+      ]
+    }
+  },
+  "⑤批次里的号-批次不存在": {
+    "status": 404,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= BATCH_NOT_FOUND",
+      "message": "str",
+      "batchNo": "str",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "认证-不带 Authorization": {
+    "status": 401,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_CREDENTIALS",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "认证-密钥不对": {
+    "status": 401,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= INVALID_CREDENTIALS",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "权限-页面账户调 ②": {
+    "status": 403,
+    "body": {
+      "schemaVersion": "= 1.0",
+      "code": "= FORBIDDEN",
+      "message": "str",
+      "batchNo": "null",
+      "timestamp": "str",
+      "details": []
+    }
+  },
+  "应答压缩-超过 1 KB 按 gzip 返回": {
+    "status": 200,
+    "content-encoding": "gzip"
+  }
+}

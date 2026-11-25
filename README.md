@@ -76,6 +76,8 @@ cd frontend && npm install && npm run dev      # 前端 5173，代理 /api 到 8
 
 uv run pytest -q                               # 单元 + 集成测试（集成测试需 MySQL，默认 127.0.0.1:3306/sndb_test_py，会整库重建，不要指向 sn_dev / sn_test / sn_prod；连不上自动跳过）
 uv run ruff check app tests devtools           # 代码检查
+uv run lint-imports                            # 模块依赖方向（契约在 pyproject.toml）
+uv run python -m devtools.check_table_owners   # 表归属：只有归属模块能写自己的表
 node --test frontend/src/*.test.js             # 前端测试
 python3 frontend/scripts/gen_locales.py        # 改了词条 / 错误码后重新生成三种语言文件
 
@@ -84,6 +86,8 @@ uv run python -m devtools.mes_conformance --url <MES 地址> --org 110 --pi <PI>
 ```
 
 MES 方未接入时的联调方法见 [MES 联调指南](<docs/MES 联调指南.md>)。
+
+**MES 接口已联调冻结**：`tests/test_mes_contract.py` 把推送报文与 ② ～ ⑤ 的应答结构和基准 `tests/contract/mes_v1.json` 比对，改动影响到 MES 接口时测试失败。确需变更接口须先与 MES 方确认并升级《MES 对接接口文档》版本，再按该文件开头的命令重新生成基准。推送到 GitHub 后 CI（`.github/workflows/ci.yml`）会跑上面全部检查；模块边界规则见 [模块化单体改造方案](docs/模块化单体改造方案.md)。
 
 ## 目录
 
