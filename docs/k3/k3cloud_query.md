@@ -96,7 +96,7 @@
 | `length` | string | 长度 | 明细 `Flength` |
 | `qty` | number | 数量 | 明细 `FQty` |
 
-本系统同步时在上面的字段之外另取三列（`app/services/k3.py` 的 `DETAIL_KEYS` 末尾）：明细行号 `FTreeEntity_FSeq`（单查 `TreeEntity[].Seq`）、表头修改日期 `FModifyDate`（单查 `ModifyDate`，比对同步用，订单页显示并按它从新到旧排序）、明细产品单位 `FProductUnit`（单查 `TreeEntity[].FProductUnit`，去首尾空格；SN 规则带单位时写入 SN）。
+本系统同步时在上面的字段之外另取三列（`app/platform/k3.py` 的 `DETAIL_KEYS` 末尾）：明细行号 `FTreeEntity_FSeq`（单查 `TreeEntity[].Seq`）、表头修改日期 `FModifyDate`（单查 `ModifyDate`，比对同步用，订单页显示并按它从新到旧排序）、明细产品单位 `FProductUnit`（单查 `TreeEntity[].FProductUnit`，去首尾空格；SN 规则带单位时写入 SN）。
 
 每张单固定这 8 个键，每条明细固定这 5 个键。没有值时字符串用 `""`，数量用 `0`，不省略键。没有可返回的单据时 `rows` 为 `[]`。一张已审核单据没有明细时，单据仍返回，`entries` 为 `[]`。
 

@@ -34,7 +34,7 @@
 | 页面接口清单与权限 | 代码 `app/api/routes`（在线文档 `/docs`） | 系统技术方案第三章、角色权限矩阵 |
 | MES 接口字段、错误码 | MES 对接接口文档（在线版：`/docs` 的 `open` 分组） | PRD F-11 / F-12、附录 D.4、系统技术方案 3.6 |
 | MES 处理规则（rev、批次类型、转移、异常） | MES 对接说明 | PRD 5.2.5、5.2.8 |
-| 金蝶调用与字段 | [生产订单查询接口](k3/k3cloud_query.md)、[生产订单完整数据结构](k3/prd_mo_structure.md) → PRD F-05、附录 D.1 → 代码 `app/services/k3.py` | 业务流程说明附录、系统技术方案、运维手册 |
+| 金蝶调用与字段 | [生产订单查询接口](k3/k3cloud_query.md)、[生产订单完整数据结构](k3/prd_mo_structure.md) → PRD F-05、附录 D.1 → 代码 `app/platform/k3.py` | 业务流程说明附录、系统技术方案、运维手册 |
 | 状态机 | PRD 5.2.6 | 系统技术方案、业务流程说明 §五 |
 | 配置项 | `.env.example`（PRD 附录 C 为业务口径） | 运维手册 §2、系统技术方案附录 A |
 | 错误码 | `app/core/errors.py`；MES 接口错误码见 MES 对接接口文档附录 B | 系统技术方案附录 B |

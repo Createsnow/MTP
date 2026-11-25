@@ -7,9 +7,9 @@
 # ---- MES 接口（已与 MES 联调通过，冻结）：契约基准、MES 路由、推送 / 拉取 / 回执、MES 客户端
 # /tests/contract/                  <SN 负责人>
 # /tests/test_mes_contract.py       <SN 负责人>
-# /app/api/routes/mes.py            <SN 负责人>
-# /app/services/delivery/           <SN 负责人>
-# /app/services/mes_client.py       <SN 负责人>
+# /app/modules/sn/routes/mes.py     <SN 负责人>
+# /app/modules/sn/services/delivery/ <SN 负责人>
+# /app/platform/mes_client.py       <SN 负责人>
 # /docs/MES*.md                     <SN 负责人>
 #
 # ---- 建表脚本与模块边界规则
@@ -19,5 +19,10 @@
 #
 # ---- 底座
 # /app/core/                        <底座负责人>
+# /app/platform/                    <底座负责人>
 # /app/db/                          <底座负责人>
 # /app/main.py                      <底座负责人>
+#
+# ---- 业务模块（SN 与工单的暂停交付、MES 开关逻辑相互关联，由同一人评审）
+# /app/modules/sn/                  <SN 负责人>
+# /app/modules/order/               <SN 负责人>
