@@ -6,7 +6,7 @@
 | --- | --- |
 | 更新日期 | 2026-10-29 |
 | 适用对象 | MES 方开发人员、SN 系统开发 / 测试、实施 |
-| 代码位置 | 推送 `app/services/mes_client.py`、`app/services/delivery/push.py`；回执 `app/services/delivery/receipts.py`；拉取与查询 `app/services/delivery/pull.py`、`app/api/routes/mes.py`；连接测试 `app/services/factories.py` |
+| 代码位置 | 推送 `app/platform/mes_client.py`、`app/modules/sn/services/delivery/push.py`；回执 `app/modules/sn/services/delivery/receipts.py`；拉取与查询 `app/modules/sn/services/delivery/pull.py`、`app/modules/sn/routes/mes.py`；连接测试 `app/modules/org/services/factories.py` |
 
 ## 目录
 
