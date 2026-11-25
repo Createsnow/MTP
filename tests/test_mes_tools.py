@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import httpx
 import pytest
@@ -190,8 +191,16 @@ def test_fault_injection_via_control_api(mock):
         assert http.delete(ctl + "/fault", params={"org": "110"}).json()["faults"] == {}
         assert r.ok(r.send(b2, attempt=2), b2) == first, "重送拿到首次的回执"
         assert len(mock.batches["110"]) == 2, "不重复处理"
-        sent = http.get(ctl + "/state").json()["receiptsSent"]
-        assert [(x["batchNo"], x["status"]) for x in sent][-2:] == [(b2["batchNo"], 200)] * 2
+        # 回执线程收到本系统应答后才记入 receiptsSent，比对端收到回执稍晚：等记录出现再比对（最多 5 秒）
+        want = [(b2["batchNo"], 200)] * 2
+        deadline = time.monotonic() + 5
+        while True:
+            sent = http.get(ctl + "/state").json()["receiptsSent"]
+            got_sent = [(x["batchNo"], x["status"]) for x in sent][-2:]
+            if got_sent == want or time.monotonic() > deadline:
+                break
+            time.sleep(0.05)
+        assert got_sent == want
         got = http.get(ctl + "/received", params={"limit": 10}).json()
         assert [x["attempt"] for x in got] == ["1", "2", "1", "2"] and got[0]["firstItem"]["sn"] == r.sn(1)
         assert http.post(ctl + "/fault", json={"org": "110", "mode": "nope"}).status_code == 400
