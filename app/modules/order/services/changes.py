@@ -29,7 +29,6 @@ from app.core.exceptions import BizError
 from app.core.security import CurrentUser
 from app.db.session import db, marks
 from app.modules.org.services import factories
-from app.modules.sn.services import bill_stats
 from app.platform import audit, k3, metrics
 
 log = structlog.get_logger()
@@ -66,7 +65,7 @@ _ALLOWED = {
 EMPTY_STATE = {"suspend": None, "leave_state": None, "pi_frozen": False, "open_alerts": 0, "issued": False}
 
 #: 未交付且未入批（暂停交付作用的范围）
-_UNDELIVERED = "(status IN ('PENDING_ALLOC','ALLOCATED') OR (status = 'TO_PUSH' AND delivery_batch_no IS NULL))"
+#: 未交付、未入批的号（暂停只作用于它们）的条件已随号的暂停标记一起归 SN：sn/services/order_hooks.UNDELIVERED
 
 
 # ================================================================== 计数 / 状态
@@ -194,23 +193,11 @@ def ensure_ledger(bill_no: str) -> None:
 
 
 def _set_items_suspend(bill_no: str, reason: str | None) -> int:
-    """把该单未交付、未入批的号的暂停标记改为 reason。"""
-    total = db.exec(
-        f"UPDATE sn_item SET suspend = %s, updated_at = %s WHERE bill_no = %s AND {_UNDELIVERED} "
-        "AND NOT (suspend <=> %s)",
-        reason,
-        util.now(),
-        bill_no,
-        reason,
-    )
-    # 已交付或已入批的号不暂停
-    cleared = db.exec(
-        f"UPDATE sn_item SET suspend = NULL WHERE bill_no = %s AND suspend IS NOT NULL AND NOT {_UNDELIVERED}",
-        bill_no,
-    )
-    if total or cleared:
-        bill_stats.touch_bill(bill_no)
-    return total
+    """把该单未交付、未入批的号的暂停标记改为 reason。
+    号池归 SN：经扩展点由 SN 执行（sn/services/order_hooks.py）。"""
+    from app.modules.order import extensions
+
+    return extensions.apply_item_suspend(bill_no, reason)
 
 
 def refresh_items(bill_nos: Iterable[str], quick: bool = False) -> None:
@@ -273,14 +260,14 @@ def _pending_kicks() -> set[str]:
 
 
 def kick_resumed() -> None:
-    """事务提交后：本线程处理中解除暂停的单据启动推送。"""
-    from app.modules.sn.services import delivery
+    """事务提交后：本线程处理中解除暂停的单据启动推送（推送归 SN：经扩展点调用）。"""
+    from app.modules.order import extensions
 
     bills = sorted(_pending_kicks())
     _pending_kicks().clear()
     for no in bills:
         try:
-            delivery.kick_bill(no)
+            extensions.kick_bill(no)
         except Exception:  # noqa: BLE001
             log.exception("kick_after_resume_failed", bill=no)
 
@@ -677,9 +664,9 @@ def handle(cu: CurrentUser, alert_id: int, action: str | None, note: str | None,
     if act == VOID and (not why or len(why) > 500):
         raise biz(ErrorCode.REASON_REQUIRED)
     if act == MAP:
-        from app.modules.sn.services import transfers
+        from app.modules.order import extensions
 
-        transfers.map_material(cu, a, target_seq, why)
+        extensions.map_material(cu, a, target_seq, why)
     else:
         with db.tx():
             a = db.one("SELECT * FROM sn_order_alert WHERE id = %s FOR UPDATE", alert_id)
@@ -735,7 +722,7 @@ def handle(cu: CurrentUser, alert_id: int, action: str | None, note: str | None,
 
 
 def close_material_alert(cu: CurrentUser, alert_id: int, note: str | None) -> None:
-    """确认对应完成后（在 transfers.map_material 的事务内）关闭提醒并重算。"""
+    """确认对应完成后（在 SN 的 transfers.map_material 的事务内）关闭提醒并重算。"""
     a = db.one("SELECT bill_no FROM sn_order_alert WHERE id = %s", alert_id)
     _close(cu, alert_id, MAP, note)
     _reevaluate(cu, a["bill_no"])

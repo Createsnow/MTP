@@ -19,7 +19,7 @@ from app.core import utils as util
 from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, marks
-from app.modules.sn.services import bill_stats
+from app.modules.org import extensions
 from app.platform import audit, k3, mes_client
 
 BASIC = ("factory_code", "factory_name", "enabled", "mes_enabled", "tz_offset_min")
@@ -422,15 +422,8 @@ def set_mes_enabled(cu: CurrentUser, code: str | None, enabled: bool) -> dict:
         if enabled:
             if not ready(f):
                 raise biz(ErrorCode.MES_TEST_REQUIRED)
-            # 已分配 → 待推送（未入批）；不自动推送，由总部「继续推送」或等 MES 拉取
-            n = db.exec(
-                "UPDATE sn_item SET status = 'TO_PUSH', push_type = 'NEW', updated_at = %s "
-                "WHERE status = 'ALLOCATED' AND factory_code = %s",
-                now,
-                fc,
-            )
-            if n:
-                bill_stats.touch_factory(fc, util.TO_PUSH)
+            # 已分配 → 待推送（未入批）；号池归 SN，经扩展点处理（sn/services/org_hooks.py）
+            n = extensions.mes_toggled(fc, True, now)
             before, after = util.ALLOCATED, util.TO_PUSH
         else:
             b = mes_blockers(fc)
@@ -444,17 +437,9 @@ def set_mes_enabled(cu: CurrentUser, code: str | None, enabled: bool) -> dict:
                 if b["reassign_qty"]:
                     parts.append(f"等待改挂重推的号 {b['reassign_qty']} 枚")
                 raise biz(ErrorCode.MES_DISABLE_BLOCKED, factory=fc, detail="；".join(parts))
-            # 待推送（未入批）→ 已分配；已推送的号不变；接口地址和凭证保留（转出照常推送）
-            n = db.exec(
-                "UPDATE sn_item SET status = 'ALLOCATED', updated_at = %s "
-                "WHERE status = 'TO_PUSH' AND factory_code = %s AND delivery_batch_no IS NULL",
-                now,
-                fc,
-            )
-            if n:
-                bill_stats.touch_factory(fc, util.ALLOCATED)
+            # 待推送（未入批）→ 已分配、删已停止 / 已完成的推送任务；已推送的号不变；接口地址和凭证保留（转出照常推送）
+            n = extensions.mes_toggled(fc, False, now)
             before, after = util.TO_PUSH, util.ALLOCATED
-            db.exec("DELETE FROM sn_push_task WHERE factory_code = %s AND state IN ('STOPPED','DONE')", fc)
         db.exec(
             "UPDATE sn_factory SET mes_enabled = %s, updated_at = %s WHERE factory_code = %s",
             1 if enabled else 0,

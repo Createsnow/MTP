@@ -24,7 +24,7 @@ from app.core.security import CurrentUser
 from app.db.session import db, marks, retry_deadlock
 from app.modules.org.services import factories
 from app.modules.sn.services import bill_stats, rules
-from app.platform import audit, mes_client
+from app.platform import audit, mes_client, seq
 
 log = structlog.get_logger()
 
@@ -120,10 +120,7 @@ def _batch_no(prefix: str, org: str) -> str:
         # 独立短事务。先不加锁地看序号行在不在，不在才插入，再按主键加 1：「INSERT … ON DUPLICATE KEY UPDATE」
         # 碰上已有的行会连带锁住它前面的间隙，各组织同时建批时相邻的序号行互相卡住
         with db.new_tx():
-            if not db.exists("SELECT EXISTS(SELECT 1 FROM sn_seq WHERE name = %s)", name):
-                db.exec("INSERT IGNORE INTO sn_seq(name, val) VALUES (%s, 0)", name)
-            db.exec("UPDATE sn_seq SET val = val + 1 WHERE name = %s", name)
-            return int(db.scalar("SELECT val FROM sn_seq WHERE name = %s", name))
+            return seq.bump(name)
 
     n = retry_deadlock(bump, independent=True)
     return f"{prefix}-{org[:16]}-{day}-{n:06d}"

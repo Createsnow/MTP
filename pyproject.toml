@@ -49,7 +49,9 @@ ignore = ["B008"]
 # 阶段 4a 起代码已按模块分包：app/modules/<模块>/{services,routes,module.py,api.py}，底座为 app/{core,db,middleware,
 # models,platform}，HTTP 公共部分在 app/api（deps.py、routes/health.py）。
 # 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座；pallet → box → sn（只经 api.py）。
-# ignore_imports 是阶段 0 登记、阶段 4b 后剩下的违规（都涉及 MES 交付流程），只许减、不许增。只检查直接引用（allow_indirect_imports）。
+# 阶段 0 登记的违规已在阶段 4b、4c 全部收口（ignore_imports 为空），新代码不得再加。
+# 业务模块之间的契约连间接引用一起查；底座、MES、箱号托号三个契约只查直接引用（底座经 app.api.deps 用到账户服务、
+# 箱号经 sn.api 用到 SN 内部，都是允许的间接路径）。
 # 底座按约定在运行时查找 app.modules 下的模块（app/platform/module.py 的 discover），不静态引用。
 [tool.importlinter]
 root_package = "app"
@@ -68,36 +70,30 @@ ignore_imports = []
 id = "org"
 name = "组织 / 账户模块不引用工单、SN、日志、看板、箱号、托号"
 type = "forbidden"
-allow_indirect_imports = true
+allow_indirect_imports = false
 source_modules = ["app.modules.org"]
 forbidden_modules = [
   "app.modules.order", "app.modules.sn", "app.modules.log", "app.modules.dashboard", "app.modules.box",
   "app.modules.pallet",
 ]
-ignore_imports = [
-  "app.modules.org.services.factories -> app.modules.sn.services.bill_stats",  # 开关 MES 改号状态后记单据统计
-]
+ignore_imports = []
 
 [[tool.importlinter.contracts]]
 id = "order"
 name = "工单模块不引用 SN、日志、看板、箱号、托号"
 type = "forbidden"
-allow_indirect_imports = true
+allow_indirect_imports = false
 source_modules = ["app.modules.order"]
 forbidden_modules = [
   "app.modules.sn", "app.modules.log", "app.modules.dashboard", "app.modules.box", "app.modules.pallet",
 ]
-ignore_imports = [
-  "app.modules.order.services.changes -> app.modules.sn.services.bill_stats",  # 订单变更后记单据统计
-  "app.modules.order.services.changes -> app.modules.sn.services.delivery",  # 解除暂停后启动推送
-  "app.modules.order.services.changes -> app.modules.sn.services.transfers",  # 物料变更确认对应时调转移
-]
+ignore_imports = []
 
 [[tool.importlinter.contracts]]
 id = "sn"
 name = "SN 模块不引用日志、看板、箱号、托号"
 type = "forbidden"
-allow_indirect_imports = true
+allow_indirect_imports = false
 source_modules = ["app.modules.sn"]
 forbidden_modules = ["app.modules.log", "app.modules.dashboard", "app.modules.box", "app.modules.pallet"]
 ignore_imports = []
@@ -106,7 +102,7 @@ ignore_imports = []
 id = "log"
 name = "日志模块只依赖底座与组织"
 type = "forbidden"
-allow_indirect_imports = true
+allow_indirect_imports = false
 source_modules = ["app.modules.log"]
 forbidden_modules = [
   "app.modules.order", "app.modules.sn", "app.modules.dashboard", "app.modules.box", "app.modules.pallet",
@@ -143,7 +139,7 @@ ignore_imports = []
 id = "pallet-box"
 name = "托号只通过 box.api 使用箱号"
 type = "forbidden"
-allow_indirect_imports = true
+allow_indirect_imports = false
 source_modules = ["app.modules.pallet"]
 forbidden_modules = [
   "app.modules.box.routes", "app.modules.box.services", "app.modules.box.schemas", "app.modules.box.module",
@@ -154,7 +150,7 @@ ignore_imports = []
 id = "box-no-pallet"
 name = "箱号不引用托号（依赖方向 pallet → box → sn）"
 type = "forbidden"
-allow_indirect_imports = true
+allow_indirect_imports = false
 source_modules = ["app.modules.box"]
 forbidden_modules = ["app.modules.pallet"]
 ignore_imports = []

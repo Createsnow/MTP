@@ -96,11 +96,13 @@ app/                         FastAPI 后端
   main.py                    装配（按 SN_MODULES 加载模块）、错误处理、单端口托管前端
   platform/                  底座：module.py（模块描述与装配、GET /api/modules）、events.py（应用内事件）、audit（操作痕迹）、
                              locks（命名锁）、files、partitions（分区与每日维护，执行各模块登记的每日任务）、metrics（按天计数）、
+                             seq（单号序列 sn_seq：批次号序号、互斥行）、
                              k3（金蝶客户端）、mes_client（MES 推送客户端）、demo_seed（演示数据）
   modules/                   业务模块，每个模块 module.py（路由、启动步骤、后台任务、每日任务、依赖）+ services/ + routes/：
-    org/                     生产组织与 MES 对接配置、账户与角色、登录
+    org/                     生产组织与 MES 对接配置、账户与角色、登录；api.py 对外接口（推送回写对接状态），
+                             extensions.py 扩展点（开关 MES 后的号池处理由 SN 登记）
     order/                   生产订单快照与同步、订单变更与暂停交付（changes）、金蝶连接、物料行失效条件（line_void）；
-                             extensions.py 为扩展点（SN 规则列、改 PI 检查由 SN 登记）
+                             extensions.py 为扩展点（SN 规则列、改 PI 检查、号的暂停标记、解除暂停后推送、确认物料对应由 SN 登记）
     sn/                      规则、生成（generate）、删号（deletion）、分配（allocation）、生成页与分配页的 PI 列表（workbench）、
                              交付 services/delivery/（建批、回执、推送、人工处理、MES 拉取、页面查询、每日自检）、
                              转单与转组织（transfers）、查询与导出、SN 导入、单据统计；routes/mes.py 为 MES 接口；

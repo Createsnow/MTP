@@ -68,3 +68,37 @@ def test_extensions_registered_by_sn(app_client):
     assert set(extensions._pi_change_checks) == {"sn.dual"}
     # 不同 PI、都不是双 SN：放行
     extensions.check_pi_change("PI-A-" + uid(""), "PI-B-" + uid(""))
+
+
+def test_required_extensions_registered_by_sn(app_client):
+    """阶段 4c：号的暂停标记、解除暂停后启动推送、确认物料对应、组织开关 MES 的号池处理都由 SN 登记。"""
+    from app.modules.order import extensions as order_ext
+    from app.modules.org import extensions as org_ext
+    from app.modules.sn.services import delivery, order_hooks, org_hooks, transfers
+
+    assert order_ext._required == {
+        "apply_item_suspend": order_hooks.apply_item_suspend,
+        "kick_bill": delivery.kick_bill,
+        "map_material": transfers.map_material,
+    }
+    assert org_ext._on_mes_toggle == {"sn": org_hooks.mes_toggled}
+
+
+def test_required_extension_missing_is_loud(monkeypatch):
+    """必需扩展点没登记时直接报错，不会悄悄跳过（号池不改、推送不启动这种静默错误）。"""
+    import pytest
+
+    from app.core import utils as util
+    from app.modules.order import extensions as order_ext
+    from app.modules.org import extensions as org_ext
+
+    monkeypatch.setattr(order_ext, "_required", {})
+    monkeypatch.setattr(org_ext, "_on_mes_toggle", {})
+    with pytest.raises(RuntimeError, match="apply_item_suspend 未登记"):
+        order_ext.apply_item_suspend("B", None)
+    with pytest.raises(RuntimeError, match="kick_bill 未登记"):
+        order_ext.kick_bill("B")
+    with pytest.raises(RuntimeError, match="mes_toggle 未登记"):
+        org_ext.mes_toggled("F", True, util.now())
+    with pytest.raises(RuntimeError, match="没有扩展点"):
+        order_ext.register("nope", lambda: None)

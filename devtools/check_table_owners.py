@@ -4,8 +4,8 @@
 「表 → 模块」核对：
 - 建表脚本里的每张表都要在 TABLE_OWNER 登记归属模块（新表必须登记，新模块的表须用模块前缀，如 box_、plt_）；
 - 写表的每个文件都要能归到一个模块：app/modules/<模块>/ 下按目录归属，app/{core,db,middleware,models,platform} 为底座；
-- 跨模块写表只允许 EXCEPTIONS 里登记的（阶段 0 的现有违规，只许减、不许增）；登记了却已不再出现的例外也报错，
-  提醒把它删掉。
+- 跨模块写表只允许 EXCEPTIONS 里登记的（阶段 0 登记的违规已在阶段 4c 清零，新代码不得再加）；
+  登记了却已不再出现的例外也报错，提醒把它删掉。
 
 用法（仓库根目录）：uv run python -m devtools.check_table_owners；有问题时退出码为 1。
 CI 与 tests/test_boundaries.py 都会跑。
@@ -33,6 +33,8 @@ TABLE_OWNER: dict[str, str] = {
     "sn_audit": PLATFORM,
     "sn_audit_archive": PLATFORM,
     "sn_daily_counter": PLATFORM,
+    # 单号序列（批次号每日序号、互斥行、每日维护完成时间；阶段 4c 由 SN 改归底座，读写经 app/platform/seq.py）
+    "sn_seq": PLATFORM,
     # 组织 / 账户
     "sn_factory": ORG,
     "sn_user": ORG,
@@ -71,7 +73,6 @@ TABLE_OWNER: dict[str, str] = {
             "sn_import_item",
             "sn_bill_stat",
             "sn_bill_stat_dirty",
-            "sn_seq",
             "sn_rate_counter",
             "sn_delivery_batch",
             "sn_delivery_item",
@@ -88,24 +89,8 @@ TABLE_OWNER: dict[str, str] = {
 #: 不参与检查的文件：演示数据（只在 SN_DEMO_SEED=true 的空库上灌数据，按设计写所有模块的表）
 EXEMPT = {"app/platform/demo_seed.py"}
 
-#: 阶段 0 登记的现有跨模块写入（2026-11-25）：(文件, 表) → 收口方式。只许减、不许增；新代码不得再加。
-EXCEPTIONS: dict[tuple[str, str], str] = {
-    # 以下都涉及 MES 交付流程或表结构，阶段 4b 暂不收口（见 docs/模块化单体改造方案.md 第 12 章阶段 4）
-    (
-        "app/modules/order/services/changes.py",
-        "sn_item",
-    ): "订单变更改号的暂停标记 → order 发事件，SN 订阅（涉及暂停交付）",
-    (
-        "app/modules/org/services/factories.py",
-        "sn_item",
-    ): "组织开关 MES 时改号状态 → org 发事件，SN 订阅（涉及 MES 开关）",
-    ("app/modules/org/services/factories.py", "sn_push_task"): "组织关 MES 时删推送任务 → 同上",
-    ("app/modules/sn/services/delivery/push.py", "sn_factory"): "推送回写组织的配置状态 → 调 org.api（MES 推送代码）",
-    (
-        "app/platform/partitions.py",
-        "sn_seq",
-    ): "每日维护完成时间记在 sn_seq 的 #daily_maintain 行 → 改用底座的表（须改表结构）",
-}
+#: 允许的跨模块写入：(文件, 表) → 原因。阶段 0 登记的 8 处已在阶段 4b、4c 全部收口，新代码不得再加。
+EXCEPTIONS: dict[tuple[str, str], str] = {}
 
 _WRITE = re.compile(
     r"\b(?:INSERT(?:\s+IGNORE)?\s+INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|DELETE\s+\w+(?:\s*,\s*\w+)*\s+FROM"
@@ -145,8 +130,13 @@ def writes() -> dict[str, set[str]]:
     return out
 
 
-def check(found: dict[str, set[str]] | None = None, owners: dict[str, str] | None = None) -> list[str]:
-    """found / owners 只给测试用：默认扫描 app/ 与 TABLE_OWNER。"""
+def check(
+    found: dict[str, set[str]] | None = None,
+    owners: dict[str, str] | None = None,
+    exceptions: dict[tuple[str, str], str] | None = None,
+) -> list[str]:
+    """found / owners / exceptions 只给测试用：默认扫描 app/、TABLE_OWNER、EXCEPTIONS。"""
+    exc = EXCEPTIONS if exceptions is None else exceptions
     problems: list[str] = []
     tables = schema_tables()
     owner_map = TABLE_OWNER if owners is None else owners
@@ -171,13 +161,13 @@ def check(found: dict[str, set[str]] | None = None, owners: dict[str, str] | Non
             owner = owner_map.get(t)
             if owner is None or owner == mod:
                 continue
-            if (rel, t) in EXCEPTIONS:
+            if (rel, t) in exc:
                 used.add((rel, t))
                 continue
             problems.append(
                 f"{rel}（模块 {mod}）写了模块 {owner} 的表 {t}：跨模块只能调对方的 api.py 或发事件（规则 R3）"
             )
-    for rel, t in sorted(EXCEPTIONS.keys() - used):
+    for rel, t in sorted(exc.keys() - used):
         problems.append(f"例外 ({rel}, {t}) 已不再出现：从 EXCEPTIONS 里删掉（例外只许减、不许增）")
     return problems
 

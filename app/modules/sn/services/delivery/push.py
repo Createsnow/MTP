@@ -32,6 +32,7 @@ from app.core.config import settings
 from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, is_lock_conflict, retry_deadlock
+from app.modules.org import api as org_api
 from app.modules.org.services import factories
 from app.modules.sn.services.delivery import receipts
 from app.modules.sn.services.delivery.batches import (
@@ -50,7 +51,7 @@ from app.modules.sn.services.delivery.batches import (
     must_batch,
     pool_groups,
 )
-from app.platform import audit, mes_client
+from app.platform import audit, mes_client, seq
 
 log = structlog.get_logger()
 
@@ -68,7 +69,7 @@ TRANSIENT_MAX = 5
 _transient: dict[tuple[str, str], int] = {}
 #: 运行中任务的续租间隔（远小于租约 LEASE_SECONDS）
 HEARTBEAT_SECONDS = 60
-#: 认领推送任务的跨实例互斥行（sn_seq 中的一行，只用来加行锁，不当序号用）
+#: 认领推送任务的跨实例互斥行（底座单号序列 sn_seq 中的一行，只用来加行锁，不当序号用）
 CLAIM_MUTEX = "#push_claim"
 
 
@@ -221,15 +222,15 @@ def _claim_task() -> dict | None:
         now,
         now,
     )
-    if rows and not db.exists("SELECT EXISTS(SELECT 1 FROM sn_seq WHERE name = %s)", CLAIM_MUTEX):
+    if rows:
         # 互斥行只建一次，在事务外建：事务里先读会提前定下一致性快照，下面数运行中的任务就看不到
         # 别的实例刚提交的认领；也免得 ON DUPLICATE KEY UPDATE 锁住它前面的间隙
-        db.exec("INSERT IGNORE INTO sn_seq(name, val) VALUES (%s, 0)", CLAIM_MUTEX)
+        seq.ensure(CLAIM_MUTEX)
     for t in rows:
         with db.tx():
             # 各实例的「数运行中的任务 → 认领」串行：否则两个实例可能同时数到未满，各认领一个，超出推送并发上限。
             # 加锁读放在事务第一句，之后的普通读（运行中的任务数）快照晚于别的实例的提交
-            db.one("SELECT val FROM sn_seq WHERE name = %s FOR UPDATE", CLAIM_MUTEX)
+            seq.lock(CLAIM_MUTEX)
             busy_org = db.count(
                 "SELECT COUNT(*) FROM sn_push_task WHERE factory_code = %s AND state = 'RUNNING' AND lease_until >= %s",
                 t["factory_code"],
@@ -629,9 +630,7 @@ def push_once(b: dict) -> str:
             .info(f"attempt={attempt} received next={state}"),
         )
         if f["cfg_status"] != "OK":
-            db.exec(
-                "UPDATE sn_factory SET cfg_status = 'OK', cfg_message = '' WHERE factory_code = %s", f["factory_code"]
-            )
+            org_api.set_mes_cfg_ok(f["factory_code"])
         return state
     if out.kind == mes_client.RETRY:
         intervals = settings.push_retry_intervals
@@ -686,11 +685,7 @@ def push_once(b: dict) -> str:
             return "SKIPPED"
         receipts.mark_failed(cur, out.code, out.message, out.voidable, now)
         if out.config_problem:
-            db.exec(
-                "UPDATE sn_factory SET cfg_status = 'FAILED', cfg_message = %s WHERE factory_code = %s",
-                util.cut(out.message, 500),
-                f["factory_code"],
-            )
+            org_api.set_mes_cfg_failed(f["factory_code"], util.cut(out.message, 500))
         audit.record(
             sys,
             audit.entry(audit.SN_PUSH)

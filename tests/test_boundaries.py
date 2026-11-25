@@ -33,11 +33,21 @@ def test_new_write_in_existing_file_is_caught():
     )
 
 
-def test_stale_exception_is_reported():
+def test_no_cross_module_writes_left():
+    """阶段 0 登记的 8 处跨模块写表已在阶段 4b、4c 全部收口。"""
+    assert owners.EXCEPTIONS == {}
+
+
+def test_exception_used_and_stale():
+    """登记的例外：仍出现时放行；不再出现时报错（提醒删掉）。"""
     found = {k: set(v) for k, v in owners.writes().items()}
-    found["app/modules/org/services/factories.py"].discard("sn_push_task")
+    found["app/modules/org/services/factories.py"] = found["app/modules/org/services/factories.py"] | {"sn_item"}
+    exc = {("app/modules/org/services/factories.py", "sn_item"): "测试"}
+    assert owners.check(found, exceptions=exc) == []
+    found["app/modules/org/services/factories.py"].discard("sn_item")
     assert any(
-        "例外 (app/modules/org/services/factories.py, sn_push_task) 已不再出现" in p for p in owners.check(found)
+        "例外 (app/modules/org/services/factories.py, sn_item) 已不再出现" in p
+        for p in owners.check(found, exceptions=exc)
     )
 
 
