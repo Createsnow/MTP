@@ -14,8 +14,8 @@ BEFORE_STEPS = ["init_db", "bill_stats_fill", "gen_recover", "init_admin", "main
 BEFORE_JOBS = ["daily", "gen_recover", "order_sync", "push", "bill_stats"]
 
 
-def test_existing_modules_discovered_in_order():
-    assert list(discover()) == ["org", "order", "sn", "log", "dashboard"]
+def test_modules_discovered_in_order():
+    assert list(discover()) == ["org", "order", "sn", "log", "dashboard", "box", "pallet"]
 
 
 def test_startup_steps_and_jobs_keep_previous_order():
@@ -35,8 +35,8 @@ def test_default_enables_all_existing_modules():
 
 
 def test_required_and_unknown_modules():
-    with pytest.raises(RuntimeError, match="不认识的模块：box"):
-        enabled(discover(), "org,order,sn,log,dashboard,box")
+    with pytest.raises(RuntimeError, match="不认识的模块：crate"):
+        enabled(discover(), "org,order,sn,log,dashboard,crate")
     with pytest.raises(RuntimeError, match="模块 sn（SN 管理）必须启用"):
         enabled(discover(), "org,order,log,dashboard")
 
@@ -63,3 +63,22 @@ def test_new_module_off_by_default_and_dependencies_checked():
 def test_modules_api(api, admin):
     assert api.get("/api/modules", admin).body == {"modules": ["org", "order", "sn", "log", "dashboard"]}
     assert api.get("/api/modules", None).status == 401
+
+
+def test_box_and_pallet_templates_off_by_default():
+    """箱号、托号模板默认不启用（正式环境不受影响）；托号依赖箱号。"""
+    assert [m.name for m in enabled(discover(), None)] == ["org", "order", "sn", "log", "dashboard"]
+    both = enabled(discover(), "org,order,sn,log,dashboard,box,pallet")
+    assert [m.name for m in both] == ["org", "order", "sn", "log", "dashboard", "box", "pallet"]
+    with pytest.raises(RuntimeError, match="模块 pallet（托号管理）依赖 box"):
+        enabled(discover(), "org,order,sn,log,dashboard,pallet")
+
+
+def test_template_routes_mounted_only_when_enabled(monkeypatch):
+    from test_routes import routes
+
+    paths = {r["path"] for r in routes()}
+    assert not {p for p in paths if p.startswith(("/api/box", "/api/pallet"))}, "默认不挂载"
+    monkeypatch.setenv("SN_MODULES", "org,order,sn,log,dashboard,box,pallet")
+    paths = {r["path"] for r in routes()}
+    assert {"/api/box/template/sn-check", "/api/pallet/template/sn-check"} <= paths

@@ -95,8 +95,8 @@ MES 方未接入时的联调方法见 [MES 联调指南](<docs/MES 联调指南.
 app/                         FastAPI 后端
   main.py                    装配（按 SN_MODULES 加载模块）、错误处理、单端口托管前端
   platform/                  底座：module.py（模块描述与装配、GET /api/modules）、events.py（应用内事件）
-  modules/                   业务模块的装配声明：org / order / sn / log / dashboard 各一个 module.py（路由、启动步骤、后台任务、依赖）；
-                             以后的箱号 box、托号 pallet 在这里新建
+  modules/                   业务模块：org / order / sn / log / dashboard 各一个 module.py（路由、启动步骤、后台任务、依赖）；
+                             sn/api.py 是 SN 对外只读接口；box / pallet 为箱号、托号模板（默认不启用，开发指南见模块化方案第 14 章）
   api/                       deps.py（鉴权依赖）、routes/（各接口，由各模块的 module.py 登记）
   core/                      配置、.env、错误码、异常、SN 编码、口令与令牌、日志、定时任务
   db/                        MySQL 连接池与事务、建表迁移、migration/V1__init.sql

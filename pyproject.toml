@@ -48,7 +48,7 @@ ignore = ["B008"]
 # 模块边界检查（docs/模块化单体改造方案.md 第 6 章）：uv run lint-imports
 # 代码还没搬进 app/modules/（阶段 4），契约按「文件 → 模块」的现有归属写：每个模块 = 它的服务文件 + 路由文件 +
 # app/modules/<模块>/（装配声明）。ignore_imports 是阶段 0 登记的现有违规，只许减、不许增（新代码不得再加），阶段 4 清零。
-# 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座。只检查直接引用（allow_indirect_imports），阶段 4 后收紧。
+# 依赖方向：dashboard → sn → order → org → 底座；log → org → 底座；pallet → box → sn（只经 api.py）。只检查直接引用（allow_indirect_imports），阶段 4 后收紧。
 # 底座按约定在运行时查找 app.modules 下的模块（app/platform/module.py 的 discover），不静态引用。
 [tool.importlinter]
 root_package = "app"
@@ -102,6 +102,7 @@ forbidden_modules = [
   "app.api.routes.delivery", "app.api.routes.sn_export", "app.api.routes.sn_import", "app.api.routes.transfers",
   "app.api.routes.sn", "app.api.routes.mes", "app.modules.sn", "app.services.audit_query", "app.api.routes.audits",
   "app.modules.log", "app.services.dashboard", "app.api.routes.dashboard", "app.modules.dashboard",
+  "app.modules.box", "app.modules.pallet",
 ]
 ignore_imports = [
   # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
@@ -126,6 +127,7 @@ forbidden_modules = [
   "app.api.routes.sn_import", "app.api.routes.transfers", "app.api.routes.sn", "app.api.routes.mes",
   "app.modules.sn", "app.services.audit_query", "app.api.routes.audits", "app.modules.log", "app.services.dashboard",
   "app.api.routes.dashboard", "app.modules.dashboard",
+  "app.modules.box", "app.modules.pallet",
 ]
 ignore_imports = [
   # 阶段 0 登记的现有违规（2026-11-25），阶段 2 收口后删除
@@ -154,6 +156,7 @@ source_modules = [
 forbidden_modules = [
   "app.services.audit_query", "app.api.routes.audits", "app.modules.log", "app.services.dashboard",
   "app.api.routes.dashboard", "app.modules.dashboard",
+  "app.modules.box", "app.modules.pallet",
 ]
 ignore_imports = []
 
@@ -175,6 +178,7 @@ forbidden_modules = [
   "app.api.routes.delivery", "app.api.routes.sn_export", "app.api.routes.sn_import", "app.api.routes.transfers",
   "app.api.routes.sn", "app.api.routes.mes", "app.modules.sn", "app.services.dashboard", "app.api.routes.dashboard",
   "app.modules.dashboard",
+  "app.modules.box", "app.modules.pallet",
 ]
 ignore_imports = []
 
@@ -188,8 +192,50 @@ source_modules = [
   "app.services.audit_query", "app.services.dashboard", "app.api.routes.auth", "app.api.routes.users",
   "app.api.routes.orders", "app.api.routes.k3_config", "app.api.routes.audits", "app.api.routes.dashboard",
   "app.modules.org", "app.modules.order", "app.modules.log", "app.modules.dashboard", "app.platform",
+  "app.modules.box", "app.modules.pallet",
 ]
 forbidden_modules = [
   "app.services.mes_client", "app.api.routes.mes",
 ]
+ignore_imports = []
+
+[[tool.importlinter.contracts]]
+id = "box-pallet"
+name = "箱号、托号只通过 sn.api 读 SN，不引用其他模块的内部代码"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["app.modules.box", "app.modules.pallet"]
+forbidden_modules = [
+  "app.services.rules", "app.services.generate", "app.services.workbench", "app.services.allocation",
+  "app.services.delivery", "app.services.transfers", "app.services.query", "app.services.sn_export",
+  "app.services.sn_import", "app.services.sn_sheet", "app.services.bill_stats", "app.services.dual",
+  "app.services.seg", "app.services.line_void", "app.services.deletion", "app.api.routes.rules",
+  "app.api.routes.generate", "app.api.routes.allocation", "app.api.routes.delivery", "app.api.routes.sn_export",
+  "app.api.routes.sn_import", "app.api.routes.transfers", "app.api.routes.sn", "app.api.routes.mes",
+  "app.modules.sn.module", "app.services.orders", "app.services.changes", "app.services.k3_config",
+  "app.services.factories", "app.services.users", "app.services.audit_query", "app.services.dashboard",
+  "app.api.routes.auth", "app.api.routes.users", "app.api.routes.factories", "app.api.routes.orders",
+  "app.api.routes.k3_config", "app.api.routes.audits", "app.api.routes.dashboard", "app.modules.org",
+  "app.modules.order", "app.modules.log", "app.modules.dashboard",
+]
+ignore_imports = []
+
+[[tool.importlinter.contracts]]
+id = "pallet-box"
+name = "托号只通过 box.api 使用箱号"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["app.modules.pallet"]
+forbidden_modules = [
+  "app.modules.box.routes", "app.modules.box.services", "app.modules.box.schemas", "app.modules.box.module",
+]
+ignore_imports = []
+
+[[tool.importlinter.contracts]]
+id = "box-no-pallet"
+name = "箱号不引用托号（依赖方向 pallet → box → sn）"
+type = "forbidden"
+allow_indirect_imports = true
+source_modules = ["app.modules.box"]
+forbidden_modules = ["app.modules.pallet"]
 ignore_imports = []
