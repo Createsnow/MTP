@@ -675,7 +675,7 @@ class World:
     def push(self, receipts: bool = True) -> int:
         """跑推送任务；receipts 时模拟 MES 把处理完的批次逐个用 ③ 提交回执（与 MES 落库后回执一致），
         回执唤醒的任务接着推，直到没有新的回执。返回执行的任务数。"""
-        from app.services import delivery
+        from app.modules.sn.services import delivery
 
         n = delivery.run_pending()
         while receipts:
@@ -759,7 +759,7 @@ def _fresh_sn(request):
         MES.reset()
         RECEIPT_REPLIES.clear()
         K3_FAIL.update(query=False, view=False, display=False, status=False)
-        from app.services import k3
+        from app.platform import k3
 
         k3._display_failed_at = None
     yield
@@ -800,7 +800,7 @@ def mark_bill_stat(sql) -> None:
 def assert_bill_stat_consistent() -> None:
     """每个用例结束后：单据汇总按标记重算完，与号池按单据重新汇总的结果逐行相同（改号的地方都标了脏）。
     后台推送可能还在改号：同一快照里还有未处理的标记时重算后再比，最多试几次。"""
-    from app.services import bill_stats
+    from app.modules.sn.services import bill_stats
 
     for _ in range(20):
         bill_stats.refresh(budget_seconds=None, wait=10)

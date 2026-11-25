@@ -27,14 +27,18 @@ def test_cross_module_write_is_caught():
 
 def test_new_write_in_existing_file_is_caught():
     found = owners.writes()
-    found["app/services/orders.py"] = found["app/services/orders.py"] | {"sn_item"}
-    assert any("app/services/orders.py（模块 order）写了模块 sn 的表 sn_item" in p for p in owners.check(found))
+    found["app/modules/order/services/orders.py"] = found["app/modules/order/services/orders.py"] | {"sn_item"}
+    assert any(
+        "app/modules/order/services/orders.py（模块 order）写了模块 sn 的表 sn_item" in p for p in owners.check(found)
+    )
 
 
 def test_stale_exception_is_reported():
     found = {k: set(v) for k, v in owners.writes().items()}
-    found["app/services/factories.py"].discard("sn_push_task")
-    assert any("例外 (app/services/factories.py, sn_push_task) 已不再出现" in p for p in owners.check(found))
+    found["app/modules/org/services/factories.py"].discard("sn_push_task")
+    assert any(
+        "例外 (app/modules/org/services/factories.py, sn_push_task) 已不再出现" in p for p in owners.check(found)
+    )
 
 
 def test_unregistered_table_and_module_prefix():

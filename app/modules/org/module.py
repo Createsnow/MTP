@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import structlog
 
-from app.api.routes import auth, factories, users
 from app.core.config import settings
+from app.modules.org.routes import auth, factories, users
+from app.modules.org.services import users as users_svc
 from app.platform.module import Module, Step
-from app.services import users as users_svc
 
 log = structlog.get_logger("app.main")
 

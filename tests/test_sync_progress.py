@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from conftest import BILLS, K3, K3_FAIL, FakeK3, emp, install_k3, ok, raw_conn, uid
 
-from app.services import locks, orders
+from app.modules.order.services import orders
+from app.platform import locks
 
 
 def _spy(seen: list) -> None:

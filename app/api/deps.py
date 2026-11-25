@@ -19,7 +19,8 @@ from app.core.errors import ErrorCode, biz
 from app.core.exceptions import BizError, MesError
 from app.core.security import API, PAGE, CurrentUser, is_expired, parse_token, pwd_version, session_version
 from app.db.session import db
-from app.services import files, users
+from app.modules.org.services import users
+from app.platform import files
 
 
 async def run_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:

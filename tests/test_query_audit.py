@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from conftest import MES, emp, m, ok, uid, xlsx_rows
 
-from app.services import sn_sheet
+from app.modules.sn.services import sn_sheet
 
 
 def P() -> str:
@@ -147,7 +147,7 @@ def test_dashboard_counts_and_today(w, api):
 
 
 def test_self_check_flags_unconfirmed(w, api, sql, monkeypatch):
-    from app.services import delivery
+    from app.modules.sn.services import delivery
 
     a, pi, bill = make(w, 2, mes=True)
     w.allocate(pi)
@@ -219,7 +219,7 @@ def test_dashboard_recent_failures_lists_batch_once(w, api, sql):
 
 def test_daily_maintain_runs_once_within_gap(app_client, sql, monkeypatch):
     """多实例各自按 cron 触发、或相继启动：1 小时内已有实例做完每日维护的跳过（只建分区）。"""
-    from app.services import partitions
+    from app.platform import partitions
 
     runs = []
     monkeypatch.setattr(partitions, "_daily_jobs", lambda: runs.append(1))
@@ -276,7 +276,7 @@ def _make_named(w, org, pi, bill, qty):
 
 def test_pi_and_bill_partial_match(w, api, monkeypatch):
     """SN 查询的 PI、单据编号按部分字符查（包含即可）；% _ 按原字符；命中多时改为直接 LIKE，结果相同。"""
-    from app.services import query
+    from app.modules.sn.services import query
 
     org = w.org(uid("O")[:10])
     pi, bill = uid("PI"), uid("MO")

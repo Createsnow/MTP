@@ -19,7 +19,7 @@ from app.core import utils as util
 from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, marks
-from app.services import factories
+from app.modules.org.services import factories
 
 # ---------------------------------------------------------------- 号的状态（sn_item.status）
 

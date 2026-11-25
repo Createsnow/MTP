@@ -308,7 +308,7 @@ def test_push_and_pull_concurrently_never_overlap(w, sql, app_client):
 @pytest.mark.parametrize("gz", [False, True])
 def test_push_body_plain_json_by_default_gzip_when_enabled(mock, gz):
     """① 推送：默认发原始 JSON、不带 Content-Encoding；组织开启 gzip 压缩时发 gzip 并带 Content-Encoding: gzip。"""
-    from app.services import mes_client
+    from app.platform import mes_client
 
     mock.secrets["110"] = "s3cret"
     t = mes_client.Target(mock.url("110"), mes_client.TOKEN, "s3cret", 10, gz)

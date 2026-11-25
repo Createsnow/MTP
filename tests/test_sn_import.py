@@ -15,8 +15,8 @@ from conftest import MES, emp, m, ok, uid, xlsx_rows
 from openpyxl import Workbook
 
 from app.core.encoding import DEFAULT_CHARSETS
-from app.services import sn_export
-from app.services.sn_import import HEADERS as FULL
+from app.modules.sn.services import sn_export
+from app.modules.sn.services.sn_import import HEADERS as FULL
 
 #: rec 的字段 → 列名
 COL = {

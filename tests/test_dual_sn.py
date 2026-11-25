@@ -184,7 +184,7 @@ def test_bill_transfer_between_dual_pis_and_blocked_across(w, api, sql):
 
 def test_import_blocked_for_dual_pi_and_sn2_is_unique(w, api, sql):
     """双 SN 的 PI 不支持导入；导入的号与已有的第二 SN 相同时报「号池已有」。"""
-    from app.services import sn_import
+    from app.modules.sn.services import sn_import
 
     org = w.org(uid("O")[:10])
     _, pi, bill, a, b = dual_pi(w, ("M1", 2), org=org)
@@ -203,7 +203,7 @@ def _import_issues(w, api, org, rows) -> list[set[str]]:
 
     from openpyxl import Workbook
 
-    from app.services import sn_import
+    from app.modules.sn.services import sn_import
 
     wb = Workbook()
     ws = wb.active

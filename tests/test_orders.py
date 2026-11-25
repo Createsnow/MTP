@@ -188,7 +188,7 @@ def test_bill_sync_reports_status(w, api, sql):
 def test_bill_sync_waits_briefly_then_reports_busy(w, api, sql, monkeypatch):
     """同步锁被占用（全量重建、金蝶很慢的比对同步）时，按单据同步只等 SYNC_WAIT_SECONDS，等不到提示正忙、不执行；
     不会排队到页面已超时（120 秒）后才在后台悄悄执行。锁释放后照常同步。"""
-    from app.services import locks
+    from app.platform import locks
 
     org = w.org(uid("O")[:10])
     a = uid("MO")
@@ -268,7 +268,7 @@ def test_reversal_suspends_undelivered_and_resumes(w, api, sql):
     org, pi, bill = issued(w, ("M1", 6), mes=True)
     w.allocate(pi)
     MES.behavior[org] = lambda b, h: (503, {"code": "X"})
-    from app.services import delivery
+    from app.modules.sn.services import delivery
 
     # 先建一批（未确认），其余未入批
     ok(api.put(f"/api/factories/{org}/mes-config", m(batch_size=4), w.admin))
@@ -427,7 +427,7 @@ def test_operator_sees_only_authorized_org(w, api):
 def test_scheduled_compare_skips_within_interval(w, sql):
     """多实例各自按间隔触发定时比对同步：距上次比对同步不到一个间隔的跳过、不调金蝶；超过间隔照常执行。"""
     from app.core.security import CurrentUser
-    from app.services import orders
+    from app.modules.order.services import orders
 
     w.compare()
     calls = len(conftest.K3.calls)
@@ -449,7 +449,7 @@ def test_sync_config_interval_and_pause(w, api, sql):
     """同步设置：间隔页面保存的优先（没保存过用 .env）；暂停后定时、进页同步都不执行、不调金蝶，
     立即比对同步、按单据同步照常；只有系统管理员能看、能改；改动留痕，没有变化不留痕。"""
     from app.core.security import CurrentUser
-    from app.services import orders
+    from app.modules.order.services import orders
 
     try:
         _reset_sync_config(sql)
@@ -555,7 +555,7 @@ def test_one_k3_login_per_sync_cycle(w, api, sql):
 def test_k3_session_relogin_after_failure_or_idle(w, monkeypatch):
     """周期内调用失败后、闲置超过 SESSION_IDLE_SECONDS 后，下一次调用先重新登录；
     周期结束关闭连接，之后的调用照旧单独登录。"""
-    from app.services import k3
+    from app.platform import k3
 
     org, pi, bill = issued(w, ("M1", 1))
     i = len(conftest.K3.calls)

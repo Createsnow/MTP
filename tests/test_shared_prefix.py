@@ -175,7 +175,7 @@ def test_prefix_lock_taken_once_per_transaction(app_client):
     """同一事务里再拿同一前缀的前缀锁不等自己（生成事务开头已拿，规则落库时 check_prefix 再拿）；别的事务拿不到，
     事务结束后释放。"""
     from app.db.session import db
-    from app.services import locks
+    from app.platform import locks
 
     p = P()
     t0 = time.monotonic()

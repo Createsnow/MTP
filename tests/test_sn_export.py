@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from conftest import MES, emp, m, ok, uid, xlsx_rows
 
-from app.services import sn_export
+from app.modules.sn.services import sn_export
 
 
 def P() -> str:

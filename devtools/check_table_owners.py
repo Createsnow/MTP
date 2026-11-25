@@ -3,7 +3,7 @@
 扫描 app/ 下 Python 代码里的 SQL 写语句（INSERT / REPLACE / UPDATE / DELETE / TRUNCATE），按「文件 → 模块」与
 「表 → 模块」核对：
 - 建表脚本里的每张表都要在 TABLE_OWNER 登记归属模块（新表必须登记，新模块的表须用模块前缀，如 box_、plt_）；
-- 写表的每个文件都要能归到一个模块（FILE_MODULE，或 app/modules/<模块>/ 下按目录自动归属）；
+- 写表的每个文件都要能归到一个模块：app/modules/<模块>/ 下按目录归属，app/{core,db,middleware,models,platform} 为底座；
 - 跨模块写表只允许 EXCEPTIONS 里登记的（阶段 0 的现有违规，只许减、不许增）；登记了却已不再出现的例外也报错，
   提醒把它删掉。
 
@@ -84,48 +84,28 @@ TABLE_OWNER: dict[str, str] = {
     },
 }
 
-#: 文件 → 模块（与 pyproject.toml 的 import-linter 契约一致）；目录搬迁后由 app/modules/<模块>/ 自动归属
-FILE_MODULE: dict[str, str] = {
-    **{f: PLATFORM for f in ("audit", "locks", "files", "partitions", "k3", "mes_client")},
-    **{f: ORG for f in ("factories", "users")},
-    **{f: ORDER for f in ("orders", "changes", "k3_config")},
-    **{
-        f: SN
-        for f in (
-            "rules",
-            "generate",
-            "workbench",
-            "allocation",
-            "delivery",
-            "transfers",
-            "query",
-            "sn_export",
-            "sn_import",
-            "sn_sheet",
-            "bill_stats",
-            "dual",
-            "seg",
-            "line_void",
-            "deletion",
-        )
-    },
-    "audit_query": "log",
-    "dashboard": "dashboard",
-}
-
 #: 不参与检查的文件：演示数据（只在 SN_DEMO_SEED=true 的空库上灌数据，按设计写所有模块的表）
-EXEMPT = {"app/services/demo_seed.py"}
+EXEMPT = {"app/platform/demo_seed.py"}
 
 #: 阶段 0 登记的现有跨模块写入（2026-11-25）：(文件, 表) → 收口方式。阶段 2 收口后删除；新代码不得再加。
 EXCEPTIONS: dict[tuple[str, str], str] = {
-    ("app/services/changes.py", "sn_item"): "订单变更改号的暂停标记 → order 发事件 BillSuspendChanged，SN 订阅",
-    ("app/services/changes.py", "sn_daily_counter"): "按天计数写在订单模块 → 移到 platform.metrics.count_daily()",
-    ("app/services/factories.py", "sn_item"): "组织开关 MES 时改号状态 → org 发事件 MesToggled，SN 订阅",
-    ("app/services/factories.py", "sn_push_task"): "组织关 MES 时删推送任务 → 同上",
-    ("app/services/delivery/push.py", "sn_factory"): "推送回写组织的配置状态 → 调 org.api.set_mes_cfg_status()",
-    ("app/services/partitions.py", "sn_gen_preview"): "每日维护清理过期预演 → SN 模块注册自己的每日清理任务",
-    ("app/services/partitions.py", "sn_rate_counter"): "每日维护清理 MES 拉取限流计数 → 同上",
-    ("app/services/partitions.py", "sn_seq"): "每日维护清理批次号流水 → 同上",
+    (
+        "app/modules/order/services/changes.py",
+        "sn_item",
+    ): "订单变更改号的暂停标记 → order 发事件 BillSuspendChanged，SN 订阅",
+    (
+        "app/modules/order/services/changes.py",
+        "sn_daily_counter",
+    ): "按天计数写在订单模块 → 移到 platform.metrics.count_daily()",
+    ("app/modules/org/services/factories.py", "sn_item"): "组织开关 MES 时改号状态 → org 发事件 MesToggled，SN 订阅",
+    ("app/modules/org/services/factories.py", "sn_push_task"): "组织关 MES 时删推送任务 → 同上",
+    (
+        "app/modules/sn/services/delivery/push.py",
+        "sn_factory",
+    ): "推送回写组织的配置状态 → 调 org.api.set_mes_cfg_status()",
+    ("app/platform/partitions.py", "sn_gen_preview"): "每日维护清理过期预演 → SN 模块注册自己的每日清理任务",
+    ("app/platform/partitions.py", "sn_rate_counter"): "每日维护清理 MES 拉取限流计数 → 同上",
+    ("app/platform/partitions.py", "sn_seq"): "每日维护清理批次号流水 → 同上",
 }
 
 _WRITE = re.compile(
@@ -147,9 +127,6 @@ def module_of(rel: str) -> str | None:
     parts = rel.split("/")
     if parts[:2] == ["app", "modules"] and len(parts) > 2:
         return parts[2]
-    if parts[:2] == ["app", "services"]:
-        name = parts[2].removesuffix(".py")
-        return FILE_MODULE.get(name)
     if parts[1] in ("core", "db", "middleware", "models", "platform"):
         return PLATFORM
     return None
@@ -187,7 +164,9 @@ def check(found: dict[str, set[str]] | None = None, owners: dict[str, str] | Non
     for rel, ts in found.items():
         mod = module_of(rel)
         if mod is None:
-            problems.append(f"{rel} 写了表（{'、'.join(sorted(ts))}），但归不到任何模块：在 FILE_MODULE 里登记")
+            problems.append(
+                f"{rel} 写了表（{'、'.join(sorted(ts))}），但归不到任何模块：放进 app/modules/<模块>/ 或底座"
+            )
             continue
         for t in sorted(ts):
             owner = owner_map.get(t)

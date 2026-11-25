@@ -716,7 +716,7 @@ def test_check_alert_closed_with_note(w, sql):
 
 def test_pool_claims_one_batch_type_per_batch(w, sql):
     """号池里混有不同类型的号（如暂停期间留在号池的改挂）：认领时按类型分批，一批只有一种 batchType。"""
-    from app.services import delivery
+    from app.modules.sn.services import delivery
 
     org, pi, bill = setup_pi(w, qty=6, batch_size=10)
     w.allocate(pi)
@@ -735,7 +735,7 @@ def test_pool_claims_one_batch_type_per_batch(w, sql):
 
 def _receipt_first(monkeypatch, w, org: str, code: str) -> None:
     """模拟 MES 先调 ③ 回执、后回推送应答（应答在网络上晚到）：发送时先提交回执，再应答已收到。"""
-    from app.services import mes_client
+    from app.platform import mes_client
 
     token = w.receipt_token(org)
 
@@ -912,8 +912,8 @@ def test_push_task_resumes_after_manual_confirm(w, sql):
 
 def test_lease_renewed_while_push_is_slow(w, sql, monkeypatch):
     """单次推送比租约还久：运行期间续租，别处（另一实例）认领不到这个任务，不会同一批同时推两次；任务结束后不再续租。"""
-    from app.services import mes_client
-    from app.services.delivery import push
+    from app.modules.sn.services.delivery import push
+    from app.platform import mes_client
 
     monkeypatch.setattr(push, "LEASE_SECONDS", 2)
     monkeypatch.setattr(push, "HEARTBEAT_SECONDS", 0.3)
@@ -944,7 +944,7 @@ def test_claim_serialized_across_instances_respects_concurrency(w, sql):
     不会两边都数到未满、超出推送并发上限。"""
     from conftest import raw_conn
 
-    from app.services.delivery import push
+    from app.modules.sn.services.delivery import push
 
     org = w.org(uid("O")[:10])
     w.enable_mes(org, batch_size=5)
@@ -994,7 +994,7 @@ def test_claim_serialized_across_instances_respects_concurrency(w, sql):
 def test_batch_voided_during_push_stays_voided(w, sql, monkeypatch, kind):
     """推送请求在途时总部把这一批作废（号已回号池），随后 MES 应答失败或要求重试：批次保持作废，
     不被应答改回失败 / 等重试——否则作废的批次又挡住该 PI 的推送、拉取，续推时还会按旧内容重发。"""
-    from app.services import mes_client
+    from app.platform import mes_client
 
     org, pi, bill = setup_pi(w, qty=3, batch_size=5)
 

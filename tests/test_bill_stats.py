@@ -6,7 +6,7 @@ from __future__ import annotations
 from conftest import m, ok, uid
 
 from app.db.session import db
-from app.services import bill_stats
+from app.modules.sn.services import bill_stats
 
 
 def _mk(w, qty: int):

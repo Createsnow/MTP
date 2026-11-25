@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from app.api.routes import k3_config, orders
 from app.core import scheduler
 from app.core.config import settings
+from app.modules.order.routes import k3_config, orders
+from app.modules.order.services import orders as orders_svc
 from app.platform.module import Job, Module
-from app.services import orders as orders_svc
 
 
 def start_order_sync():

@@ -24,6 +24,10 @@ frontend/node_modules/
 
 # ---------- 必须：构建与缓存 ----------
 frontend/dist/
+# Python 打包产物（uv build / pip install 生成）
+build/
+dist/
+*.egg-info/
 
 # ---------- 建议：编辑器 / 系统杂项 ----------
 .DS_Store

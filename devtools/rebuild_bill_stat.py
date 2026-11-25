@@ -17,7 +17,7 @@ import sys
 
 from app.core.config import settings
 from app.db.session import db
-from app.services import bill_stats
+from app.modules.sn.services import bill_stats
 
 
 def main(argv: list[str] | None = None) -> int:

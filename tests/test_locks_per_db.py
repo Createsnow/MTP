@@ -7,7 +7,8 @@ from __future__ import annotations
 from conftest import DB, m, ok, raw_conn, uid
 
 from app.db.migrate import migrate_lock_name
-from app.services import locks, orders
+from app.modules.order.services import orders
+from app.platform import locks
 
 
 def _hold(name: str):

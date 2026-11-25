@@ -3,6 +3,7 @@
 基准 tests/contract/routes_v1.json 由模块装配前的代码生成（不含随环境变化的 /assets 挂载与 /docs 文档页）。
 注册顺序决定同一地址先匹配哪条路由，所以连顺序一起比对。
 基准之后新增的接口（新模块的路由、平台的 /api/modules）登记在 ADDED，比对时先去掉；
+处理函数所在文件搬了位置的（阶段 4a）登记在 MOVED，比对前把基准里的旧路径换成新路径；
 删改已有接口须先评审，再用下面的命令重新生成基准：
 
     SN_UPDATE_ROUTES=1 uv run pytest tests/test_routes.py
@@ -23,6 +24,27 @@ GOLDEN = Path(__file__).parent / "contract" / "routes_v1.json"
 #: 随运行环境变化、不属于本系统接口的条目，比对时去掉：前端构建产物挂载（有 frontend/dist 才有）、
 #: FastAPI 自带的接口文档页（DOCS_ENABLED 控制）
 ENV_DEPENDENT = {"/assets", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
+
+#: 阶段 4a 目录搬迁（处理函数所在文件挪了位置，函数本身不变）：基准里的旧模块路径 → 现在的模块路径
+MOVED: dict[str, str] = {
+    **{f"app.api.routes.{n}.": f"app.modules.org.routes.{n}." for n in ("auth", "users", "factories")},
+    **{f"app.api.routes.{n}.": f"app.modules.order.routes.{n}." for n in ("orders", "k3_config")},
+    **{
+        f"app.api.routes.{n}.": f"app.modules.sn.routes.{n}."
+        for n in ("rules", "generate", "allocation", "delivery", "sn_export", "sn_import", "transfers", "sn", "mes")
+    },
+    "app.api.routes.audits.": "app.modules.log.routes.audits.",
+    "app.api.routes.dashboard.": "app.modules.dashboard.routes.dashboard.",
+}
+
+
+def _moved(r: dict) -> dict:
+    ep = r.get("endpoint") or ""
+    for old, new in MOVED.items():
+        if ep.startswith(old):
+            return {**r, "endpoint": new + ep[len(old) :]}
+    return r
+
 
 #: 基准之后新增的接口：(路径, 处理函数)
 ADDED: set[tuple[str, str]] = {("/api/modules", "app.platform.module.list_modules")}
@@ -62,7 +84,7 @@ def test_routes_unchanged():
     if os.environ.get("SN_UPDATE_ROUTES") == "1":
         GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         GOLDEN.write_text(json.dumps(now, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    base = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    base = [_moved(r) for r in json.loads(GOLDEN.read_text(encoding="utf-8"))]
     added = [r for r in now if (r["path"], r.get("endpoint")) in ADDED]
     assert len(added) == len(ADDED), f"ADDED 里登记的接口没有注册：{ADDED}"
     kept = [r for r in now if (r["path"], r.get("endpoint")) not in ADDED]

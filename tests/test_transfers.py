@@ -1087,7 +1087,7 @@ def test_batch_type_new_when_source_org_never_held_after_paused_transfer_in(w, s
     MES.received.clear()
     ok(org_direct(w, b, pi, bill, c))
     sql.exec("UPDATE sn_bill_ledger SET suspend = NULL WHERE bill_no = %s", bill)
-    from app.services import changes
+    from app.modules.order.services import changes
 
     changes.refresh_items([bill])
     ok(w.api.post("/api/delivery/resume", m(factory_code=c, key=pi), w.admin))

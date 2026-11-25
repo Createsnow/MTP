@@ -1,0 +1,537 @@
+"""SN 生成页与分配页共用的 PI 工作台（F-10），以及生成页详情。
+
+每张 PI 一行：客户、单据数、生产组织、状态、订单总数、已生成（各订单已生成数之和；转组织改 PI 的号仍计入原 PI）、
+转入号（挂在本 PI 下、由别的 PI 生成的号）、已分配（状态为「已分配」的单据的号：号都已分配且推送完成，
+含已推送、已拉取；待处理单据不计）；行上按钮按 F-10 第 3 条的顺序判断。
+各 PI 的号数统计（item_stats、gen_own）生成页、分配页共用；分配页左侧按单据列出，见 allocation.bills。
+生成详情：单据 → 物料行（规则、附件项次、米数、号段）、生成任务（最近 20 条）、空号段。
+分配详情见 allocation.context。
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+
+from app.core import utils as util
+from app.core.security import CurrentUser
+from app.db.session import db, marks
+from app.modules.order.services import changes, orders
+from app.modules.org.services import factories
+from app.modules.sn.services import dual, generate, line_void, rules
+
+#: 列表一次最多取的 PI 数；逐行判断「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行做
+LIST_LIMIT = 500
+DETAIL_ROWS = 60
+
+#: 状态
+GENERATING = "GENERATING"
+CANNOT = "CANNOT"
+NEED_RULE = "NEED_RULE"
+TO_GENERATE = "TO_GENERATE"
+PARTIAL = "PARTIAL"
+TO_ALLOCATE = "TO_ALLOCATE"
+PUSH_INTERRUPTED = "PUSH_INTERRUPTED"
+DONE = "DONE"
+
+
+#: 生成页与订单页同一排序：金蝶修改日期新的在前（取不到的排后），同一时间单据编号大的在前
+_BY_MODIFY = "MAX(m.modify_time) IS NULL, MAX(m.modify_time) DESC, last_bill DESC"
+
+
+def _pi_sum() -> str:
+    """快照按 PI 汇总（订单数、已生成、额度、最大单据编号、最新修改日期）的 SELECT 部分，
+    FROM 由调用处给出（m = sn_prd_mo、c = sn_line_count）；
+    失效的物料行（line_void）不计订单数、额度。"""
+    v = line_void.current().sql("m")
+    return (
+        "SELECT m.pi, MAX(m.customer_code) customer_code, COUNT(DISTINCT m.bill_no) bills, "
+        "GROUP_CONCAT(DISTINCT m.org_code ORDER BY m.org_code) orgs, "
+        f"SUM(CASE WHEN {v} THEN 0 ELSE FLOOR(m.qty) END) total_qty, "
+        "SUM(COALESCE(c.gen_count, 0)) gen_sum, "
+        f"SUM(CASE WHEN {v} THEN 0 ELSE GREATEST(FLOOR(m.qty) - COALESCE(c.own_generated, 0), 0) END) quota, "
+        "MAX(m.bill_no) last_bill, MAX(m.modify_time) modify_time "
+    )
+
+
+def _pi_rows(q: str | None, by_modify: bool = False, facs: tuple[str, ...] | None = None) -> list[dict]:
+    """生成页：快照中的 PI。by_modify：按 PI 下单据的最新修改日期排；否则按最大单据编号排。
+    facs = 授权范围（None = 全部）：只取范围内的单据，PI 的订单数、额度等也只按这些单据汇总。"""
+    scope = " WHERE m.pi <> ''"
+    sargs: list = []
+    fsql, fargs = factories.scope_sql(facs, "m.org_code")
+    scope += fsql
+    sargs += fargs
+    where, args = scope, list(sargs)
+    text = util.trim(q)
+    if text:
+        like = util.like_any(text)
+        where += (
+            " AND m.pi IN (SELECT x.pi FROM sn_prd_mo x WHERE x.pi LIKE %s OR x.bill_no LIKE %s OR x.po LIKE %s "
+            "OR x.customer_code LIKE %s OR x.material_code LIKE %s)"
+        )
+        args += [like] * 5
+    # 一条 SQL：子查询 p 只按排序字段选出要列的 PI（不连计数表、不做汇总，可只读索引），外层只对这些 PI 汇总；
+    # 同一条语句读同一份数据。顺序、条数、各列的值与一次汇总全表相同（搜索条件按整张 PI 筛，外层只保留授权范围）
+    order = _BY_MODIFY if by_modify else "last_bill DESC"
+    return db.all(
+        _pi_sum()
+        + "FROM (SELECT m.pi FROM sn_prd_mo m"
+        + where
+        + " GROUP BY m.pi ORDER BY "
+        + order.replace("last_bill", "MAX(m.bill_no)")
+        + " LIMIT %s) p JOIN sn_prd_mo m ON m.pi = p.pi "
+        "LEFT JOIN sn_line_count c ON c.bill_no = m.bill_no AND c.seq = m.seq"
+        + scope
+        + " GROUP BY m.pi ORDER BY "
+        + order,
+        *args,
+        LIST_LIMIT,
+        *sargs,
+    )
+
+
+def item_stats(pis: list[str], facs: tuple[str, ...] | None = None, gen_only: bool = False) -> dict[str, dict]:
+    """各 PI 的号数统计；facs = 授权范围（None = 全部），只数范围内的号、批次和推送任务。
+    gen_only：只数本系统生成的号（生成页用：导入的号不在生成页）；分配页连导入的号一起数。
+    已分配（allocated）按单据算，与分配页左侧单据状态（allocation.bill_state）同一口径：只数状态为「已分配」的
+    单据（号都已分配且推送完成，未对接 MES 的分配即完成）的号；待分配、待处理（推送中、等回执、推送中断、
+    暂停交付等还有待推送的号）的单据整单不计。"""
+    if not pis:
+        return {}
+    ph = marks(len(pis))
+    isql, iargs = factories.item_scope_sql(facs)
+    fsql, fargs = factories.scope_sql(facs)
+    gen = " AND origin = 'GEN'" if gen_only else ""
+    out: dict[str, dict] = {}
+    for r in db.all(
+        "SELECT pi_no, SUM(pending) pending, SUM(CASE WHEN pending = 0 AND to_push = 0 THEN n ELSE 0 END) allocated, "
+        "SUM(transferred_in) transferred_in, SUM(unbatched) unbatched, SUM(suspended) suspended FROM ("
+        "SELECT pi_no, COUNT(*) n, SUM(status = 'PENDING_ALLOC') pending, SUM(status = 'TO_PUSH') to_push, "
+        "SUM(seq_pi_no <> '' AND seq_pi_no <> pi_no) transferred_in, "
+        "SUM(status = 'TO_PUSH' AND delivery_batch_no IS NULL AND suspend IS NULL) unbatched, "
+        "SUM(suspend IS NOT NULL) suspended "
+        f"FROM sn_item WHERE pi_no IN ({ph}){gen}{isql} GROUP BY pi_no, bill_no) g GROUP BY pi_no",
+        *pis,
+        *iargs,
+    ):
+        out[r["pi_no"]] = {
+            k: int(r[k] or 0) for k in ("pending", "allocated", "transferred_in", "unbatched", "suspended")
+        }
+    for r in db.all(
+        "SELECT pi_no, COUNT(*) n FROM sn_delivery_batch WHERE batch_type <> 'TRANSFER_OUT' AND pi_no IN (" + ph + ") "
+        "AND (result = 'FAILED' OR (result = 'UNCONFIRMED' AND push_state = 'EXHAUSTED'))" + fsql + " GROUP BY pi_no",
+        *pis,
+        *fargs,
+    ):
+        out.setdefault(r["pi_no"], {})["interrupted"] = int(r["n"])
+    for r in db.all(
+        f"SELECT task_key, COUNT(*) n FROM sn_push_task WHERE task_key IN ({ph}) AND state IN "
+        "('QUEUED','RUNNING','WAITING')" + fsql + " GROUP BY task_key",
+        *pis,
+        *fargs,
+    ):
+        out.setdefault(r["task_key"], {})["tasks"] = int(r["n"])
+    return out
+
+
+def gen_own(pis: list[str], facs: tuple[str, ...] | None = None) -> dict[str, int]:
+    """已生成（F-10 第 1 条）：本 PI 各订单的已生成数之和，按号上的生成 PI 计（转组织改 PI 的号仍计入原 PI）。
+    facs = 授权范围（None = 全部），只数范围内的号。"""
+    if not pis:
+        return {}
+    isql, iargs = factories.item_scope_sql(facs)
+    return {
+        r["seq_pi_no"]: int(r["n"])
+        for r in db.all(
+            f"SELECT seq_pi_no, COUNT(*) n FROM sn_item WHERE seq_pi_no IN ({marks(len(pis))}){isql} "
+            "GROUP BY seq_pi_no",
+            *pis,
+            *iargs,
+        )
+    }
+
+
+def _running(pis: list[str]) -> dict[str, dict]:
+    if not pis:
+        return {}
+    return {
+        j["pi_no"]: {"gen_batch": j["gen_batch"], "qty": j["qty"], "done_qty": j["done_qty"]}
+        for j in db.all(f"SELECT * FROM sn_gen_job WHERE running_pi IN ({marks(len(pis))})", *pis)
+    }
+
+
+def _line_issue_summaries(pis: list[str], facs: tuple[str, ...] | None = None) -> dict[str, tuple[bool, bool, dict]]:
+    """各 PI：（有额度的物料行中有未定规则的，全部不能生成，各原因的行数）；只看授权范围 facs 内的单据。
+    多张 PI 一次取（generate.load_lines_of），结果与逐张判断相同。"""
+    if not pis:
+        return {}
+    fsql, fargs = factories.scope_sql(facs, "org_code")
+    groups: dict[str, list[tuple[str, int]]] = {pi: [] for pi in pis}
+    for r in db.all(
+        f"SELECT pi, bill_no, seq FROM sn_prd_mo WHERE pi IN ({marks(len(pis))})" + fsql + " ORDER BY bill_no, seq",
+        *pis,
+        *fargs,
+    ):
+        groups[r["pi"]].append((r["bill_no"], r["seq"]))
+    out = {}
+    for pi, ls in generate.load_lines_of(groups).items():
+        todo = [x for x in ls if x.quota > 0]
+        reasons: dict[str, int] = {}
+        for x in todo:
+            for i in x.issues:
+                reasons[i] = reasons.get(i, 0) + 1
+        need_rule = any("NO_RULE" in x.issues or "RULE_PREFIX" in x.issues for x in todo)
+        cannot = bool(todo) and all(x.issues for x in todo)
+        out[pi] = (need_rule, cannot, reasons)
+    return out
+
+
+def _frozen(pis: list[str], facs: tuple[str, ...] | None) -> dict[str, int]:
+    """各 PI 冻结（PI 变更未确认）或暂停交付的单据数；只数授权范围 facs 内的单据。"""
+    if not pis:
+        return {}
+    lsql, largs = factories.scope_sql(facs, "l.org_code")
+    return {
+        r["pi"]: r["n"]
+        for r in db.all(
+            "SELECT l.pi, COUNT(*) n FROM sn_bill_ledger l WHERE (l.pi_frozen = 1 OR l.suspend IS NOT NULL) "
+            f"AND l.pi IN ({marks(len(pis))})" + lsql + " GROUP BY l.pi",
+            *pis,
+            *largs,
+        )
+    }
+
+
+def _summary_counts(pis: list[str], facs: tuple[str, ...] | None) -> tuple[int, int]:
+    """（待分配、待推送未建批）枚数，按这些 PI 合计；与 item_stats(gen_only=True) 的 pending、unbatched 之和同一口径，
+    只读这两种状态的号（分页时汇总不必对全部 PI 逐张统计）。
+    指定按 PI 取号的索引 ix_item_claim（pi_no 开头）：PI 多（超过 200 张）又带授权范围条件（OR 子查询）时，
+    MySQL 估错行数会改为全表扫描号池（实测 145 万个号 0.8 秒，指定后 0.08 秒），号池越大越慢。"""
+    if not pis:
+        return 0, 0
+    isql, iargs = factories.item_scope_sql(facs)
+    r = db.one(
+        "SELECT SUM(status = 'PENDING_ALLOC') pending, "
+        "SUM(status = 'TO_PUSH' AND delivery_batch_no IS NULL AND suspend IS NULL) unbatched "
+        f"FROM sn_item FORCE INDEX (ix_item_claim) WHERE pi_no IN ({marks(len(pis))}) AND origin = 'GEN' "
+        "AND status IN ('PENDING_ALLOC', 'TO_PUSH')" + isql,
+        *pis,
+        *iargs,
+    )
+    return int(r["pending"] or 0), int(r["unbatched"] or 0)
+
+
+def _views(rows: list[dict], detail: list[str], running: dict, facs: tuple[str, ...] | None) -> list[dict]:
+    """PI 列表行：号数统计、状态、行上按钮依据；「需先选规则 / 不能生成」只对 detail 中的 PI 判断。"""
+    names = [r["pi"] for r in rows]
+    stats = item_stats(names, facs, gen_only=True)
+    own = gen_own(names, facs)
+    frozen = _frozen(names, facs)
+    issues = _line_issue_summaries(detail, facs)
+    out = []
+    for r in rows:
+        s = stats.get(r["pi"], {})
+        quota = int(r["quota"] or 0)
+        pending = s.get("pending", 0)
+        interrupted = s.get("interrupted", 0) > 0 or (s.get("unbatched", 0) > 0 and not s.get("tasks"))
+        status, reasons = None, {}
+        if r["pi"] in running:
+            status = GENERATING
+        elif r["pi"] in issues:
+            need_rule, cannot, reasons = issues[r["pi"]]
+            status = CANNOT if cannot and not need_rule else (NEED_RULE if need_rule else None)
+        if status is None:
+            if interrupted:
+                status = PUSH_INTERRUPTED
+            elif quota > 0:
+                status = PARTIAL if int(r["gen_sum"] or 0) > 0 else TO_GENERATE
+            elif pending > 0:
+                status = TO_ALLOCATE
+            else:
+                status = DONE
+        out.append(
+            {
+                "pi_no": r["pi"],
+                "customer_code": r["customer_code"],
+                "bills": int(r["bills"]),
+                "modify_time": orders.k3_time(r["modify_time"]),
+                "orgs": _orgs(r),
+                "total_qty": int(r["total_qty"] or 0),
+                "generated_qty": own.get(r["pi"], 0),
+                "transferred_in": s.get("transferred_in", 0),
+                "allocated_qty": s.get("allocated", 0),
+                "pending_alloc": pending,
+                "quota": quota,
+                "unbatched": s.get("unbatched", 0),
+                "suspended": s.get("suspended", 0),
+                "frozen_bills": frozen.get(r["pi"], 0),
+                "push_interrupted": interrupted,
+                "running": running.get(r["pi"]),
+                "status": status,
+                "reasons": reasons,
+            }
+        )
+    return out
+
+
+def _orgs(r: dict) -> list[str]:
+    return [o for o in (r["orgs"] or "").split(",") if o]
+
+
+def _needs_detail(r: dict, running: dict) -> bool:
+    """还有额度、不在生成中的 PI 才判断「需先选规则 / 不能生成」。"""
+    return r["pi"] not in running and int(r["quota"] or 0) > 0
+
+
+def pis(
+    cu: CurrentUser,
+    q: str | None,
+    tab: str | None,
+    by_modify: bool = False,
+    factory: str | None = None,
+    page: util.Page | None = None,
+) -> dict:
+    """生成页 PI 列表与上方汇总（还可生成、待分配、待推送）。tab：TO_GENERATE（含生成中）/ GENERATED（已生成完）；
+    不传为全部。by_modify：按单据修改日期排（与订单页同一排序）。
+    普通操作员只看授权组织的单据和号，汇总也只按这些算。
+
+    page 不传：不分页，返回最多 LIST_LIMIT 张 PI（与原来相同）；「需先选规则 / 不能生成」只对前 DETAIL_ROWS 行判断。
+    page 传了：服务端分页，items 只含本页，另给 total（页签、生产组织筛选后的张数）、page、page_size；
+    factory = 只列含该生产组织单据的 PI（各列仍按授权范围内的全部单据算，与原来页面上筛选相同）；
+    号数统计与「需先选规则 / 不能生成」只对本页的 PI 做；汇总仍按最多 LIST_LIMIT 张 PI 合计（不随页签、组织筛选变）。"""
+    facs = cu.read_factories(None)
+    rows = _pi_rows(q, by_modify, facs)
+    capped = len(rows) >= LIST_LIMIT
+    names = [r["pi"] for r in rows]
+    running = _running(names)
+    tabs = {
+        "TO_GENERATE": lambda r: int(r["quota"] or 0) > 0 or r["pi"] in running,
+        "GENERATED": lambda r: int(r["quota"] or 0) == 0 and r["pi"] not in running,
+    }
+    t = util.trim(tab)
+    synced_at = util.fmt(db.scalar("SELECT MAX(synced_at) FROM sn_prd_mo"))
+    if page is None:
+        out = _views(rows, [r["pi"] for r in rows[:DETAIL_ROWS] if _needs_detail(r, running)], running, facs)
+        shown = [x for x, r in zip(out, rows, strict=True) if tabs[t](r)] if t in tabs else out
+        if t == "TO_GENERATE":
+            # 生成中的排最前，不被「只列最近 3 页」截掉
+            shown.sort(key=lambda x: x["status"] != GENERATING)
+        return {
+            "items": shown,
+            "capped": capped,
+            "summary": {
+                "quota": sum(x["quota"] for x in out),
+                "pending_alloc": sum(x["pending_alloc"] for x in out),
+                "unbatched": sum(x["unbatched"] for x in out),
+            },
+            "synced_at": synced_at,
+        }
+    picked = [r for r in rows if tabs[t](r)] if t in tabs else list(rows)
+    fac = util.trim(factory)
+    if fac:
+        picked = [r for r in picked if fac in _orgs(r)]
+    if t == "TO_GENERATE":
+        # 生成中的排最前
+        picked.sort(key=lambda r: r["pi"] not in running)
+    one = picked[page.offset : page.offset + page.size]
+    pending, unbatched = _summary_counts(names, facs)
+    return {
+        "items": _views(one, [r["pi"] for r in one if _needs_detail(r, running)], running, facs),
+        "total": len(picked),
+        "page": page.page,
+        "page_size": page.size,
+        "capped": capped,
+        "summary": {"quota": sum(int(r["quota"] or 0) for r in rows), "pending_alloc": pending, "unbatched": unbatched},
+        "synced_at": synced_at,
+    }
+
+
+def _rule2_context(pi: str, customer: str, facs: tuple[str, ...] | None, prefix2: str | None, last2: int) -> dict:
+    """生成页第二 SN 的「选规则」：规则库选项（只列第二 SN 用的和还没用过的前缀）、默认前缀（第二 SN 没有默认值）、
+    本 PI 已占用的第二前缀及锁定的格式、第二前缀的最大号与下一个号。"""
+    with rules.second():
+        return {
+            "rule_options": rules.options(pi, customer, facs),
+            "rule_prefix": rules.pi_prefix(pi),
+            "prefix_locked": rules.pi_prefix_locked(pi),
+            "rule": rules.info(rules.pi_default(pi)),
+            "counter": {"prefix": prefix2, "last_seq_dec": last2, "next_seq": last2 + 1},
+        }
+
+
+def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> dict:
+    """生成详情：PI 头、各单据（含已离开快照的已出号单据）及物料行、规则选项、计数、生成任务、空号段。
+    普通操作员只看授权组织的单据（每张单据只属于一个生产组织），计数、任务、号段也只含这些单据的。"""
+    from app.core.errors import ErrorCode, biz
+
+    pi = util.trim(pi_in)
+    if not pi and not util.blank(bill_no):
+        b = orders.bill(bill_no)
+        if b is None:
+            led = changes.ledger(util.trim(bill_no))
+            pi = "" if led is None else led["pi"]
+        else:
+            pi = b.pi
+    if not pi:
+        raise biz(ErrorCode.PI_REQUIRED)
+    facs = cu.read_factories(None)
+    fsql, fargs = factories.scope_sql(facs, "org_code")
+    snap = db.all("SELECT * FROM sn_prd_mo WHERE pi = %s" + fsql + " ORDER BY bill_no, seq", pi, *fargs)
+    keys = [(r["bill_no"], r["seq"]) for r in snap]
+    counts, fills, lens, units = orders.line_extras(keys)
+    # 表头客户取本 PI 第一个非空的客户编码（客户编码为空的单据照常列出）
+    customer = next((r["customer_code"] for r in snap if r["customer_code"]), None) or orders.customer_of_pi(pi) or ""
+    # 接号的最大号：本 PI 规则前缀的最大号（同一前缀各 PI 共用一套流水）；没选规则为 0
+    prefix = generate.prefix_of(pi)
+    last = rules.prefix_last(prefix)
+    # 双 SN：第二 SN 的前缀与最大号
+    is_dual = rules.is_dual(pi)
+    with rules.second():
+        prefix2 = generate.prefix_of(pi) if is_dual else None
+    last2 = rules.prefix_last(prefix2)
+    ls = {(x.bill_no, x.seq): x for x in generate._load_lines(pi, keys)}
+    bills: dict[str, dict] = {}
+    for r in snap:
+        k = (r["bill_no"], r["seq"])
+        b = bills.setdefault(
+            r["bill_no"],
+            {
+                "bill_no": r["bill_no"],
+                "po": r["po"],
+                "customer_code": r["customer_code"],
+                "org_code": r["org_code"],
+                "org_name": r["org_name"],
+                "in_snapshot": True,
+                "lines": [],
+            },
+        )
+        if r["modify_time"] is not None and (b.get("_mt") is None or r["modify_time"] > b["_mt"]):
+            b["_mt"] = r["modify_time"]
+        x = ls[k]
+        v = orders.line_view(
+            r,
+            counts.get(k),
+            fills.get(k),
+            rules.info(x.res, x.length, last + 1, x.unit, x.attach),
+            lens.get(k),
+            units.get(k),
+        )
+        v["issues"] = x.issues
+        # 双 SN：第二 SN 的规则（单 SN 为 None）
+        v["rule2"] = rules.info(x.res2, x.length, last2 + 1, x.unit, x.attach) if is_dual else None
+        # 物料行失效（line_void）：整行置灰、不能勾选，不计订单数、可生成
+        v["void"] = x.void
+        # 金蝶业务状态、领料状态（状态码，空 = 未取到）：生成页「业务状态」列显示
+        v["biz_status"] = r.get("biz_status") or ""
+        v["pick_status"] = r.get("pick_status") or ""
+        if x.void:
+            v["quota"] = 0
+        b["lines"].append(v)
+    # 各单据挂在本 PI 下本系统生成的号：待分配、待推送枚数（单据分配状态与分配页左侧同一口径），
+    # 及各物料行现有号的开始 / 结束 SN 号（最小、最大的完整 SN，与分配页物料行同一口径），按物料行一次取出；
+    # 导入的号不在生成页，不计（否则只有导入号的单据分配后会在「可生成」页签置灰）
+    isql, iargs = factories.item_scope_sql(facs)
+    items: dict[str, tuple[int, int]] = {}
+    line_sn: dict[tuple[str, int], tuple[str, str]] = {}
+    for r in db.all(
+        "SELECT bill_no, bill_seq, SUM(status = 'PENDING_ALLOC') pending, SUM(status = 'TO_PUSH') to_push, "
+        + util.sn_min()
+        + " a, "
+        + util.sn_max()
+        + " b FROM sn_item "
+        "WHERE pi_no = %s AND origin = 'GEN'" + isql + " GROUP BY bill_no, bill_seq",
+        pi,
+        *iargs,
+    ):
+        p, q = items.get(r["bill_no"], (0, 0))
+        items[r["bill_no"]] = (p + int(r["pending"] or 0), q + int(r["to_push"] or 0))
+        line_sn[(r["bill_no"], int(r["bill_seq"]))] = (r["a"], r["b"])
+    for b in bills.values():
+        for v in b["lines"]:
+            a, z = line_sn.get((v["bill_no"], v["seq"]), (None, None))
+            v["start_sn"], v["end_sn"] = a, z
+    # 已出号但不在快照（或号挂在本 PI 下）的单据
+    in_pi = set(db.column("SELECT DISTINCT bill_no FROM sn_prd_mo WHERE pi = %s", pi))
+    other = sorted(no for no in items if no not in in_pi)
+    for no in other:
+        led = changes.ledger(no) or {}
+        bills[no] = {
+            "bill_no": no,
+            "po": "",
+            "customer_code": led.get("customer_code", ""),
+            "org_code": led.get("org_code", ""),
+            "org_name": led.get("org_name", ""),
+            "in_snapshot": orders.bill(no) is not None,
+            "lines": [],
+        }
+    if facs is not None and not bills:
+        # 这张 PI 没有授权组织的单据
+        raise biz(ErrorCode.FACTORY_FORBIDDEN, factory=cu.scope_text())
+    from app.modules.sn.services.allocation import bill_state
+
+    states = changes.bill_states(list(bills))
+    # 单据号段：现有号的号段数与枚数、本单据删号腾出的空闲号段数与枚数（单据头标签，点开看明细）
+    gap = generate.gaps_of(pi)
+    seg_counts = generate.bill_segment_counts(pi, list(bills), facs)
+    free_counts: dict[str, list[int]] = {}
+    for g in generate.free_segments(prefix, gap["last_seq"]) if gap["truncated"] else gap["segments"]:
+        c = free_counts.setdefault(g["bill_no"], [0, 0])
+        c[0] += 1
+        c[1] += g["qty"]
+    for no, b in bills.items():
+        uc, fc = seg_counts.get(no, (0, 0)), free_counts.get(no, [0, 0])
+        b["segments"] = {"use_count": uc[0], "use_qty": uc[1], "free_count": fc[0], "free_qty": fc[1]}
+        b["modify_time"] = orders.k3_time(b.get("_mt"))
+        b["state"] = states.get(no, changes.EMPTY_STATE)
+        b["pending_alloc"] = items[no][0] if no in items else 0
+        # 单据分配状态：PENDING 待分配 / PROCESSING 待处理 / ALLOCATED 已分配；本 PI 下还没有号为 None。
+        # 已分配的单据在生成页「可生成」页签置灰、不可勾选（生成须先勾选）
+        b["alloc_state"] = bill_state(*items[no]) if no in items else None
+        b["total_qty"] = sum(x["qty"] for x in b["lines"] if not x["void"])
+        b["generated_qty"] = sum(x["generated_qty"] for x in b["lines"])
+        b["quota"] = sum(x["quota"] for x in b["lines"])
+    stats = item_stats([pi], facs, gen_only=True).get(pi, {})
+    running = db.one("SELECT * FROM sn_gen_job WHERE running_pi = %s", pi)
+    if running is not None and not any(generate.in_scope(facs, x) for x in json.loads(running["plan_json"])["items"]):
+        # 别的组织正在生成：不显示它的进度，生成、撤销仍会因 PI 操作锁被拒绝
+        running = None
+    return {
+        "pi_no": pi,
+        "customer_code": customer,
+        # 与订单页同一排序：修改日期新的在前（已不在快照、没有修改日期的排后），同一时间单据编号大的在前
+        "bills": [
+            {k: v for k, v in b.items() if k != "_mt"}
+            for b in sorted(
+                bills.values(),
+                key=lambda x: (x.get("_mt") is not None, x.get("_mt") or datetime.min, x["bill_no"]),
+                reverse=True,
+            )
+        ],
+        # 前缀最大号与下一个号（同一前缀各 PI 共用一套流水）；reserve_start 早先的号段预留已取消，恒为 null
+        "counter": {"last_seq_dec": last, "next_seq": last + 1, "reserve_start": None, "prefix": prefix},
+        "summary": {
+            "total_qty": sum(b["total_qty"] for b in bills.values()),
+            "generated_qty": gen_own([pi], facs).get(pi, 0),
+            "transferred_in": stats.get("transferred_in", 0),
+            "allocated_qty": stats.get("allocated", 0),
+            "pending_alloc": stats.get("pending", 0),
+            "quota": sum(b["quota"] for b in bills.values()),
+            "suspended": stats.get("suspended", 0),
+        },
+        # 双 SN 开关（有号时锁定）与第二 SN 的规则选项、默认前缀、锁定的前缀、前缀最大号（单 SN 时 rule2 为 None）
+        "dual": dual.view(pi),
+        "rule2": None if not is_dual else _rule2_context(pi, customer, facs, prefix2, last2),
+        "rule_options": rules.options(pi, customer, facs),
+        # 「选规则」的默认前缀：本 PI 已生成的号还在时为已用的前缀及其格式（见 rules.pi_prefix）
+        "rule_prefix": rules.pi_prefix(pi),
+        # 本 PI 已占用的前缀 → 锁定的格式（进制、流水位数不能改；号全部删掉后仍锁定，见 rules.pi_prefix_locked）
+        "prefix_locked": rules.pi_prefix_locked(pi),
+        "limits": generate.limits(),
+        "running_job": None if running is None else generate.progress(running["gen_batch"]),
+        "jobs": generate.jobs(pi, 20, facs),
+        # 空号段（删号腾出的流水）：生成时可选用（预演的流水来源 RANGE）
+        "gaps": gap,
+        # 物料行失效条件（全系统一套，页签行「过滤配置」弹窗）
+        "void_rule": line_void.view(),
+    }

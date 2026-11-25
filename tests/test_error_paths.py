@@ -107,7 +107,7 @@ def test_duplicate_full_sn_rolls_back_whole_generation(w, sql):
 
 def test_delete_errors_and_pi_lock_busy(w, sql):
     """删号的错误路径；PI 操作锁被占用时分配、删号、生成立即提示稍后再试（不排队）；生成中不能删。"""
-    from app.services import locks
+    from app.platform import locks
 
     _, pi, bill = mk(w, ("M1", 2), ("M2", 1))
     ok(w.bind_pi(pi, w.rule(P())))

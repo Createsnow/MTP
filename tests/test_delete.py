@@ -299,7 +299,7 @@ def test_delete_sn_in_pending_batch_voids_and_rebuilds(w, api, sql):
     w.generate(pi, seq=(1, 6))
     w.allocate(pi)
     w.push()
-    from app.services import delivery
+    from app.modules.sn.services import delivery
 
     delivery.self_check()
     assert not sql.count(
@@ -312,7 +312,7 @@ def test_delete_does_not_void_batch_confirmed_meanwhile(w, api, sql, monkeypatch
     import threading
 
     from app.core.security import CurrentUser
-    from app.services import deletion, delivery
+    from app.modules.sn.services import deletion, delivery
 
     org = w.org(uid("O")[:10])
     w.enable_mes(org, batch_size=3)

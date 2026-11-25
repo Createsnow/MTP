@@ -35,11 +35,10 @@ from app.core.security import CurrentUser
 from app.db import init_db
 from app.db.session import PoolExhausted, db, is_integrity, is_lock_conflict
 from app.middleware.request_id import WRITE_METHODS, RequestIdMiddleware
-from app.platform import events
+from app.platform import audit as audit_svc
+from app.platform import demo_seed, events, locks, partitions
 from app.platform import module as modules
 from app.platform.module import Job, Module, Step
-from app.services import audit as audit_svc
-from app.services import demo_seed, locks, partitions
 
 log = structlog.get_logger()
 

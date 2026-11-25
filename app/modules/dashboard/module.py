@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.api.routes import dashboard
+from app.modules.dashboard.routes import dashboard
 from app.platform.module import Module
 
 MODULE = Module(

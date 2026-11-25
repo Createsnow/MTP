@@ -92,7 +92,7 @@ def test_retry_deadlock_redoes_whole_transaction_outside_tx(app_client):
 
 def test_generation_redone_after_deadlock(w, sql, monkeypatch):
     """生成事务撞上死锁（整笔已回滚）：PI 操作锁还在手里，按原计划整笔重做，任务成功，号、计数、规则都只有一份。"""
-    from app.services import generate
+    from app.modules.sn.services import generate
 
     org, pi, bill = _mk(w, 50, mes=False)
     real = generate._generate_in_tx
@@ -117,7 +117,7 @@ def test_generation_redone_after_deadlock(w, sql, monkeypatch):
 
 def test_generation_fails_after_repeated_deadlocks(w, sql, monkeypatch):
     from app.db import mysql
-    from app.services import generate
+    from app.modules.sn.services import generate
 
     org, pi, bill = _mk(w, 5, mes=False)
     calls = []
@@ -180,7 +180,7 @@ def test_concurrent_generation_on_many_pis(w, sql):
 
 def test_generation_slots_queue_jobs(w, monkeypatch):
     """同时写号池的生成数有上限：名额占满时当场生成排队，等不到报稍后重试，任务记为失败（不留号）。"""
-    from app.services import generate
+    from app.modules.sn.services import generate
 
     monkeypatch.setenv("SN_GEN_CONCURRENCY", "1")
     monkeypatch.setattr(generate, "SLOT_WAIT_SECONDS", 0.2)
@@ -205,7 +205,7 @@ def _task(sql, org, key):
 
 def test_push_task_waits_after_lock_conflict_then_resumes(w, sql, monkeypatch):
     """推送任务认领下一批时撞上死锁：不停止，转为等待、稍后自动接着推（报告里停在 STOPPED，要人工继续推送）。"""
-    from app.services.delivery import push
+    from app.modules.sn.services.delivery import push
 
     org, pi, bill = _mk(w, 12, batch_size=5)
     w.generate(pi)
@@ -231,7 +231,7 @@ def test_push_task_waits_after_lock_conflict_then_resumes(w, sql, monkeypatch):
 
 
 def test_push_task_stops_after_repeated_lock_conflicts(w, sql, monkeypatch):
-    from app.services.delivery import push
+    from app.modules.sn.services.delivery import push
 
     org, pi, bill = _mk(w, 3)
     w.generate(pi)
@@ -248,7 +248,7 @@ def test_push_task_stops_after_repeated_lock_conflicts(w, sql, monkeypatch):
 
 def test_scheduler_claims_only_free_push_workers(w, sql, monkeypatch):
     """调度只认领空闲推送线程数那么多个任务：其余留在排队，不先标成运行中（报告里推送线程 8 个、运行中峰值 72）。"""
-    from app.services.delivery import push
+    from app.modules.sn.services.delivery import push
 
     made = []
     for _ in range(3):
@@ -278,7 +278,7 @@ def test_scheduler_claims_only_free_push_workers(w, sql, monkeypatch):
 def test_start_task_for_many_new_orgs_at_once(app_client, sql):
     """各组织同时建第一个推送任务（分配后启动推送）：互不卡住，不因死锁报错。"""
     from app.core.security import CurrentUser
-    from app.services import delivery
+    from app.modules.sn.services import delivery
 
     orgs = [uid("S")[:12] for _ in range(12)]
     start = threading.Barrier(len(orgs))

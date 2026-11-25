@@ -1,5 +1,5 @@
+from app.modules.sn.services.transfers import LineSpec, TransferRequest
 from app.schemas.common import In
-from app.services.transfers import LineSpec, TransferRequest
 
 
 class TransferLineIn(In):

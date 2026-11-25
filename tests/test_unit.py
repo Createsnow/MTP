@@ -16,7 +16,7 @@ from app.core.errors import ErrorCode
 from app.core.scheduler import Cron
 from app.db.migrate import create_statement, migrations, schema_tables
 from app.middleware.request_id import request_id_of
-from app.services import files, k3, mes_client
+from app.platform import files, k3, mes_client
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -171,8 +171,8 @@ def test_validation():
 
 
 def test_custom_rule_defaults_four_digits_without_length():
+    from app.modules.sn.services import rules
     from app.schemas.rule import CustomRuleIn
-    from app.services import rules
 
     c = CustomRuleIn(prefix="6090001").model_dump()
     s = rules._custom_spec(c)
@@ -181,7 +181,7 @@ def test_custom_rule_defaults_four_digits_without_length():
 
 
 def test_rule_format_text_names_length_as_meters():
-    from app.services import rules
+    from app.modules.sn.services import rules
 
     assert rules.format_text(FULL) == "光-SN + 4 位 10 进制流水 + - + 米数（补足 5 位） + M + 单位 + #尾"
     assert rules.format_text(HX) == "HX + 6 位 10 进制流水 + 米数 + A"
@@ -189,7 +189,7 @@ def test_rule_format_text_names_length_as_meters():
 
 
 def test_spec_without_length_drops_padding_and_separators():
-    from app.services import rules
+    from app.modules.sn.services import rules
 
     s = rules.normalize(rules.SpecIn(" P ", "", 10, 4, None, False, 5, "-", "M", True))
     assert (s.prefix, s.length_pad, s.sep_before, s.sep_after, s.with_unit) == ("P", 0, "", "", True)
@@ -292,8 +292,8 @@ def test_gzip_body_is_byte_identical_across_calls():
 
 def test_mes_request_gunzip_is_capped():
     """MES 接口的 gzip 请求体：正常报文照常解压；解压后超过上限、不是合法 gzip、被截断的都返回 400，不解进内存。"""
-    from app.api.routes import mes
     from app.core.exceptions import MesError
+    from app.modules.sn.routes import mes
 
     body = json.dumps({"pi": "PI-1", "billNo": "MO-1"}).encode("utf-8")
     assert mes._gunzip(gzip.compress(body)) == body
@@ -705,15 +705,15 @@ def test_db_target_env_overrides_dotenv(monkeypatch):
     ],
 )
 def test_failed_write_action_follows_the_path(method, path, action):
-    from app.services.audit import action_for
+    from app.platform.audit import action_for
 
     assert action_for(method, path) == action
 
 
 def test_mes_gunzip_matches_gzip_decompress_within_limit():
     """MES 请求体 gzip 解压：限额内与 gzip.decompress 一致（空请求体、多段、段后补 0）；超限、不合法返回 400。"""
-    from app.api.routes.mes import MAX_INFLATED, _gunzip
     from app.core.exceptions import MesError
+    from app.modules.sn.routes.mes import MAX_INFLATED, _gunzip
 
     ok = [
         b"",
@@ -768,7 +768,7 @@ def test_emp_no_and_password_rules():
     """工号 3–32 位字母、数字和 -；密码 4–64 位，同时含字母和数字，可含 ! @ # $ & * -。"""
     from app.core.exceptions import BizError
     from app.core.security import check_policy
-    from app.services.users import _EMP_NO
+    from app.modules.org.services.users import _EMP_NO
 
     for good in ("abc", "a-1", "HQ-01-A", "admin", "A" * 32):
         assert _EMP_NO.match(good), good
@@ -798,7 +798,7 @@ def test_emp_no_and_password_rules():
 )
 def test_import_sn_rejects_spaces_and_invisible_chars(sn, bad):
     """导入的 SN 含空白或看不见的字符时报 SN_SPACE，免得「看着一样」的号绕过号池唯一键防重。"""
-    from app.services import sn_import
+    from app.modules.sn.services import sn_import
 
     r = sn_import.Row(2, sn=sn)
     sn_import._check_values(r, {})

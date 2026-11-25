@@ -1135,7 +1135,7 @@ def test_workbench_lists_status_and_buttons(w, api):
 def test_workbench_batched_line_checks_match_single_pi(w, api, sql):
     """生成页列表一次判断多张 PI（generate.load_lines_of）：每张 PI 的状态、原因与单独列出时相同；
     冻结、失去对应按单据判断，不串到同一次判断的别的 PI。"""
-    from app.services import generate
+    from app.modules.sn.services import generate
 
     cust = uid("CB")
     _, need, _ = mk(w, ("M1", 3), customer=cust)
@@ -1366,7 +1366,8 @@ def test_generate_context_line_start_end_sn(w, api, sql):
 def test_interrupted_job_recovered_only_after_owner_exits(w, sql):
     """多实例：执行生成的实例退出后（PI 操作锁随连接释放）定期回收把 RUNNING 任务标为中断并释放 PI；
     锁还被持有（仍在执行）时不动它。"""
-    from app.services import generate, locks
+    from app.modules.sn.services import generate
+    from app.platform import locks
 
     org, pi, bill = mk(w, ("M1", 3))
     ok(w.bind_pi(pi, w.rule(P())))
