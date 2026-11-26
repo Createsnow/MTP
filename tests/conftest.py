@@ -727,6 +727,8 @@ _SN_TABLES = (
     "sn_item_sub",
     "sn_item_sub_deleted",
     "sn_item",
+    "sn_registry",
+    "sn_prefix_claim",
     "sn_bill_stat",
     "sn_bill_stat_dirty",
     "sn_gen_job",

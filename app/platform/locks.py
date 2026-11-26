@@ -146,3 +146,65 @@ def sync_running() -> bool:
 def sync_lock(wait: bool) -> Held | None:
     """订单同步锁：wait = True 时最多等 SYNC_WAIT_SECONDS（按单据同步、全量重建排队），否则拿不到返回 None。"""
     return try_acquire("sync", ["orders"], SYNC_WAIT_SECONDS if wait else 0)
+
+
+# ------------------------------------------------------------------ 前缀入场（防两个互为开头的前缀同时进入使用）
+#
+# 前缀锁只锁「完全相同」的前缀：AB 与 ABC 是两把锁。两笔生成各自首次用 AB、ABC 时，长事务里互相看不到对方
+# 还没提交的规则版本，「不能一个是另一个的开头」的判断可能都通过。前缀入场把这类判断排成一队：
+# - 全局入场锁（PREFIX_ENTRY）只在判断时短暂持有（生成事务）或持有到短事务结束（选规则、规则库保存）；
+# - 生成事务在入场锁内把自己正在用的前缀登记为「在途」（sn_prefix_claim，独立短事务提交），事务结束删掉；
+#   在途登记只在它的前缀锁仍被持有时有效（进程退出、连接断开即自动失效，不会留下卡死的登记）；
+# - 后来的判断碰上与自己互为开头的在途前缀，先放开入场锁、等对方的前缀锁（对方提交或回滚），再重新判断：
+#   结果与对方先提交、再判断时完全相同（原有规则不变），只是不会再两边都放行。
+
+#: 入场锁（全局一把）
+PREFIX_ENTRY = "prefixentry"
+
+
+def held_prefix_keys() -> set[str]:
+    """本事务已持有的前缀锁键（同 hold_prefixes）；不在事务里为空。"""
+    local = db.tx_local()
+    return set() if local is None else set(local.get("prefix_locks", set()))
+
+
+def prefix_key_used(key: str) -> bool:
+    """有人（任一实例、任一连接）持有这个前缀锁。"""
+    return db.scalar("SELECT IS_USED_LOCK(%s)", _name("prefix", key)) is not None
+
+
+def wait_prefix_key(key: str, timeout: float) -> bool:
+    """等别人放开这个前缀锁（拿到即放开，不持有）；timeout 秒内等到返回 True。
+    MySQL 判定命名锁死锁（ER_USER_LOCK_DEADLOCK）时返回 False（调用方按稍后重试处理）。"""
+    try:
+        h = try_acquire("prefix", [key], max(1, int(timeout + 0.999)))
+    except pymysql.err.OperationalError:
+        return False
+    if h is None:
+        return False
+    h.release()
+    return True
+
+
+def entry_lock(timeout: float) -> Held | None:
+    """拿入场锁（最多等 timeout 秒）；拿不到返回 None。"""
+    return try_acquire(PREFIX_ENTRY, ["all"], max(1, int(timeout + 0.999)))
+
+
+def hold_entry_lock(timeout: float) -> bool:
+    """入场锁持有到当前事务结束（本事务已持有时不再拿）；拿不到返回 False。不在事务里时不加、返回 True。"""
+    local = db.tx_local()
+    if local is None or local.get("entry_lock"):
+        return True
+    h = entry_lock(timeout)
+    if h is None:
+        return False
+    local["entry_lock"] = True
+    db.after_tx(h.release)
+    return True
+
+
+def entry_held() -> bool:
+    """本事务持有入场锁到事务结束。"""
+    local = db.tx_local()
+    return bool(local and local.get("entry_lock"))

@@ -70,6 +70,8 @@ TABLE_OWNER: dict[str, str] = {
             "sn_item_sub",
             "sn_item_deleted",
             "sn_item_sub_deleted",
+            "sn_registry",
+            "sn_prefix_claim",
             "sn_import_item",
             "sn_bill_stat",
             "sn_bill_stat_dirty",

@@ -523,12 +523,118 @@ def check_prefix(
     locks.hold_prefix(prefix)
     if not gen:
         _prefix_rules(prefix, spec, pi, exclude_version, lock=True)
-        return
-    # 本事务里自己写过的（未提交）
-    _prefix_rules(prefix, spec, pi, exclude_version, lock=False)
-    # 最新已提交的：独立短事务里读（本事务的一致性快照可能早于别的生成提交；同前缀的提交已由前缀锁排在前面）
-    with db.new_tx():
+    else:
+        # 本事务里自己写过的（未提交）
         _prefix_rules(prefix, spec, pi, exclude_version, lock=False)
+    # 最新已提交的：在前缀入场队列里、独立短事务读（本事务的一致性快照可能早于别的生成提交；同前缀的提交已由前缀锁
+    # 排在前面，互为开头的前缀由入场队列排在前面，见 _enter）。判断规则与上面相同
+    _enter(CLAIM_PLAIN, prefix, pi, lambda: _prefix_rules(prefix, spec, pi, exclude_version, lock=False), gen)
+
+
+# ------------------------------------------------------------------ 前缀入场（见 locks 的「前缀入场」）
+
+#: 在途登记的种类：P 普通前缀 / I 识别码前缀层（inc_head）
+CLAIM_PLAIN = "P"
+CLAIM_INC = "I"
+
+
+def _claim_lock_key(kind: str, prefix: str) -> str:
+    """在途登记占着的前缀锁键：普通前缀为前缀本身，识别码为识别码前缀锁（见 _inc_lock_key）。"""
+    return prefix if kind == CLAIM_PLAIN else _inc_lock_key(prefix)
+
+
+def _claims_conflict(kind: str, prefix: str, other_kind: str, other: str) -> bool:
+    """两个前缀同时在用是否违反「不能一个是另一个的开头」（与 _prefix_rules、_inc_guard 的规则相同）：
+    不同的前缀一个是另一个的开头时冲突；完全相同时，普通前缀之间是共用、识别码前缀层之间各取各的值（都不冲突），
+    普通前缀与识别码前缀层相同冲突。"""
+    if not _overlap(prefix, other):
+        return False
+    return prefix != other or kind != other_kind
+
+
+def _blocking_claim(kind: str, prefix: str, pi: str | None, mine: set[str]) -> dict | None:
+    """别的 PI 正在生成（在途登记、前缀锁仍被持有）、与 prefix 冲突的前缀；没有为 None。
+    已失效的在途登记（前缀锁已无人持有：事务已结束或进程已退出）顺手删掉。在独立短事务里调用（读最新已提交的）。
+    mine：调用方事务已持有的前缀锁键（独立短事务里看不到调用方事务的状态，须事先取好）。"""
+    heads = _heads(prefix) + [prefix]
+    rows = db.all(
+        "SELECT prefix, kind, pi_no FROM sn_prefix_claim WHERE pi_no <> %s AND "
+        f"(prefix LIKE %s OR prefix IN ({marks(len(heads))}))",
+        pi or "",
+        util.like_prefix(prefix),
+        *heads,
+    )
+    for r in rows:
+        if not _claims_conflict(kind, prefix, r["kind"], r["prefix"]):
+            continue
+        key = _claim_lock_key(r["kind"], r["prefix"])
+        if key in mine:
+            # 本事务自己持有这把前缀锁（同一事务里的另一个前缀，由双 SN 前缀配对等规则另行判断）
+            continue
+        if locks.prefix_key_used(key):
+            return r
+        db.exec(
+            "DELETE FROM sn_prefix_claim WHERE prefix = %s AND kind = %s AND pi_no = %s",
+            r["prefix"],
+            r["kind"],
+            r["pi_no"],
+        )
+    return None
+
+
+def _enter(kind: str, prefix: str, pi: str | None, verify, gen: bool) -> None:
+    """前缀入场：在入场锁内、按最新已提交的数据再判断一次（verify，规则不变）。与自己冲突的前缀正在别的 PI 的生成里
+    （在途）时，先放开入场锁等它结束（提交或回滚）再重新判断——结果与对方先结束、再判断时相同。
+    - gen（生成事务）：判断通过后把本前缀登记为在途（独立短事务提交），本事务结束时删掉；入场锁随即放开。
+    - 短事务（选规则、规则库保存）：入场锁持有到事务结束（其间别的前缀进不了场，本事务写的版本提交后才放开）。
+    不在事务里时只判断（与原来相同：不加锁、不写）。等待合计最多 PREFIX_WAIT_SECONDS 秒，等不到报稍后重试。"""
+    if db.tx_local() is None:
+        return
+    deadline = time.monotonic() + locks.PREFIX_WAIT_SECONDS
+    mine = locks.held_prefix_keys()
+    while True:
+        held = None
+        if not locks.entry_held():
+            held = locks.entry_lock(max(0.0, deadline - time.monotonic()))
+            if held is None:
+                raise biz(ErrorCode.CONFLICT_RETRY)
+        try:
+            with db.new_tx():
+                blocking = _blocking_claim(kind, prefix, pi, mine)
+            if blocking is None:
+                with db.new_tx():
+                    verify()
+                if gen:
+                    with db.new_tx():
+                        db.exec(
+                            "INSERT INTO sn_prefix_claim(prefix, kind, pi_no, created_at) VALUES (%s,%s,%s,%s) "
+                            "ON DUPLICATE KEY UPDATE pi_no = VALUES(pi_no), created_at = VALUES(created_at)",
+                            prefix,
+                            kind,
+                            pi or "",
+                            util.now(),
+                        )
+                    db.after_tx(lambda: _release_claim(kind, prefix, pi or ""))
+                elif held is not None:
+                    # 短事务：入场锁持有到事务结束
+                    local = db.tx_local()
+                    if local is not None:
+                        local["entry_lock"] = True
+                    db.after_tx(held.release)
+                    held = None
+                return
+        finally:
+            if held is not None:
+                held.release()
+        left = deadline - time.monotonic()
+        if left <= 0 or not locks.wait_prefix_key(_claim_lock_key(blocking["kind"], blocking["prefix"]), left):
+            raise biz(ErrorCode.CONFLICT_RETRY)
+
+
+def _release_claim(kind: str, prefix: str, pi: str) -> None:
+    """生成事务结束（提交或回滚）后删掉本事务的在途登记（只删自己的）。"""
+    with db.new_tx():
+        db.exec("DELETE FROM sn_prefix_claim WHERE prefix = %s AND kind = %s AND pi_no = %s", prefix, kind, pi)
 
 
 def _prefix_rules(
@@ -866,9 +972,8 @@ def check_inc(
         scope = inc_scope(inc.head, customer)
     locks.hold_prefixes([_inc_lock_key(inc.head)])
     _inc_verify(inc, value, spec, pi, customer, scope)
-    if gen:
-        with db.new_tx():
-            _inc_verify(inc, value, spec, pi, customer, scope)
+    # 最新已提交的：在前缀入场队列里再判断一次（见 _enter；判断规则与上面相同）
+    _enter(CLAIM_INC, inc.head, pi, lambda: _inc_verify(inc, value, spec, pi, customer, scope), gen)
 
 
 def inc_usable(res: Resolved, pi: str) -> bool:

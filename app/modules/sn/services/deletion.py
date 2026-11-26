@@ -28,7 +28,7 @@ from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, marks
 from app.modules.order.services import changes, orders
-from app.modules.sn.services import bill_stats, delivery, generate, rules
+from app.modules.sn.services import bill_stats, delivery, generate, registry, rules
 from app.platform import audit, locks
 
 #: 第二 SN 存档的列（sn_item_sub 与 sn_item_sub_deleted 同名）
@@ -280,6 +280,8 @@ def delete(
         bill_stats.touch_ids(ids)
         for i in range(0, len(ids), CHUNK):
             part = ids[i : i + CHUNK]
+            # 全公司 SN 唯一登记随号（及第二 SN）一起移除（之后可以重新生成同样的号，与原来相同）
+            registry.remove_items(part)
             db.exec(
                 f"INSERT INTO sn_item_deleted({_ARCHIVE_COLS}, del_no, deleted_by, deleted_at, reason) "
                 f"SELECT {_ARCHIVE_COLS}, %s, %s, %s, %s FROM sn_item WHERE id IN ({marks(len(part))})",

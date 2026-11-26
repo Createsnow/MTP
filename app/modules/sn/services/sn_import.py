@@ -50,7 +50,7 @@ from app.core.errors import ErrorCode, biz
 from app.core.security import CurrentUser
 from app.db.session import db, is_duplicate, marks
 from app.modules.order.services import changes, line_void, orders
-from app.modules.sn.services import bill_stats, generate, rules
+from app.modules.sn.services import bill_stats, generate, registry, rules
 from app.platform import audit, locks
 
 #: 单个文件上限
@@ -723,6 +723,8 @@ def run(cu: CurrentUser, content: bytes, file_name_in: str | None) -> dict:
                         for r in part
                     ],
                 )
+                # 全公司 SN 唯一登记（兜底：与第二 SN 相同时也由数据库拦下，见 registry）
+                registry.add(sns, registry.FIRST)
                 # 导入的号以前在本系统生成、删过（可能已交付 MES）：rev 接着删前的往上加
                 generate.continue_deleted_rev(sns)
                 bill_stats.touch_many((r.pi, r.bill) for r in part)
@@ -732,6 +734,9 @@ def run(cu: CurrentUser, content: bytes, file_name_in: str | None) -> dict:
                 # 检查之后别人刚生成或导入了同样的号。用加锁读读最新提交的：普通读是本事务开始时的快照，
                 # 看不到对方刚提交的号（报出的 SN 会不准）；这里之后整笔回滚，锁随即释放
                 hit = db.one(f"SELECT sn FROM sn_item WHERE sn IN ({marks(len(sns))}) LIMIT 1 LOCK IN SHARE MODE", *sns)
+                if hit is None:
+                    # 与第二 SN 相同（全公司 SN 唯一登记拦下的）
+                    hit = registry.holder(sns)
                 raise biz(ErrorCode.IMPORT_CONFLICT, sn=hit["sn"] if hit else part[0].sn) from None
         bills = sorted({r.bill for r in rows})
         for b in bills:
@@ -937,6 +942,8 @@ def delete(cu: CurrentUser, no_in: str | None) -> dict:
         bill_stats.touch_many((x["pi_no"], x["bill_no"]) for x in items)
         for i in range(0, len(ids), CHUNK):
             part = ids[i : i + CHUNK]
+            # 全公司 SN 唯一登记随号一起移除（之后可以重新导入同样的号，与原来相同）
+            registry.remove_items(part)
             db.exec(f"DELETE FROM sn_item WHERE id IN ({marks(len(part))})", *part)
         now = util.now()
         db.exec(

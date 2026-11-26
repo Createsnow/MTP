@@ -51,7 +51,7 @@ from app.core.security import CurrentUser
 from app.db.session import ER_LOCK_NOWAIT, db, error_no, is_deadlock, is_duplicate, marks, retry_deadlock
 from app.modules.order.services import changes, line_void, orders
 from app.modules.org.services import factories
-from app.modules.sn.services import bill_stats, rules, seg
+from app.modules.sn.services import bill_stats, registry, rules, seg
 from app.platform import audit, locks
 
 log = structlog.get_logger()
@@ -1542,6 +1542,8 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
                 if hit["origin"] == util.ORIGIN_IMPORT:
                     raise biz(ErrorCode.GEN_IMPORTED_SN, sn=hit["sn"], pi=hit["pi_no"]) from None
                 raise biz(ErrorCode.GEN_DUPLICATE_SN, sn=hit["sn"], pi=hit["pi_no"]) from None
+            # 全公司 SN 唯一登记（兜底：与第二 SN 相同时也由数据库拦下，见 registry）
+            _register_sns(sns, registry.FIRST)
             continue_deleted_rev(sns)
             if seq2 is not None:
                 _write_sub(
@@ -1677,6 +1679,24 @@ def _write_sub(
         if dup is None:
             raise biz(ErrorCode.CONFLICT_RETRY) from None
         raise biz(ErrorCode.GEN_DUPLICATE_SN, sn=dup["sn2"], pi=dup["seq_pi_no"]) from None
+    # 全公司 SN 唯一登记（兜底：与号池里的号相同时也由数据库拦下，见 registry）
+    _register_sns(sns, registry.SECOND)
+
+
+def _register_sns(sns: list[str], kind: int) -> None:
+    """生成事务内：刚写入的一块号登记到全公司 SN 唯一登记；与已有的号相同时整次回滚，报错与原来的撞号相同
+    （撞上导入的号 GEN_IMPORTED_SN，其余 GEN_DUPLICATE_SN）。"""
+    try:
+        registry.add(sns, kind)
+    except pymysql.err.IntegrityError as ex:
+        if not is_duplicate(ex):
+            raise
+        hit = registry.holder(sns)
+        if hit is None:
+            raise biz(ErrorCode.CONFLICT_RETRY) from None
+        if hit["origin"] == util.ORIGIN_IMPORT:
+            raise biz(ErrorCode.GEN_IMPORTED_SN, sn=hit["sn"], pi=hit["pi_no"]) from None
+        raise biz(ErrorCode.GEN_DUPLICATE_SN, sn=hit["sn"], pi=hit["pi_no"]) from None
 
 
 def continue_deleted_rev(sns: list[str]) -> None:
