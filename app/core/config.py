@@ -296,6 +296,14 @@ class Settings:
         return max(1, self.get_int("DB_POOL_SIZE", 20))
 
     @property
+    def db_io_timeout(self) -> int | None:
+        """数据库连接读写超时（秒）：查询卡住（MySQL 无响应、网络半断）时到点报错断开，不一直占着线程与池名额。
+        须长于请求、后台任务里最长的正常查询与锁等待（前缀锁 30 秒、汇总对账锁 60 秒、行锁 50 秒），低于 300 按 300；
+        0 = 不设超时。启动初始化与每日维护在 db.no_io_timeout() 里执行，不受此限（见 app/db/mysql.py）。"""
+        v = self.get_int("DB_IO_TIMEOUT", 600)
+        return None if v <= 0 else max(300, v)
+
+    @property
     def db_baseline_on_migrate(self) -> bool:
         return self.get_bool("DB_BASELINE_ON_MIGRATE", False)
 

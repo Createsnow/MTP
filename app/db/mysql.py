@@ -9,6 +9,10 @@
 否则并发一高，主名额被「拿着一条、等第二条」的请求占满，谁也等不到第二条，要等满 30 秒取连接超时才散开
 （100 户同时生成时中位耗时 32 秒即此）。所以一个实例最多同时占 2 × DB_POOL_SIZE 条池内连接，
 另加命名锁（PI 操作锁等）各占的一条独立连接。
+
+读写超时（DB_IO_TIMEOUT）：查询卡住（MySQL 无响应、网络半断）时到点报 2013 断开，按连接层故障丢弃这条连接、
+归还名额，不一直占着线程与池名额。启动初始化（建表迁移、汇总表整表回填、建分区）与每日维护（分区归档等）
+可能是长 DDL、整表扫描，在 ``db.no_io_timeout()`` 里执行，不受此限。
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ _depth: contextvars.ContextVar[int] = contextvars.ContextVar("sn_db_depth", defa
 _after: contextvars.ContextVar[list[Callable[[], None]] | None] = contextvars.ContextVar("sn_db_after", default=None)
 #: 当前事务提交前、在事务里要做的事（单据汇总标脏，见 services/bill_stats）：抛错则整笔回滚
 _before: contextvars.ContextVar[list[Callable[[], None]] | None] = contextvars.ContextVar("sn_db_before", default=None)
+#: True：本上下文里取的连接不设读写超时（启动初始化、每日维护，见模块说明）
+_no_timeout: contextvars.ContextVar[bool] = contextvars.ContextVar("sn_db_no_timeout", default=False)
 #: 当前事务内的小块状态（如本事务已持有的前缀锁，见 services/locks.hold_prefix）：随事务开始新建、结束丢弃
 _local: contextvars.ContextVar[dict | None] = contextvars.ContextVar("sn_db_local", default=None)
 
@@ -117,12 +123,15 @@ class Db:
         self._pool: queue.LifoQueue[pymysql.connections.Connection] = queue.LifoQueue()
         self._slots: threading.BoundedSemaphore | None = None
         self._spare: threading.BoundedSemaphore | None = None
+        self._io_timeout: int | None = None
 
     # ------------------------------------------------------------------ 连接
 
-    def configure(self, target: DbTarget, size: int) -> None:
+    def configure(self, target: DbTarget, size: int, io_timeout: int | None = None) -> None:
+        """io_timeout：每条连接的读写超时（秒），None 不设（运维脚本的长查询不受限）。"""
         self.close()
         self._target = target
+        self._io_timeout = io_timeout
         self._slots = threading.BoundedSemaphore(size)
         self._spare = threading.BoundedSemaphore(size)
 
@@ -132,8 +141,22 @@ class Db:
             raise RuntimeError("database not configured")
         return self._target
 
+    def _timeout_now(self) -> int | None:
+        return None if _no_timeout.get() else self._io_timeout
+
+    @staticmethod
+    @contextmanager
+    def no_io_timeout() -> Iterator[None]:
+        """其中取的连接（含命名锁连接）不设读写超时：长 DDL、整表扫描、长时间等命名锁用。"""
+        token = _no_timeout.set(True)
+        try:
+            yield
+        finally:
+            _no_timeout.reset(token)
+
     def connect_raw(self) -> pymysql.connections.Connection:
         t = self.target
+        timeout = self._timeout_now()
         return pymysql.connect(
             host=t.host,
             port=t.port,
@@ -144,6 +167,9 @@ class Db:
             autocommit=True,
             cursorclass=DictCursor,
             connect_timeout=30,
+            # 读写超时（见模块说明）。None = 不设（PyMySQL 默认一直等）
+            read_timeout=timeout,
+            write_timeout=timeout,
             # GROUP_CONCAT 默认只拼 1024 字节，超出静默截断（物料清单、批次号清单会少）
             init_command="SET SESSION group_concat_max_len = 1048576",
         )
@@ -162,6 +188,9 @@ class Db:
                     return self.connect_raw()
                 try:
                     conn.ping(reconnect=False)
+                    # 池里的连接可能是在不设超时的上下文里建的（或反之）：按本次取用的上下文重设。
+                    # PyMySQL 每次读写前按这两个属性设 socket 超时（uv.lock 锁定 2.2.8，tests/test_db_io_timeout 校验）
+                    conn._read_timeout = conn._write_timeout = self._timeout_now()
                     return conn
                 except pymysql.err.Error:
                     self._discard(conn)

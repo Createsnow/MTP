@@ -124,7 +124,13 @@ PLATFORM_STEPS = (
 
 
 def _start_daily():
-    return scheduler.start_daily(settings.partition_cron, partitions.maintain) if settings.maintain_enabled else None
+    return scheduler.start_daily(settings.partition_cron, _daily_maintain) if settings.maintain_enabled else None
+
+
+def _daily_maintain() -> None:
+    # 分区归档（整月拷贝 + DROP PARTITION）、建分区是长 DDL：不受连接读写超时限制
+    with db.no_io_timeout():
+        partitions.maintain()
 
 
 #: 底座的后台任务：每日维护（序号与各模块的任务统一排序）
@@ -145,7 +151,14 @@ def jobs(mods: list[Module]) -> list[Job]:
 
 def startup(mods: list[Module]) -> None:
     check_secret()
-    db.configure(settings.db_target(), settings.db_pool_size)
+    db.configure(settings.db_target(), settings.db_pool_size, settings.db_io_timeout)
+    # 启动初始化里有长 DDL（建表迁移、建分区）、整表回填、长时间等启动锁：不受连接读写超时限制
+    with db.no_io_timeout():
+        _init(mods)
+    log.info("sn_center_ready", retention_days=settings.audit_retention_days)
+
+
+def _init(mods: list[Module]) -> None:
     # 建表、建首个管理员、演示数据都是「先看空不空、再写」：几个进程同时启动时会都看到空库、都去写，
     # 后写的撞唯一键启动失败。整段放在跨进程的命名锁里依次做，后到的看到已建好就跳过
     held = locks.try_acquire("startup", ["init"], STARTUP_LOCK_SECONDS)
@@ -156,7 +169,6 @@ def startup(mods: list[Module]) -> None:
             step.run()
     finally:
         held.release()
-    log.info("sn_center_ready", retention_days=settings.audit_retention_days)
 
 
 @asynccontextmanager
