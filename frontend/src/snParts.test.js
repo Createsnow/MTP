@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  TEMPLATES, addIndex, attachText, attachWarn, maxSeqOf, seqText, autoIndex, blockReason, defaultParts, formatDate, fromSpec, insertAt, isoWeek, movePart, moveTo, newErrors, newPart,
+  TEMPLATES, addIndex, attachText, attachWarn, growWarn, maxSeqOf, seqText, autoIndex, blockReason, defaultParts, formatDate, fromSpec, insertAt, isoWeek, movePart, moveTo, newErrors, newPart,
   partValue, partsSig, sampleSegments, todayIn, toSpec,
 } from "./snParts.js";
 
@@ -336,4 +336,25 @@ test("附件项次：原样不补 0，示例分段着色", () => {
   const segs = sampleSegments(ps, ctx, "AB-10-0001", "0001", "", "", "10");
   assert.deepEqual(segs.map((g) => [g.text, g.cls]), [["AB", ""], ["-10-", "LINE"], ["0001", "SEQ"]]);
   assert.equal(sampleSegments(ps, ctx, "AB0001", "0001", "", "", "10"), null);
+});
+
+test("上限自动突破：流水之后紧跟的字符可能出现在流水里时提示可能重号（只提示，不拦）", () => {
+  const D10 = "0123456789", D36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const spec = (parts) => toSpec([P("TEXT", { text: "P" }), ...parts], ctx).spec;
+  // 带米数、米数前不填分隔符：4 位 1000 + 米数 15 与 5 位 10001 + 米数 5 都是 P100015
+  assert.equal(seqText(1000, 10, 4, D10, true) + "15", seqText(10001, 10, 4, D10, true) + "5");
+  assert.equal(growWarn(spec([P("SEQ"), P("LEN")]), D10), true);
+  assert.equal(growWarn(spec([P("SEQ"), P("SEP", { text: "-" }), P("LEN")]), D10), false, "米数前有分隔符");
+  assert.equal(growWarn(spec([P("SEQ"), P("TEXT", { text: "A" }), P("LEN")]), D36), true, "分隔符是流水里的字符");
+  assert.equal(growWarn(spec([P("SEQ", { grow: false }), P("LEN")]), D10), false, "不开自动突破时流水定长，不会撞");
+  // 不带米数：紧跟单位（字符表带字母时可能以字母开头）或后缀
+  assert.equal(growWarn(spec([P("SEQ"), P("UNIT")]), D10), false);
+  assert.equal(growWarn(spec([P("SEQ"), P("UNIT")]), D36), true);
+  assert.equal(growWarn(spec([P("SEQ"), P("TEXT", { text: "#A" })]), D10), false, "后缀首字符不在字符表里");
+  assert.equal(growWarn(spec([P("SEQ"), P("TEXT", { text: "9X" })]), D10), true);
+  assert.equal(growWarn(spec([P("SEQ")]), D10), false, "流水在最后");
+  // 规则版本（规则库）的字段名 length_sep_before 也认
+  assert.equal(growWarn({ seq_grow: true, with_length: true, length_sep_before: "" }, D10), true);
+  assert.equal(growWarn({ seq_grow: true, with_length: true, length_sep_before: "-" }, D10), false);
+  assert.equal(growWarn(null, D10), false);
 });

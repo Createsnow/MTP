@@ -271,6 +271,7 @@ import FactorySelect from "@/components/FactorySelect.vue";
 import HelpTip from "@/components/HelpTip.vue";
 import PageHead from "@/components/PageHead.vue";
 import { BASES, CHARSETS } from "@/constants";
+import { growWarn } from "@/snParts";
 import { useFactories } from "@/composables/useFactories";
 import { useAuthStore } from "@/stores/auth";
 
@@ -454,6 +455,15 @@ const growSaving = ref(false);
 async function setGrow(v: boolean) {
   const g = cur.value;
   if (!g) return;
+  // 打开时：这个前缀下有规则的流水后紧跟的字符可能出现在流水里（如米数前不填分隔符），加位前后可能重号——只提示，确认后照常打开
+  const cs = g.charset || CHARSETS[g.base] || CHARSETS[10];
+  if (v && g.rules.some((x: any) => growWarn({ ...(x.current || x.version || {}), seq_grow: true }, cs))) {
+    try {
+      await ElMessageBox.confirm(t("rules.growNoSepConfirm"), t("rules.seqGrow"), { type: "warning" });
+    } catch {
+      return;
+    }
+  }
   growSaving.value = true;
   try {
     await api.rulePrefixGrow({ prefix: g.prefix, seq_grow: v });

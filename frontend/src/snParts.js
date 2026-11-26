@@ -16,6 +16,7 @@
  *   （带识别码时为识别码的固定字符），head 为 attach_head，tail + 它与流水之间的固定字符为 attach_tail；同一前缀下锁定。
  *   后连接符不填（或以数字、小数点开头）时项次与流水分不开，可能重号（attachWarn，页面提示，不拦）；前连接符不影响。
  *   不带时请求体与原来相同（没有 with_attach / attach_head / attach_tail 字段）。
+ * - 上限自动突破开启、流水之后紧跟的字符可能出现在流水里（如米数前不填分隔符）时，加位前后可能重号（growWarn，页面提示，不拦）。
  *
  * 按位置换算（后台编码：前缀 + 流水 + 米数前分隔符 + 米数 + 米数后分隔符 + 单位 + 后缀）：
  * 流水之前 → prefix；流水与米数之间 → sep_before；米数与单位之间 → sep_after；最后一个米数 / 单位 / 流水之后 → suffix。
@@ -174,6 +175,24 @@ export function attachText(p, attach) {
 export function attachWarn(spec) {
   const t = spec?.attach_tail ?? "";
   return !!spec?.with_attach && (!t || ATTACH_CHARS.includes(t[0]));
+}
+
+/**
+ * 上限自动突破时流水位数会变（4 位用完接 5 位）：流水之后紧跟的第一个字符可能出现在流水里时，加位前后的号可能拼出相同的
+ * （如 4 位 1000 + 米数 15 与 5 位 10001 + 米数 5 都是 …100015；撞号时号池唯一键拦下、整次生成回滚）。只提示，不拦。
+ * 紧跟流水的：带米数时为米数前分隔符（不填时为米数本身，米数以数字开头居多）；不带米数、带单位时为单位（字符表带字母时
+ * 可能以字母开头）；都不带时为后缀（不填时流水在最后，不会撞）。spec 为 toSpec 的结果或规则版本（sep_before /
+ * length_sep_before 都认）；charset 为流水字符表。
+ */
+export function growWarn(spec, charset) {
+  if (!spec || spec.seq_grow === false || !charset) return false;
+  if (spec.with_length) {
+    const sep = (spec.sep_before ?? spec.length_sep_before ?? "").trim();
+    return !sep || charset.includes(sep[0]);
+  }
+  if (spec.with_unit) return /[^0-9]/.test(charset);
+  const suf = (spec.suffix ?? "").trim();
+  return !!suf && charset.includes(suf[0]);
 }
 
 /** 识别码的位数（结束值的位数）。 */

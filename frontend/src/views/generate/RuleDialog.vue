@@ -195,6 +195,8 @@
                       {{ t("generate.rule.seqGrow") }}
                     </span>
                   </el-tooltip>
+                  <!-- 自动突破开启、流水后紧跟的字符可能出现在流水里（如米数前不填分隔符）：加位前后可能重号，只提示、不拦 -->
+                  <span v-if="growDup" class="fi seq-short">{{ t("generate.rule.growNoSep") }}</span>
                   <span v-if="seqShort(p)" class="fi seq-short">
                     {{ t("generate.rule.seqTooShort", { need, max: maxSeq(p), len: p.len, base: p.base }) }}
                   </span>
@@ -296,7 +298,7 @@ import { useTime } from "@/composables/useTime";
 import { translateApiError } from "@/i18n";
 import {
   CUTS, DATE_FMTS, INC_MAX, PAD_MAX, PREFIX_MAX, SEP_MAX, SEPS, SEQ_LEN_MAX, TEMPLATES, TEXT_MAX,
-  SEQ_LEN_DEFAULT, addIndex, attachText, attachWarn, blockReason, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue,
+  SEQ_LEN_DEFAULT, addIndex, attachText, attachWarn, blockReason, growWarn, fromSpec, insertAt, maxSeqOf, moveTo, newErrors, newPart, partValue,
   partsSig, sampleSegments,
   seqLenFor, seqNeed, seqText as seqTextOf, textPart, todayIn, toSpec,
 } from "@/snParts.js";
@@ -578,6 +580,8 @@ const lockTitle = computed(() =>
 );
 /** 后连接符不填（或以数字、小数点开头）：项次与流水分不开，可能重号（只提示，保存时再确认一次） */
 const attachDup = computed(() => attachWarn(built.value.spec));
+/** 自动突破开启、流水后紧跟的字符可能出现在流水里：加位前后可能重号（只提示，保存时再确认一次） */
+const growDup = computed(() => growWarn(built.value.spec, CHARSETS[built.value.spec.base] ?? CHARSETS[10]));
 /** 前缀已归属本 PI 时附件项次段锁定（带不带、连接符与它相同）：不同时的提示，并且不能保存 */
 const attachLockTitle = computed(() => (locked.value ? attachLockError.value || undefined : undefined));
 const attachLockError = computed(() => {
@@ -824,10 +828,21 @@ async function confirmAttachDup() {
     return false;
   }
 }
+/** 自动突破开启、流水后没有分隔时保存前再提示一次可能重号（用户确认后照常保存） */
+async function confirmGrowDup() {
+  if (unchanged.value || !growDup.value) return true;
+  try {
+    await ElMessageBox.confirm(t("generate.rule.growNoSepConfirm"), t("generate.rule.dialogTitle"), { type: "warning" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 async function save() {
   if (!(await confirmChange())) return;
   if (!(await confirmCustRemoval())) return;
   if (!(await confirmAttachDup())) return;
+  if (!(await confirmGrowDup())) return;
   busy.value = "save";
   try {
     const body: Record<string, unknown> = { pi_no: props.pi, lines: refs(), ...(props.slot === 2 ? { slot: 2 } : {}) };
