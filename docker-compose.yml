@@ -16,6 +16,8 @@ services:
       dockerfile: Dockerfile
     image: sn-center-api:1.0.0
     restart: unless-stopped
+    # 停机时等进行中的请求处理完的最长时间（Docker 默认只等 10 秒就强杀）
+    stop_grace_period: 60s
     logging: *logging
     env_file:
       - path: .env
@@ -40,6 +42,8 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: sn-center-web:1.0.0
     restart: unless-stopped
+    # 停机时等进行中的请求处理完的最长时间（Docker 默认只等 10 秒就强杀）
+    stop_grace_period: 60s
     logging: *logging
     ports:
       - "${WEB_PORT:-80}:80"

@@ -167,7 +167,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # 后台生成任务由线程池自行跑完（解释器退出前会等待）；stop() 只置停止标志，先后无关
+        # stop() 只置停止标志，先后无关。SIGTERM 停机（docker stop）时进程随即退出，不等后台生成 / 推送线程：
+        # 生成事务回滚、由回收标为失败；推送租约过期后按原批次号接着推（MES 按批次号去重）
         for x in reversed(started):
             x.stop()
         db.close()
