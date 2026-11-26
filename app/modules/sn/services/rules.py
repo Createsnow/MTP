@@ -796,9 +796,15 @@ class IncScope:
 
 
 def inc_customers_of(head: str) -> tuple[str, ...] | None:
-    """识别码前缀已生效的适用客户；前缀还没有规则时 None。"""
+    """识别码前缀已生效的适用客户；前缀还没有规则时 None。
+    前缀的规则还是普通规则（当前版本不带识别码：本 PI 删光号后同前缀改用识别码，旧前缀已腾空，见 _inc_guard）时
+    也为 None：按还没有识别码规则处理（适用客户为本 PI 定的清单，生成时写进规则，见 _realize_inc）。"""
     r = rule_of_prefix(head)
-    return None if r is None else tuple(cust_list(r["inc_customers"]))
+    if r is None:
+        return None
+    if r["inc_customers"] is None and inc_of(current_version(r)) is None:
+        return None
+    return tuple(cust_list(r["inc_customers"]))
 
 
 def inc_scope(head: str, customer: str | None, c: dict | None = None) -> IncScope:
@@ -909,21 +915,34 @@ def inc_pick(pi: str, inc: Inc, customer: str | None, scope: IncScope | None = N
     return value
 
 
+def _overlapping_plain(head: str, pi: str) -> dict | None:
+    """与识别码前缀层 head 相同或一个是另一个开头的普通前缀（不带识别码的版本）；最多一行，没有为 None。
+    每个前缀取最早建的版本，按建的先后逐个看，跳过已腾空、只归 pi（prefix_released）和已废弃（prefix_abandoned）的，
+    第一个剩下的即冲突（没有这两种时与原来 ORDER BY id LIMIT 1 报的是同一个）。"""
+    heads = _heads(head)
+    cond = "inc_head IS NULL AND (prefix LIKE %s" + (f" OR prefix IN ({marks(len(heads))})" if heads else "") + ")"
+    args = [util.like_prefix(head), *heads]
+    for r in db.all(
+        "SELECT v.prefix, v.claimed_pi FROM sn_rule_version v JOIN (SELECT MIN(id) mid FROM sn_rule_version WHERE "
+        + cond
+        + " GROUP BY prefix) f ON f.mid = v.id ORDER BY v.id",
+        *args,
+    ):
+        if not prefix_released(r["prefix"], pi) and not prefix_abandoned(r["prefix"]):
+            return r
+    return None
+
+
 def _inc_guard(inc: Inc, value: int, spec: codec.Spec, pi: str, current: tuple[str, ...] | None) -> None:
     """识别码前缀的防重（只看前缀层 inc.head）：
     - 普通前缀与 head 相同或一个是另一个的开头、别的识别码前缀与 head 一个是另一个的开头：RULE_PREFIX_OVERLAP；
     - 这个值已归别的 PI（没释放）：RULE_INC_TAKEN（选规则后被别的 PI 先生成占走）；
     - 这个号段（完整前缀，含改选的已释放号段）已按别的进制 / 位数 / 字符表用过：RULE_PREFIX_FORMAT_LOCKED。
-    同一 head 下各值之间不互相校验：识别码位数锁定、紧跟前缀，值不同的号在这一位上一定不同。"""
+    同一 head 下各值之间不互相校验：识别码位数锁定、紧跟前缀，值不同的号在这一位上一定不同。
+    普通前缀已腾空、只归本 PI（prefix_released）或已废弃（prefix_abandoned）的不算（与 _overlapping 相同）：
+    本 PI 删光号后同前缀改用识别码（或改用与旧前缀互为开头的识别码前缀）不再被自己的旧前缀挡住。"""
     head = inc.head
-    heads = _heads(head)
-    plain = db.one(
-        "SELECT prefix, claimed_pi FROM sn_rule_version WHERE inc_head IS NULL AND (prefix LIKE %s"
-        + (f" OR prefix IN ({marks(len(heads))})" if heads else "")
-        + ") ORDER BY id LIMIT 1",
-        util.like_prefix(head),
-        *heads,
-    )
+    plain = _overlapping_plain(head, pi)
     if plain is not None:
         raise biz(ErrorCode.RULE_PREFIX_OVERLAP, prefix=head, other=plain["prefix"], pi=plain["claimed_pi"] or "-")
     other = _overlapping_inc(head, other_than=head)
@@ -3258,6 +3277,8 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
         _bind_rule(pi, rid)
         return db.one("SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = 1", rid)
     rule = db.one("SELECT * FROM sn_rule WHERE id = %s FOR UPDATE", found["id"])
+    if inc_of(current_version(rule)) is None:
+        return _inc_onto_plain(cu, pi, rule, inc, value, customer, spec, scope, orgs)
     if scope.add or scope.remove:
         latest = cust_list(rule["inc_customers"])
         after = sorted((set(latest) | set(scope.add)) - set(scope.remove))
@@ -3310,6 +3331,57 @@ def _realize_inc(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str,
         .pi(pi)
         .customer(customer)
         .info(f"{rule['rule_code']} v{n} {describe(spec)} (前缀 {inc.head} 识别码取 {inc.text(value)}，归属 {pi})"),
+    )
+    _bind_rule(pi, rule["id"])
+    return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)
+
+
+def _inc_onto_plain(
+    cu: CurrentUser,
+    pi: str,
+    rule: dict,
+    inc: Inc,
+    value: int,
+    customer: str | None,
+    spec: codec.Spec,
+    scope: IncScope,
+    orgs: set[str],
+) -> dict:
+    """生成事务内（_realize_inc，规则行已锁）：识别码前缀层 inc.head 已有规则、但还是普通规则（当前版本不带识别码）。
+    能走到这里，前缀已过 check_inc：同前缀的普通版本已腾空、只归本 PI 或已废弃（_inc_guard），典型的是本 PI 删光号后
+    同前缀改用识别码。一个前缀一条规则：仍用这条规则，为本 PI 另出带识别码的版本，当前版本换成它（之后别的 PI 选这条
+    规则按识别码取值），适用客户为本 PI 定的清单（同第一张 PI 新建识别码规则）；旧的普通版本只留作已删号的记录。"""
+    n = _next_version(rule["id"])
+    vid = _insert_version(
+        cu,
+        rule["id"],
+        n,
+        spec,
+        util.now(),
+        used=True,
+        claimed_pi=pi,
+        derived_from=None,
+        inc=inc,
+        inc_value=value,
+        inc_customer=customer,
+    )
+    db.exec(
+        "UPDATE sn_rule SET current_version = %s, inc_customers = %s WHERE id = %s",
+        n,
+        cust_text(scope.allowed),
+        rule["id"],
+    )
+    if rule["factory_code"] is not None and not orgs <= {rule["factory_code"]}:
+        db.exec("UPDATE sn_rule SET factory_code = NULL WHERE id = %s", rule["id"])
+    audit.record(
+        cu,
+        audit.entry(audit.RULE_PREFIX_VERSION)
+        .pi(pi)
+        .customer(customer)
+        .info(
+            f"{rule['rule_code']} v{n} {describe(spec)} (前缀 {inc.head} 已腾空，改用识别码取 {inc.text(value)}，"
+            f"当前版本改为 v{n}，适用客户 {_names(scope.allowed)}，归属 {pi})"
+        ),
     )
     _bind_rule(pi, rule["id"])
     return db.one("SELECT * FROM sn_rule_version WHERE id = %s", vid)

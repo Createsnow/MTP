@@ -258,3 +258,76 @@ def test_inc_registered_library_rule_used_up_before_generation(w, api, sql):
     assert not p["generatable"]
     r = api.post("/api/generate/run", m(token=p.body.get("token") or "x"), w.admin)
     assert r.status != 200
+
+
+# ---------------------------------------------------------------------- 普通前缀腾空后同前缀改用识别码（2026-11-26）
+
+
+def _plain_attach(head: str) -> dict:
+    return m(prefix=head, base=10, seq_len=4, with_length=False, with_attach=True, attach_head="-", attach_tail="-")
+
+
+def test_released_plain_prefix_switch_to_inc_same_head(w, api, sql):
+    """本 PI 用普通规则（带附件项次）生成后删光号、没有别的 PI 用过或登记过：同前缀改用识别码不再报
+    RULE_PREFIX_OVERLAP（被自己已腾空的旧前缀挡住）。仍是一个前缀一条规则：当前版本换成本 PI 的识别码版本、
+    适用客户为本 PI 定的清单；之后同客户的 PI 选这条规则取下一个值，普通前缀不能再用。"""
+    org = w.org(uid("O")[:10])
+    cust = C()
+    head = H()
+    _, pi, b = mk(w, ("M1", 2), org=org, customer=cust)
+    ok(w.select(pi, [(b, 1)], custom=_plain_attach(head)))
+    w.generate(pi)
+    ok(w.delete(pi, bills=[b]))
+    # 页面带适用客户清单（识别码组件）
+    r = ok(w.select(pi, [(b, 1)], custom=inc(head, inc_customers=[cust])))["rule"]
+    assert r["inc"]["value"] == 0
+    w.generate(pi)
+    assert sns(sql, pi) == [f"{head}0{i:04d}" for i in (1, 2)]
+    assert sql.count("SELECT COUNT(*) FROM sn_rule WHERE prefix = %s", head) == 1, "仍是一个前缀一条规则"
+    rule = sql.one("SELECT * FROM sn_rule WHERE prefix = %s", head)
+    cur = sql.one(
+        "SELECT * FROM sn_rule_version WHERE rule_id = %s AND version = %s", rule["id"], rule["current_version"]
+    )
+    assert (cur["inc_head"], cur["inc_value"], cur["claimed_pi"], cur["with_attach"]) == (head, 0, pi, 0)
+    assert rule["inc_customers"] == f",{cust},"
+    # 同客户的 PI 选这条规则：取下一个值
+    _, p2, b2 = mk(w, ("M1", 1), org=org, customer=cust)
+    assert ok(w.select(p2, [(b2, 1)], rule_id=rule["id"]))["rule"]["inc"]["value"] == 1
+    w.generate(p2)
+    assert sns(sql, p2) == [f"{head}10001"]
+    # 普通前缀不能再用（与识别码前缀层相同）
+    _, p3, b3 = mk(w, ("M1", 1), org=org, customer=cust)
+    assert w.select(p3, [(b3, 1)], custom=_plain_attach(head)).code == "RULE_PREFIX_OVERLAP"
+
+
+def test_released_plain_prefix_switch_to_inc_without_customer_list(w, sql):
+    """不传适用客户清单时按还没有识别码规则处理（为本 PI 的客户），不报 RULE_INC_CUSTOMER。"""
+    cust = C()
+    head = H()
+    _, pi, b = mk(w, ("M1", 2), customer=cust)
+    ok(w.select(pi, [(b, 1)], custom=m(prefix=head, base=10, seq_len=4, with_length=False)))
+    w.generate(pi)
+    ok(w.delete(pi, bills=[b]))
+    ok(w.select(pi, [(b, 1)], custom=inc(head)))
+    w.generate(pi)
+    assert sns(sql, pi) == [f"{head}0{i:04d}" for i in (1, 2)]
+    assert sql.scalar("SELECT inc_customers FROM sn_rule WHERE prefix = %s", head) == f",{cust},"
+
+
+def test_plain_prefix_not_released_still_blocks_inc(w, sql):
+    """普通前缀没腾空（别的 PI 登记过或号还在）：同前缀改用识别码照常报 RULE_PREFIX_OVERLAP。"""
+    org = w.org(uid("O")[:10])
+    cust = C()
+    head = H()
+    _, p1, b1 = mk(w, ("M1", 2), org=org, customer=cust)
+    _, p2, b2 = mk(w, ("M1", 2), org=org, customer=cust)
+    ok(w.select(p1, [(b1, 1)], custom=_plain_attach(head)))
+    w.generate(p1)
+    ok(w.select(p2, [(b2, 1)], custom=_plain_attach(head)))
+    ok(w.delete(p1, bills=[b1]))
+    want = inc(head, inc_customers=[cust])
+    assert w.select(p1, [(b1, 1)], custom=want).code == "RULE_PREFIX_OVERLAP", "别的 PI 登记过"
+    w.generate(p2)
+    assert w.select(p1, [(b1, 1)], custom=want).code == "RULE_PREFIX_OVERLAP", "别的 PI 号还在"
+    # 别的 PI 号还在：本 PI 也不能用以它开头的识别码前缀
+    assert w.select(p1, [(b1, 1)], custom=inc(head + "Z", inc_customers=[cust])).code == "RULE_PREFIX_OVERLAP"
