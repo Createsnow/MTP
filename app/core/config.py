@@ -184,6 +184,12 @@ class Settings:
         return max(1, self.get_int("SN_SYNC_INTERVAL_MINUTES", 10))
 
     @property
+    def sync_start_date_raw(self) -> str:
+        """建库后首次启动的同步起始日期（SN_SYNC_START_DATE，YYYY-MM-DD；空 = 建库默认往前 3 个月）。
+        只在从没同步过、页面也没改过同步设置时写入，之后以页面为准。校验见 orders.init_start_date。"""
+        return self.get("SN_SYNC_START_DATE", "")
+
+    @property
     def push_retry_intervals(self) -> list[int]:
         """推送没送达（超时、5xx、断连等）时自动重试的间隔（分钟）；个数即次数。"""
         return self._minutes("SN_PUSH_RETRY_INTERVALS_MINUTES", "1,5,15")

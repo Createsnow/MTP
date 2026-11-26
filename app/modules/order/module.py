@@ -6,7 +6,7 @@ from app.core import scheduler
 from app.core.config import settings
 from app.modules.order.routes import k3_config, orders
 from app.modules.order.services import orders as orders_svc
-from app.platform.module import Job, Module
+from app.platform.module import Job, Module, Step
 
 
 def start_order_sync():
@@ -23,5 +23,7 @@ MODULE = Module(
     depends_on=("org",),
     required=True,
     routers=(orders.router, k3_config.router),
+    # 建库后首次启动：.env 的 SN_SYNC_START_DATE 写入同步起始日期（在后台同步启动之前）
+    startup=(Step("sync_start_date", 45, orders_svc.init_start_date),),
     jobs=(Job("order_sync", 30, start_order_sync),),
 )

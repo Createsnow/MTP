@@ -208,3 +208,50 @@ def test_save_start_date_validation_and_audit(w, api, sql):
         assert api.put("/api/orders/sync-config", {"start_date": ""}, tok).status == 403
     finally:
         sql.exec("UPDATE sn_sync_state SET paused = 0, config_by = NULL, config_at = NULL WHERE id = 1")
+
+
+def _fresh_state(sql) -> None:
+    """模拟建库后第一次启动：从没比对同步、全量重建过，页面也没保存过同步设置。"""
+    sql.exec(
+        "UPDATE sn_sync_state SET last_run_at = NULL, last_full_at = NULL, config_by = NULL, config_at = NULL "
+        "WHERE id = 1"
+    )
+
+
+def test_env_start_date_applied_once_on_fresh_db(w, sql, monkeypatch):
+    """.env 的 SN_SYNC_START_DATE：建库后第一次同步之前写入；同步过或页面改过之后不再生效。"""
+    from app.modules.order.services import orders
+
+    default = sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1")
+    _fresh_state(sql)
+    monkeypatch.setenv("SN_SYNC_START_DATE", "")
+    orders.init_start_date()
+    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1") == default, "留空 = 建库默认"
+
+    monkeypatch.setenv("SN_SYNC_START_DATE", SINCE)
+    orders.init_start_date()
+    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1").isoformat() == SINCE
+
+    # 比对同步过之后改 .env 不再生效
+    w.compare()
+    monkeypatch.setenv("SN_SYNC_START_DATE", _TODAY.isoformat())
+    orders.init_start_date()
+    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1").isoformat() == SINCE
+
+    # 页面保存过同步设置之后同样不再生效
+    _fresh_state(sql)
+    set_start(w, "")
+    orders.init_start_date()
+    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1") is None
+    sql.exec("UPDATE sn_sync_state SET config_by = NULL, config_at = NULL WHERE id = 1")
+
+
+def test_env_start_date_invalid_refuses_start(w, sql, monkeypatch):
+    import pytest
+
+    from app.modules.order.services import orders
+
+    for bad in ("2026/11/26", "abc", (_TODAY + timedelta(days=1)).isoformat()):
+        monkeypatch.setenv("SN_SYNC_START_DATE", bad)
+        with pytest.raises(RuntimeError, match="SN_SYNC_START_DATE"):
+            orders.init_start_date()

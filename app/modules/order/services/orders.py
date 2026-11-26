@@ -328,6 +328,27 @@ def sync_start_date() -> date | None:
     return db.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1")
 
 
+def init_start_date() -> None:
+    """启动步骤：.env 的 SN_SYNC_START_DATE 有值时，在建库后第一次同步之前写入同步起始日期（代替默认的往前 3 个月）。
+    只在从没比对同步、全量重建过，页面也没保存过同步设置时写入：之后改 .env 不再生效，以页面为准。
+    值不对（不是 YYYY-MM-DD 或晚于今天）拒绝启动，免得用错的日期同步。"""
+    raw = settings.sync_start_date_raw
+    if not raw:
+        return
+    try:
+        d = _start_date_value(raw)
+    except BizError:
+        raise RuntimeError(
+            f"SN_SYNC_START_DATE「{raw}」不对：须为 YYYY-MM-DD 且不晚于今天（留空 = 建库默认往前 3 个月）"
+        ) from None
+    st = db.one("SELECT start_date, last_run_at, last_full_at, config_at FROM sn_sync_state WHERE id = 1")
+    if st is None or st["last_run_at"] or st["last_full_at"] or st["config_at"]:
+        return
+    if st["start_date"] != d:
+        db.exec("UPDATE sn_sync_state SET start_date = %s WHERE id = 1", d)
+        log.info("sync_start_date_initialized", start_date=d.isoformat(), was=str(st["start_date"] or "-"))
+
+
 def _ledger_bills() -> list[str]:
     """已出号单据（含已离开快照的）：设了同步起始日期时不看日期，照常同步、比对。"""
     return db.column("SELECT bill_no FROM sn_bill_ledger ORDER BY bill_no")
