@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+import calendar
 import threading
 from dataclasses import dataclass
 from datetime import date
@@ -328,25 +329,37 @@ def sync_start_date() -> date | None:
     return db.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1")
 
 
+#: .env 的 SN_SYNC_START_MONTHS 没填时：首次启动同步最近 3 个月审核的单据；可填的最大月数
+START_MONTHS_DEFAULT, START_MONTHS_MAX = 3, 600
+
+
+def months_before(d: date, months: int) -> date:
+    """d 往前 months 个月的同一天；那个月没有这一天时取月末（如 5 月 31 日往前 3 个月为 2 月 28 / 29 日）。"""
+    y, m = divmod(d.year * 12 + d.month - 1 - months, 12)
+    return date(y, m + 1, min(d.day, calendar.monthrange(y, m + 1)[1]))
+
+
 def init_start_date() -> None:
-    """启动步骤：.env 的 SN_SYNC_START_DATE 有值时，在建库后第一次同步之前写入同步起始日期（代替默认的往前 3 个月）。
-    只在从没比对同步、全量重建过，页面也没保存过同步设置时写入：之后改 .env 不再生效，以页面为准。
-    值不对（不是 YYYY-MM-DD 或晚于今天）拒绝启动，免得用错的日期同步。"""
-    raw = settings.sync_start_date_raw
-    if not raw:
-        return
+    """启动步骤：建库后第一次同步之前，把同步起始日期写为「今天往前 SN_SYNC_START_MONTHS 个月」（.env，默认 3；
+    0 = 不限）。只在从没比对同步、全量重建过，页面也没保存过同步设置时写入；之后的同步按页面「自动同步」设定的日期，
+    再改 .env 不生效。值不是 0–600 的整数时拒绝启动，免得用错的范围同步。"""
+    raw = settings.sync_start_months_raw
     try:
-        d = _start_date_value(raw)
-    except BizError:
+        months = int(raw) if raw else START_MONTHS_DEFAULT
+    except ValueError:
+        months = -1
+    if not 0 <= months <= START_MONTHS_MAX:
         raise RuntimeError(
-            f"SN_SYNC_START_DATE「{raw}」不对：须为 YYYY-MM-DD 且不晚于今天（留空 = 建库默认往前 3 个月）"
-        ) from None
+            f"SN_SYNC_START_MONTHS「{raw}」不对：须为 0–{START_MONTHS_MAX} 的整数"
+            f"（首次启动同步最近几个月审核的单据；0 = 不限；留空 = {START_MONTHS_DEFAULT}）"
+        )
     st = db.one("SELECT start_date, last_run_at, last_full_at, config_at FROM sn_sync_state WHERE id = 1")
     if st is None or st["last_run_at"] or st["last_full_at"] or st["config_at"]:
         return
+    d = months_before(util.now().date(), months) if months else None
     if st["start_date"] != d:
         db.exec("UPDATE sn_sync_state SET start_date = %s WHERE id = 1", d)
-        log.info("sync_start_date_initialized", start_date=d.isoformat(), was=str(st["start_date"] or "-"))
+    log.info("sync_start_date_initialized", months=months, start_date=d.isoformat() if d else "-")
 
 
 def _ledger_bills() -> list[str]:

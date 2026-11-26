@@ -23,7 +23,7 @@ MODULE = Module(
     depends_on=("org",),
     required=True,
     routers=(orders.router, k3_config.router),
-    # 建库后首次启动：.env 的 SN_SYNC_START_DATE 写入同步起始日期（在后台同步启动之前）
+    # 建库后首次启动：同步起始日期 = 今天往前 .env 的 SN_SYNC_START_MONTHS 个月（在后台同步启动之前写入）
     startup=(Step("sync_start_date", 45, orders_svc.init_start_date),),
     jobs=(Job("order_sync", 30, start_order_sync),),
 )

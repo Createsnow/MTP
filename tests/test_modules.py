@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from app.platform.module import Module, discover, enabled
 
 #: 模块化之前 main.startup 里的顺序（建表 → 单据统计补齐 → 回收中断的生成任务 → 建管理员 → 维护分区 → 演示数据）
-#: sync_start_date（2026-11-26 新增）：建库后首次启动写入 .env 的同步起始日期，在后台同步启动之前
+#: sync_start_date（2026-11-26 新增）：建库后首次启动按 .env 的 SN_SYNC_START_MONTHS 写入同步起始日期
 BEFORE_STEPS = ["init_db", "bill_stats_fill", "gen_recover", "init_admin", "sync_start_date", "maintain", "demo_seed"]
 #: 模块化之前 main.lifespan 里的启动顺序（每日维护 → 回收生成任务 → 比对同步 → 推送调度 → 单据统计）
 BEFORE_JOBS = ["daily", "gen_recover", "order_sync", "push", "bill_stats"]

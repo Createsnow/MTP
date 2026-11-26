@@ -218,40 +218,61 @@ def _fresh_state(sql) -> None:
     )
 
 
-def test_env_start_date_applied_once_on_fresh_db(w, sql, monkeypatch):
-    """.env 的 SN_SYNC_START_DATE：建库后第一次同步之前写入；同步过或页面改过之后不再生效。"""
+def test_env_start_months_applied_once_on_fresh_db(w, sql, monkeypatch):
+    """.env 的 SN_SYNC_START_MONTHS：建库后第一次同步之前把起始日期写为今天往前 N 个月；
+    同步过或页面改过之后不再生效。"""
+    from app.core import utils as util
     from app.modules.order.services import orders
 
-    default = sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1")
+    def start():
+        return sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1")
+
+    today = util.now().date()
     _fresh_state(sql)
-    monkeypatch.setenv("SN_SYNC_START_DATE", "")
+    monkeypatch.delenv("SN_SYNC_START_MONTHS", raising=False)
     orders.init_start_date()
-    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1") == default, "留空 = 建库默认"
-
-    monkeypatch.setenv("SN_SYNC_START_DATE", SINCE)
+    assert start() == orders.months_before(today, 3), "没填 = 3 个月"
+    monkeypatch.setenv("SN_SYNC_START_MONTHS", "1")
     orders.init_start_date()
-    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1").isoformat() == SINCE
+    assert start() == orders.months_before(today, 1)
+    monkeypatch.setenv("SN_SYNC_START_MONTHS", "0")
+    orders.init_start_date()
+    assert start() is None, "0 = 不限"
+    monkeypatch.setenv("SN_SYNC_START_MONTHS", "6")
+    orders.init_start_date()
+    six = orders.months_before(today, 6)
+    assert start() == six
 
-    # 比对同步过之后改 .env 不再生效
+    # 比对同步过之后改 .env 不再生效，按页面设定的日期
     w.compare()
-    monkeypatch.setenv("SN_SYNC_START_DATE", _TODAY.isoformat())
+    monkeypatch.setenv("SN_SYNC_START_MONTHS", "1")
     orders.init_start_date()
-    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1").isoformat() == SINCE
+    assert start() == six
 
     # 页面保存过同步设置之后同样不再生效
     _fresh_state(sql)
-    set_start(w, "")
+    set_start(w, SINCE)
     orders.init_start_date()
-    assert sql.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1") is None
+    assert start().isoformat() == SINCE
     sql.exec("UPDATE sn_sync_state SET config_by = NULL, config_at = NULL WHERE id = 1")
 
 
-def test_env_start_date_invalid_refuses_start(w, sql, monkeypatch):
+def test_env_start_months_invalid_refuses_start(w, sql, monkeypatch):
     import pytest
 
     from app.modules.order.services import orders
 
-    for bad in ("2026/11/26", "abc", (_TODAY + timedelta(days=1)).isoformat()):
-        monkeypatch.setenv("SN_SYNC_START_DATE", bad)
-        with pytest.raises(RuntimeError, match="SN_SYNC_START_DATE"):
+    for bad in ("abc", "-1", "3.5", "601"):
+        monkeypatch.setenv("SN_SYNC_START_MONTHS", bad)
+        with pytest.raises(RuntimeError, match="SN_SYNC_START_MONTHS"):
             orders.init_start_date()
+
+
+def test_months_before_clamps_month_end():
+    from app.modules.order.services.orders import months_before
+
+    assert months_before(date(2026, 5, 31), 3) == date(2026, 2, 28)
+    assert months_before(date(2028, 5, 31), 3) == date(2028, 2, 29)
+    assert months_before(date(2026, 2, 15), 3) == date(2025, 11, 15)
+    assert months_before(date(2026, 11, 26), 3) == date(2026, 8, 26)
+    assert months_before(date(2026, 11, 26), 0) == date(2026, 11, 26)
