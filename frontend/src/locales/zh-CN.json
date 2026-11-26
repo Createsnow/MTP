@@ -988,7 +988,8 @@
       "REPLACED": "单据 {bill} 已同步，{rows} 行",
       "NOT_APPROVED": "单据 {bill} 在金蝶不是已审核（单据状态 {status}），已移出快照",
       "NOT_APPROVED_NEW": "单据 {bill} 在金蝶不是已审核（单据状态 {status}），未进入快照",
-      "NOT_FOUND": "金蝶查无单据 {bill}"
+      "NOT_FOUND": "金蝶查无单据 {bill}",
+      "OUT_OF_RANGE": "单据 {bill} 的审核日期早于同步起始日期 {since}，且没有出过号，不进入快照"
     },
     "syncFailed": "最近一次比对同步失败（{time}）：{msg}；列表显示的是旧快照",
     "syncedAt": "最近同步",
@@ -1081,6 +1082,10 @@
       "sourcePage": "已在页面设置（不再使用 .env 的 SN_SYNC_INTERVAL_MINUTES）",
       "sourceEnv": "当前沿用 .env 的 SN_SYNC_INTERVAL_MINUTES（{n} 分钟）；改了间隔保存后以页面为准",
       "updated": "最后修改",
+      "startDate": "同步起始日期",
+      "startNone": "不限（同步金蝶全部已审核单据）",
+      "startHint": "只同步金蝶审核日期在这天及之后的单据；已出过号的单据不论日期照常同步、比对。起始日期之前、没出过号的单据会移出快照。在 .env 的 SN_SYNC_START_DATE 设置，改后重启生效",
+      "startBad": "SN_SYNC_START_DATE「{v}」不对（须为 YYYY-MM-DD 且不晚于今天）：比对同步、全量重建、按单据同步会报错，请改 .env 后重启",
       "pausedHint": "暂停期间金蝶的订单变化、反审核、业务状态变化都不会自动同步，请在处理完后及时恢复",
       "saved": "同步设置已保存",
       "pausedTag": "自动同步已暂停",

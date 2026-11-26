@@ -3,6 +3,9 @@
 - LoginByAppSecret 登录；批量查询用 ExecuteBillQuery 分页，单张用 View。
 - 比对同步只取已审核（FDocumentStatus = 'C'）单据的单据编号与修改时间两列，比对在本地完成；
   变动的单据再按单据编号批量拉明细。全量重建按已审核条件完整拉取。
+- 同步起始日期（.env 的 SN_SYNC_START_DATE，见 orders.sync_start_date）：设置后表头、全量重建、业务状态三种批量查询
+  另加 FApproveDate（审核日期）>= 该日；已出号单据不看日期，按单据编号另查（fetch_heads_of、fetch_bills）。
+  没设置时查询条件与原来完全相同。
 - 按单据编号同步、离开快照检测用 View，不带单据状态条件，只看单据状态。
 - 明细的业务状态（FStatus）、领料状态（FPickMtrlStatus）只用于生成页的「物料行失效」（line_void），不参与比对、
   变更提醒；业务状态、领料状态的变化不改金蝶修改日期，比对同步另按 fetch_line_status 刷新这两列。
@@ -30,7 +33,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -47,6 +50,9 @@ FORM_PRD_MO = "PRD_MO"
 FORM_ORG = "ORG_Organizations"
 APPROVED = "C"
 APPROVED_FILTER = "FDocumentStatus='C'"
+#: 同步起始日期比较的表头字段：审核日期（反审核后重新审核时更新）。按审核日期而不是单据日期 / 创建日期：
+#: 起始日期之前建的单、之后才审核的照样进来（单据日期可手改、创建日期会漏掉这种单）
+APPROVE_DATE_FIELD = "FApproveDate"
 #: 分录内码只用于稳定翻页，不返回
 ORDER_BY = "FBillNo ASC, FTreeEntity_FEntryId ASC"
 #: 明细查询列（顺序即 _row_of_query 的取值顺序）。前 12 列与《生产订单查询接口》的 FieldKeys 一致；
@@ -134,11 +140,12 @@ class Head:
 
 @dataclass(frozen=True)
 class BillView:
-    """按单据编号查询的结果：found = False 为查无此单（已删除）。"""
+    """按单据编号查询的结果：found = False 为查无此单（已删除）。approve_date 为审核日期（未审核、取不到为 None）。"""
 
     found: bool
     doc_status: str
     rows: list[Row]
+    approve_date: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -637,21 +644,49 @@ def _detail_paged(http: httpx.Client, c: _Config, filter_string: str, on_rows: P
     return _paged(http, c, base, filter_string, ORDER_BY, on_rows=on_rows)
 
 
-def fetch_approved_heads() -> list[Head]:
-    """比对同步：已审核单据的编号与修改时间（按明细返回多行时本地去重）。"""
-    with _open() as (http, c):
-        raw = _paged(http, c, "FBillNo,FModifyDate", APPROVED_FILTER, "FBillNo ASC")
-    out: dict[str, Head] = {}
+def approved_filter(since: date | None = None) -> str:
+    """批量查询的条件：已审核；有同步起始日期时另加审核日期 >= 该日（since 为 None 时与原来相同）。"""
+    if since is None:
+        return APPROVED_FILTER
+    return f"{APPROVED_FILTER} AND {APPROVE_DATE_FIELD}>='{since.isoformat()}'"
+
+
+def _heads_of(raw: list, out: dict[str, Head]) -> None:
     for o in raw:
         if isinstance(o, list) and o:
             no = text(o[0])
             if no and no not in out:
                 out[no] = Head(no, modify_time(o[1] if len(o) > 1 else None))
+
+
+def fetch_approved_heads(since: date | None = None) -> list[Head]:
+    """比对同步：已审核单据的编号与修改时间（按明细返回多行时本地去重）；since = 同步起始日期（见 approved_filter）。"""
+    with _open() as (http, c):
+        raw = _paged(http, c, "FBillNo,FModifyDate", approved_filter(since), "FBillNo ASC")
+    out: dict[str, Head] = {}
+    _heads_of(raw, out)
     return list(out.values())
 
 
 def _quote(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
+
+
+def _bill_in(part: list[str]) -> str:
+    return f"{APPROVED_FILTER} AND FBillNo IN ({','.join(_quote(b) for b in part)})"
+
+
+def fetch_heads_of(bill_nos: list[str]) -> list[Head]:
+    """比对同步（设了同步起始日期时）：指定单据中已审核的编号与修改时间，不看审核日期（已出号单据照常比对）。"""
+    out: dict[str, Head] = {}
+    if not bill_nos:
+        return []
+    with _open() as (http, c):
+        for i in range(0, len(bill_nos), BILLS_PER_QUERY):
+            _heads_of(
+                _paged(http, c, "FBillNo,FModifyDate", _bill_in(bill_nos[i : i + BILLS_PER_QUERY]), "FBillNo ASC"), out
+            )
+    return list(out.values())
 
 
 def fetch_bills(bill_nos: list[str], on_bills: Progress = None) -> list[Row]:
@@ -661,9 +696,7 @@ def fetch_bills(bill_nos: list[str], on_bills: Progress = None) -> list[Row]:
     rows: list[Row] = []
     with _open() as (http, c):
         for i in range(0, len(bill_nos), BILLS_PER_QUERY):
-            part = bill_nos[i : i + BILLS_PER_QUERY]
-            flt = f"{APPROVED_FILTER} AND FBillNo IN ({','.join(_quote(b) for b in part)})"
-            for o in _detail_paged(http, c, flt):
+            for o in _detail_paged(http, c, _bill_in(bill_nos[i : i + BILLS_PER_QUERY])):
                 r = _row_of_query(o) if isinstance(o, list) else None
                 if r is not None:
                     rows.append(r)
@@ -672,19 +705,26 @@ def fetch_bills(bill_nos: list[str], on_bills: Progress = None) -> list[Row]:
     return rows
 
 
-def fetch_all(on_rows: Progress = None) -> list[Row]:
-    """全量重建：按已审核条件完整拉取。任何一页失败即整体失败，调用方不写快照。每页后回调已拉到的行数。"""
+def fetch_all(on_rows: Progress = None, since: date | None = None) -> list[Row]:
+    """全量重建：按已审核条件完整拉取（since = 同步起始日期，见 approved_filter）。任何一页失败即整体失败，
+    调用方不写快照。每页后回调已拉到的行数。"""
     with _open() as (http, c):
-        raw = _detail_paged(http, c, APPROVED_FILTER, on_rows)
+        raw = _detail_paged(http, c, approved_filter(since), on_rows)
     return [r for r in (_row_of_query(o) for o in raw if isinstance(o, list)) if r is not None]
 
 
-def fetch_line_status() -> dict[tuple[str, int], tuple[str, str]]:
+def fetch_line_status(
+    since: date | None = None, bill_nos: list[str] | None = None
+) -> dict[tuple[str, int], tuple[str, str]]:
     """比对同步：已审核单据各物料行的业务状态、领料状态（(单据, 行号) → (业务状态, 领料状态)）。
     这两项由执行操作、领料单回写改变，不改金蝶修改日期，按修改日期比对拉不到。只拉 4 列、不重试；失败抛出，
-    调用方只记日志（本周期不刷新状态，订单快照照常同步）。"""
+    调用方只记日志（本周期不刷新状态，订单快照照常同步）。
+    since = 同步起始日期（见 approved_filter）；bill_nos = 起始日期之前、仍在快照里的已出号单据，按单据编号另查。"""
     with _open() as (http, c):
-        raw = _paged(http, c, ",".join(STATUS_KEYS), APPROVED_FILTER, ORDER_BY, False)
+        raw = _paged(http, c, ",".join(STATUS_KEYS), approved_filter(since), ORDER_BY, False)
+        extra = bill_nos or []
+        for i in range(0, len(extra), BILLS_PER_QUERY):
+            raw += _paged(http, c, ",".join(STATUS_KEYS), _bill_in(extra[i : i + BILLS_PER_QUERY]), ORDER_BY, False)
     out: dict[tuple[str, int], tuple[str, str]] = {}
     for o in raw:
         if isinstance(o, list) and len(o) >= 4:
@@ -716,7 +756,7 @@ def view_bill(bill_no: str) -> BillView:
             raise biz(ErrorCode.K3_QUERY_FAILED, message=error_of(body) or "View failed")
     doc = result.get("Result") if isinstance(result.get("Result"), dict) else {}
     rows = [r for r in rows_from_view(doc) if r.bill_no == bill_no]
-    return BillView(True, text(doc.get("DocumentStatus")), rows)
+    return BillView(True, text(doc.get("DocumentStatus")), rows, modify_time(doc.get("ApproveDate")))
 
 
 def fetch_organizations(c: _Config | None = None) -> list[Org]:

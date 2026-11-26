@@ -422,7 +422,7 @@ async function syncOne(bill?: string) {
     const req = api.syncOrder(no);
     watchSoon();
     const r: any = await req;
-    const msg = t(`orders.outcome.${r.outcome}`, { bill: no, rows: r.rows, status: r.doc_status || "—" });
+    const msg = t(`orders.outcome.${r.outcome}`, { bill: no, rows: r.rows, status: r.doc_status || "—", since: r.since || "—" });
     if (r.outcome === "REPLACED") ElMessage.success(msg);
     else ElMessage.warning({ message: msg, duration: 6000, showClose: true });
     await refresh();

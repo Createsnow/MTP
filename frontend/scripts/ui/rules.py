@@ -29,6 +29,7 @@ M = {
 "rules.topSeq": ("最大号", "Max serial", "Số lớn nhất"),
 "rules.seqGrow": ("上限自动突破", "Auto-extend when full", "Tự tăng chữ số khi hết"),
 "rules.seqGrowTip": ("按前缀统一设置，作用于这个前缀下的全部 PI；流水已超出规则位数后不能关闭", "Set per prefix for all PIs using it; cannot be turned off once serials exceed the rule length", "Thiết lập theo tiền tố cho mọi PI dùng nó; không thể tắt khi dãy số đã vượt số chữ số"),
+"rules.growNoSepConfirm": ("这个前缀下有规则的流水之后紧跟的字符可能出现在流水里（如米数前没有分隔符）：开启后流水加位前后可能拼出相同的号（如 4 位流水 1000 + 米数 15 与加位后的 10001 + 米数 5 都是 …100015），撞号时整次生成回滚。确定开启？", "Some rules under this prefix have a character right after the serial that may also appear in the serial (e.g. no separator before the length): with auto-extend on, serials before and after extending may produce the same SN (e.g. 4-digit 1000 + length 15 and extended 10001 + length 5 are both …100015); a duplicate rolls back the whole run. Turn it on anyway?", "Có quy tắc dưới tiền tố này mà ký tự ngay sau dãy số có thể xuất hiện trong dãy số (vd. không có ký tự phân cách trước số mét): khi bật, trước và sau khi tăng chữ số có thể tạo ra cùng một số (vd. dãy 4 chữ số 1000 + số mét 15 và 10001 + số mét 5 đều là …100015); trùng số thì cả lần tạo bị hoàn tác. Vẫn bật?"),
 "rules.incTag": ("识别码 {start}~{end} · 客户 {customer}", "ID code {start}~{end} · customers {customer}", "Mã nhận dạng {start}~{end} · khách hàng {customer}"),
 "rules.incSegment": ("号段前缀", "Segment prefix", "Tiền tố dãy số"),
 "rules.incStatus": ("号段状态", "Segment status", "Trạng thái dãy số"),

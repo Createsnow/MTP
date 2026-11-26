@@ -15,6 +15,12 @@
           {{ cfg?.source === "PAGE" ? t("orders.syncCfg.sourcePage") : t("orders.syncCfg.sourceEnv", { n: cfg?.env_interval_minutes ?? "—" }) }}
         </div>
       </el-form-item>
+      <!-- 同步起始日期：只读，来自 .env 的 SN_SYNC_START_DATE（改后重启生效） -->
+      <el-form-item :label="t('orders.syncCfg.startDate')">
+        <span v-if="cfg && !cfg.start_date_ok" class="bad">{{ t("orders.syncCfg.startBad", { v: cfg.start_date_raw }) }}</span>
+        <span v-else>{{ cfg?.start_date || t("orders.syncCfg.startNone") }}</span>
+        <div v-if="cfg?.start_date" class="muted sub">{{ t("orders.syncCfg.startHint") }}</div>
+      </el-form-item>
       <el-form-item :label="t('orders.syncCfg.updated')">
         <span>{{ cfg?.updated_at ? `${fmt(cfg.updated_at, false)} · ${cfg.updated_by}` : "—" }}</span>
       </el-form-item>
@@ -79,4 +85,5 @@ defineExpose({ load, save, saving, ready });
 .w160 { width: 160px; }
 .unit { margin-left: 8px; }
 .sub { flex-basis: 100%; font-size: 12px; line-height: 1.6; margin-top: 4px; }
+.bad { color: var(--el-color-danger); }
 </style>

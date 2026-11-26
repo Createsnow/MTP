@@ -11,6 +11,15 @@
 4. 全量重建：完整拉取后写入新表、原子换表（RENAME），失败旧快照完整保留；完成后对全部已出号单据比对。
 各种同步共用一把同步锁：按单据同步、全量重建最多排队 30 秒，比对同步和进页同步直接跳过。
 
+同步起始日期（.env 的 SN_SYNC_START_DATE，YYYY-MM-DD；空 = 不限，与原来相同）：设置后快照只收
+「金蝶审核日期在这天及之后的已审核单据」+「已出号单据（sn_bill_ledger，不论日期）」。
+- 比对同步、全量重建、业务状态刷新按这个范围拉取；已出号单据按单据编号另查，变更比对、反审核、删除检测照旧。
+- 起始日期之前、没出过号的单据视同不在金蝶：下一次比对同步移出快照（不再能生成、导入、作转移目标）；
+  把日期改早或清空后，下一次比对同步重新拉回（数量多时建议改用全量重建）。
+- 按单据同步：起始日期之前审核、没出过号的单据不进快照（OUT_OF_RANGE）。
+- 日期格式不对或晚于今天：比对同步、全量重建、按单据同步报错（SYNC_START_DATE_INVALID），快照不改。
+- 只改本系统从金蝶取哪些单据；不改 MES 接口，不改已有的号。改 .env 后须重启生效。
+
 同步设置（生产订单页「同步设置」，只有系统管理员；存 sn_sync_state）：定时比对同步的间隔（分钟，没在页面设置过时
 用 .env 的 SN_SYNC_INTERVAL_MINUTES）与暂停自动同步。暂停只停定时比对同步和进页同步；立即比对同步、按单据同步、
 全量重建照常。后台每分钟看一次是否到期（距上次比对同步满一个间隔），改了间隔、暂停或恢复下一分钟内生效，不用重启。
@@ -20,6 +29,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 import structlog
@@ -244,7 +254,16 @@ def sync_config() -> dict:
     """同步设置：生效的间隔与来源（PAGE 页面保存 / ENV .env）、.env 的间隔、是否暂停、最后修改。"""
     st = db.one("SELECT * FROM sn_sync_state WHERE id = 1") or {}
     stored = st.get("interval_minutes")
+    try:
+        since, start_ok = sync_start_date(), True
+    except BizError:
+        since, start_ok = None, False
     return {
+        # 同步起始日期（只读，.env 的 SN_SYNC_START_DATE）：start_date 为生效的日期（空 = 不限）；
+        # start_date_ok = False 时 start_date_raw 格式不对或晚于今天，比对同步、全量重建、按单据同步会报错
+        "start_date": since.isoformat() if since is not None else None,
+        "start_date_raw": settings.sync_start_date_raw,
+        "start_date_ok": start_ok,
         "interval_minutes": _interval_of(stored),
         "source": "PAGE" if stored else "ENV",
         "env_interval_minutes": settings.sync_interval_minutes,
@@ -285,12 +304,47 @@ def save_sync_config(cu: CurrentUser, interval_minutes: int | None, paused: bool
     return sync_config()
 
 
+# ================================================================== 同步起始日期
+
+
+def sync_start_date() -> date | None:
+    """同步起始日期（.env 的 SN_SYNC_START_DATE）；没设置为 None（不限）。格式不对或晚于今天报错（不按不限处理：
+    否则一处笔误就会把全部历史单据拉回快照）。"""
+    raw = settings.sync_start_date_raw
+    if not raw:
+        return None
+    try:
+        d = date.fromisoformat(raw)
+    except ValueError:
+        raise biz(ErrorCode.SYNC_START_DATE_INVALID, value=raw) from None
+    if d > util.now().date():
+        raise biz(ErrorCode.SYNC_START_DATE_INVALID, value=raw)
+    return d
+
+
+def _ledger_bills() -> list[str]:
+    """已出号单据（含已离开快照的）：设了同步起始日期时不看日期，照常同步、比对。"""
+    return db.column("SELECT bill_no FROM sn_bill_ledger ORDER BY bill_no")
+
+
+def _remote_heads(since: date | None) -> tuple[dict[str, object], list[str]]:
+    """金蝶这边应在快照里的单据（编号 → 修改时间）：起始日期起审核的已审核单据 + 已出号单据中已审核的；
+    另返回后一部分里起始日期之前的单据（按单据编号另查到的，业务状态刷新也按单据编号另查它们）。"""
+    remote = {h.bill_no: h.modify_time for h in k3.fetch_approved_heads(since)}
+    if since is None:
+        return remote, []
+    outside = [no for no in _ledger_bills() if no not in remote]
+    found = k3.fetch_heads_of(outside)
+    remote.update({h.bill_no: h.modify_time for h in found})
+    return remote, sorted(h.bill_no for h in found)
+
+
 def _compare(cu: CurrentUser, trigger: str, progress: _Progress) -> dict:
     ts = util.now()
     try:
+        since = sync_start_date()
         progress.stage("HEADS")
-        heads = k3.fetch_approved_heads()
-        remote = {h.bill_no: h.modify_time for h in heads}
+        remote, outside = _remote_heads(since)
         local = _local_heads()
         changed = [no for no, t in remote.items() if no not in local or t is None or local[no] != t]
         removed = [no for no in local if no not in remote]
@@ -311,7 +365,7 @@ def _compare(cu: CurrentUser, trigger: str, progress: _Progress) -> dict:
     # 反审核中的已出号单据按单号复查（发现重新审核或删除）
     changes.recheck_reversed(cu, set(remote))
     # 状态刷新算在「写入」阶段里（订单页同步进度不另设阶段）
-    status_rows = refresh_line_status()
+    status_rows = refresh_line_status(since, outside)
     n_bills = len(fetched) + len(removed)
     _finish(ts, True, "", n_bills)
     if n_bills:
@@ -321,7 +375,7 @@ def _compare(cu: CurrentUser, trigger: str, progress: _Progress) -> dict:
             .count(n_bills)
             .info(
                 f"mode=compare trigger={trigger} replaced={len(fetched)} removed={len(removed)} rows={rows}"
-                f" status={status_rows}"
+                f" status={status_rows}" + ("" if since is None else f" since={since.isoformat()}")
             ),
         )
     else:
@@ -337,11 +391,12 @@ def _compare(cu: CurrentUser, trigger: str, progress: _Progress) -> dict:
     }
 
 
-def refresh_line_status() -> int | None:
+def refresh_line_status(since: date | None = None, outside: list[str] | None = None) -> int | None:
     """业务状态、领料状态（物料行失效用）与金蝶对齐：只更新快照里状态不同的物料行。返回更新的行数；
-    拉取失败返回 None（只记日志：状态停在上次的值，订单快照照常）。"""
+    拉取失败返回 None（只记日志：状态停在上次的值，订单快照照常）。
+    since = 同步起始日期（按日期拉）；outside = 起始日期之前的已出号单据（按单据编号另拉）。"""
     try:
-        remote = k3.fetch_line_status()
+        remote = k3.fetch_line_status(since, outside)
     except BizError as e:
         log.warning("k3_line_status_skipped", reason=e.message)
         return None
@@ -407,10 +462,12 @@ def page_entry_sync(cu: CurrentUser) -> bool:
 
 
 def sync_bill(cu: CurrentUser, bill_no: str | None) -> dict:
-    """不带单据状态条件按单号查询：已审核替换该单；不是已审核移出；查无此单移出。"""
+    """不带单据状态条件按单号查询：已审核替换该单；不是已审核移出；查无此单移出。
+    设了同步起始日期时：起始日期之前审核、没出过号的已审核单据不进快照（已在的移出），返回 OUT_OF_RANGE。"""
     no = util.trim(bill_no)
     if not no:
         raise biz(ErrorCode.ORDER_BILL_REQUIRED)
+    since = sync_start_date()
     held = locks.sync_lock(wait=True)
     if held is None:
         raise biz(ErrorCode.ORDER_SYNC_BUSY)
@@ -419,7 +476,18 @@ def sync_bill(cu: CurrentUser, bill_no: str | None) -> dict:
         v = k3.view_bill(no)
         ts = util.now()
         had = db.exists("SELECT EXISTS(SELECT 1 FROM sn_prd_mo WHERE bill_no = %s)", no)
-        if v.found and v.doc_status == k3.APPROVED:
+        if v.found and v.doc_status == k3.APPROVED and _before_start(since, v) and changes.ledger(no) is None:
+            with db.tx():
+                _remove_bills([no])
+                audit.record(
+                    cu,
+                    audit.entry(audit.ORDER_SYNC)
+                    .bill(no)
+                    .count(1 if had else 0)
+                    .info(f"mode=bill out_of_range since={since} approved={util.fmt(v.approve_date) or '-'}"),
+                )
+            outcome = "OUT_OF_RANGE"
+        elif v.found and v.doc_status == k3.APPROVED:
             with db.tx():
                 _replace_bills({no: v.rows}, ts)
                 audit.record(cu, audit.entry(audit.ORDER_SYNC).bill(no).count(1).info(f"mode=bill rows={len(v.rows)}"))
@@ -444,10 +512,18 @@ def sync_bill(cu: CurrentUser, bill_no: str | None) -> dict:
         "mode": "bill",
         "bill_no": no,
         "outcome": outcome,
+        "since": since.isoformat() if since is not None else None,
         "doc_status": v.doc_status,
         "rows": len(v.rows) if outcome == "REPLACED" else 0,
         "synced_at": util.fmt(ts),
     }
+
+
+def _before_start(since: date | None, v: k3.BillView) -> bool:
+    """按单据同步：单据审核日期在同步起始日期之前（取不到审核日期也算：批量查询按审核日期过滤时同样拉不到它）。"""
+    if since is None:
+        return False
+    return v.approve_date is None or v.approve_date.date() < since
 
 
 # ================================================================== 全量重建
@@ -467,8 +543,13 @@ def _rebuild(cu: CurrentUser) -> dict:
     progress = _Progress(cu, "REBUILD")
     try:
         # 总行数金蝶不返回：按当前快照的行数估计（页面显示约百分比）
+        since = sync_start_date()
         progress.stage("DETAILS", db.count("SELECT COUNT(*) FROM sn_prd_mo"))
-        rows = k3.fetch_all(progress.done)
+        rows = k3.fetch_all(progress.done, since)
+        if since is not None:
+            # 起始日期之前的已出号单据按单据编号补拉（不是已审核的拉不到，重建后按离开快照处理，与不设日期时相同）
+            got = {r.bill_no for r in rows}
+            rows += k3.fetch_bills([no for no in _ledger_bills() if no not in got])
         progress.stage("WRITE")
         try:
             factories.sync_from_k3(cu)
@@ -492,12 +573,23 @@ def _rebuild(cu: CurrentUser) -> dict:
             raise
         bills = len({r.bill_no for r in rows})
         db.exec("UPDATE sn_sync_state SET last_full_at = %s WHERE id = 1", ts)
-        audit.record_isolated(cu, audit.entry(audit.ORDER_SYNC).count(bills).info(f"mode=rebuild rows={len(rows)}"))
+        audit.record_isolated(
+            cu,
+            audit.entry(audit.ORDER_SYNC)
+            .count(bills)
+            .info(f"mode=rebuild rows={len(rows)}" + ("" if since is None else f" since={since.isoformat()}")),
+        )
         changes.after_rebuild(cu)
     finally:
         progress.close()
         held.release()
-    return {"mode": "rebuild", "bills": bills, "rows": len(rows), "synced_at": util.fmt(ts)}
+    return {
+        "mode": "rebuild",
+        "bills": bills,
+        "rows": len(rows),
+        "since": since.isoformat() if since is not None else None,
+        "synced_at": util.fmt(ts),
+    }
 
 
 # ================================================================== 附件项次、米数（金蝶缺失时在生成页填写）

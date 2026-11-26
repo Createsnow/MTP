@@ -988,7 +988,8 @@
       "REPLACED": "Bill {bill} synced, {rows} lines",
       "NOT_APPROVED": "Bill {bill} is not approved in Kingdee (status {status}); removed from the snapshot",
       "NOT_APPROVED_NEW": "Bill {bill} is not approved in Kingdee (status {status}); not added to the snapshot",
-      "NOT_FOUND": "Bill {bill} not found in Kingdee"
+      "NOT_FOUND": "Bill {bill} not found in Kingdee",
+      "OUT_OF_RANGE": "Bill {bill} was approved before the sync start date {since} and has no SNs; not added to the snapshot"
     },
     "syncFailed": "The last compare sync failed ({time}): {msg}; the list shows the old snapshot",
     "syncedAt": "Last sync",
@@ -1081,6 +1082,10 @@
       "sourcePage": "Set on this page (SN_SYNC_INTERVAL_MINUTES in .env is no longer used)",
       "sourceEnv": "Currently follows SN_SYNC_INTERVAL_MINUTES in .env ({n} minutes); once you change and save it, this page's value is used",
       "updated": "Last changed",
+      "startDate": "Sync start date",
+      "startNone": "No limit (all approved Kingdee bills are synced)",
+      "startHint": "Only bills approved in Kingdee on or after this date are synced; bills that already have SNs are always synced and compared. Earlier bills without SNs are removed from the snapshot. Set SN_SYNC_START_DATE in .env and restart to change it",
+      "startBad": "SN_SYNC_START_DATE \"{v}\" is invalid (use YYYY-MM-DD, not later than today): compare sync, rebuild and bill sync will fail; fix .env and restart",
       "pausedHint": "While paused, Kingdee order changes, un-approvals and status changes are not synced automatically; resume it as soon as possible",
       "saved": "Sync settings saved",
       "pausedTag": "Auto sync paused",

@@ -178,6 +178,8 @@ def _detail_rows(doc: dict, display: bool = False) -> list[list]:
 
 
 _IN = re.compile(r"FBillNo IN \((.*)\)")
+#: 同步起始日期（k3.approved_filter）：审核日期 >= 该日；没有 ApproveDate 的单据与金蝶一样不满足
+_SINCE = re.compile(r"FApproveDate>='(\d{4}-\d{2}-\d{2})'")
 
 
 def install_k3() -> None:
@@ -204,6 +206,14 @@ def install_k3() -> None:
             if int(data["StartRow"]) > 0:
                 return []
             docs = [d for d in list(BILLS.values()) if d["DocumentStatus"] == "C"]
+            flt = data.get("FilterString", "")
+            since = _SINCE.search(flt)
+            if since:
+                docs = [d for d in docs if (d.get("ApproveDate") or "")[:10] >= since.group(1)]
+            m = _IN.search(flt)
+            if m:
+                wanted = {x.strip().strip("'") for x in m.group(1).split(",")}
+                docs = [d for d in docs if d["BillNo"] in wanted]
             if data["FieldKeys"] == "FBillNo,FModifyDate":
                 return [[d["BillNo"], d["ModifyDate"]] for d in docs]
             if data["FieldKeys"] == "FBillNo,FTreeEntity_FSeq,FStatus,FPickMtrlStatus":
@@ -218,10 +228,6 @@ def install_k3() -> None:
             if display and K3_FAIL["display"]:
                 # 金蝶不认只显示列
                 return [[fail]]
-            m = _IN.search(data.get("FilterString", ""))
-            if m:
-                wanted = {x.strip().strip("'") for x in m.group(1).split(",")}
-                docs = [d for d in docs if d["BillNo"] in wanted]
             rows: list = []
             for d in docs:
                 rows += _detail_rows(d, display)

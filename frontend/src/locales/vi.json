@@ -988,7 +988,8 @@
       "REPLACED": "Chứng từ {bill} đã đồng bộ, {rows} dòng",
       "NOT_APPROVED": "Chứng từ {bill} chưa được duyệt trong Kingdee (trạng thái {status}); đã gỡ khỏi ảnh chụp",
       "NOT_APPROVED_NEW": "Chứng từ {bill} chưa được duyệt trong Kingdee (trạng thái {status}); không đưa vào ảnh chụp",
-      "NOT_FOUND": "Không tìm thấy chứng từ {bill} trong Kingdee"
+      "NOT_FOUND": "Không tìm thấy chứng từ {bill} trong Kingdee",
+      "OUT_OF_RANGE": "Chứng từ {bill} được duyệt trước ngày bắt đầu đồng bộ {since} và chưa có SN; không đưa vào ảnh chụp"
     },
     "syncFailed": "Lần đồng bộ so sánh gần nhất thất bại ({time}): {msg}; danh sách hiển thị ảnh chụp cũ",
     "syncedAt": "Đồng bộ gần nhất",
@@ -1081,6 +1082,10 @@
       "sourcePage": "Đã đặt trên trang (không còn dùng SN_SYNC_INTERVAL_MINUTES trong .env)",
       "sourceEnv": "Hiện dùng SN_SYNC_INTERVAL_MINUTES trong .env ({n} phút); sau khi đổi và lưu sẽ dùng giá trị trên trang",
       "updated": "Sửa lần cuối",
+      "startDate": "Ngày bắt đầu đồng bộ",
+      "startNone": "Không giới hạn (đồng bộ mọi chứng từ đã duyệt trên Kingdee)",
+      "startHint": "Chỉ đồng bộ chứng từ được duyệt trên Kingdee từ ngày này trở đi; chứng từ đã có SN luôn được đồng bộ và so sánh. Chứng từ trước ngày này chưa có SN sẽ bị gỡ khỏi ảnh chụp. Đặt SN_SYNC_START_DATE trong .env, khởi động lại để áp dụng",
+      "startBad": "SN_SYNC_START_DATE \"{v}\" không hợp lệ (dùng YYYY-MM-DD, không muộn hơn hôm nay): đồng bộ so sánh, dựng lại và đồng bộ theo chứng từ sẽ lỗi; sửa .env rồi khởi động lại",
       "pausedHint": "Trong khi tạm dừng, thay đổi lệnh, hủy duyệt và thay đổi trạng thái trên Kingdee sẽ không tự đồng bộ; hãy bật lại sớm",
       "saved": "Đã lưu cài đặt đồng bộ",
       "pausedTag": "Đã tạm dừng đồng bộ tự động",

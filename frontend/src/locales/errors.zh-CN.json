@@ -54,6 +54,7 @@
   "ORDER_LINE_NOT_FOUND": "物料行 {bill_no} / {seq} 不在快照中",
   "ORDER_SYNC_BUSY": "订单同步正在进行，请稍后再试",
   "SYNC_INTERVAL_INVALID": "同步间隔须为 {min}–{max} 分钟的整数",
+  "SYNC_START_DATE_INVALID": "同步起始日期 SN_SYNC_START_DATE「{value}」不对：须为 YYYY-MM-DD 且不晚于今天（留空 = 不限），改 .env 后重启",
   "ATTACH_INVALID": "附件项次不能为空，不超过 64 字",
   "ATTACH_FILL_K3": "金蝶已有附件项次，不能在页面修改",
   "LENGTH_FILL_INVALID": "米数不超过 64 字；统一设置时不能为空",
