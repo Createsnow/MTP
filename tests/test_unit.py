@@ -419,25 +419,16 @@ def test_locale_json_matches_sources(tmp_path, capsys):
 
 
 def test_migration_flyway_checksum():
-    """V1__init.sql 不再改（测试库已与 MES 联调，改 V1 须清库重建）；之后的表结构变化用增量脚本，只加表、补数据。
-    校验和按 Flyway 算法固定，改了建表脚本须同步更新这里。"""
+    """测试阶段只保留一个 V1__init.sql；校验和按 Flyway 算法固定，改了建表脚本须同步更新这里（并重建测试库）。"""
     ours = {m.script: m for m in migrations()}
-    assert list(ours) == ["V1__init.sql", "V2__sn_registry_and_prefix_claim.sql"]
-    assert ours["V1__init.sql"].checksum() == 826106475
-    v2 = ours["V2__sn_registry_and_prefix_claim.sql"]
-    assert [" ".join(x.split()[:3]) for x in v2.statements()] == [
-        "CREATE TABLE sn_registry",
-        "INSERT INTO sn_registry(sn,",
-        "INSERT INTO sn_registry(sn,",
-        "CREATE TABLE sn_prefix_claim",
-    ], "V2 只加表、补登记现有的号，不改已有的表"
-    assert v2.checksum() == 1639280521
+    assert list(ours) == ["V1__init.sql"]
+    assert ours["V1__init.sql"].checksum() == -382818343
     statements = ours["V1__init.sql"].statements()
-    assert len(statements) == 45
+    assert len(statements) == 47
     text = "\n".join(statements)
-    # 脚本独立完整：44 张表各一条 CREATE TABLE 加 sn_sync_state 初始行，不用 ALTER 等语句事后补字段、补索引
+    # 脚本独立完整：46 张表各一条 CREATE TABLE 加 sn_sync_state 初始行，不用 ALTER 等语句事后补字段、补索引
     kinds = [" ".join(s.split()[:2]).upper() for s in statements]
-    assert kinds.count("CREATE TABLE") == 44 and kinds.count("INSERT INTO") == 1, kinds
+    assert kinds.count("CREATE TABLE") == 46 and kinds.count("INSERT INTO") == 1, kinds
     for table in (
         "sn_line_count",
         "sn_line_length",
@@ -457,6 +448,9 @@ def test_migration_flyway_checksum():
         "sn_prefix_role",
         "sn_item_sub",
         "sn_item_sub_deleted",
+        # 防重加固（2026-11-26）：全公司 SN 唯一登记、前缀入场在途登记
+        "sn_registry",
+        "sn_prefix_claim",
     ):
         assert f"CREATE TABLE {table}" in text, table
     # 每张表只有一条完整的 CREATE TABLE（启动时不补建表、补字段，见 migrate.check_tables）

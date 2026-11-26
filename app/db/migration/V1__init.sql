@@ -602,6 +602,24 @@ CREATE TABLE sn_item_sub_deleted (
   KEY ix_item_sub_deleted_sn (sn2),
   KEY ix_item_sub_deleted_prefix (seq_prefix, seq_dec)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN 删号存档';
+-- 全公司 SN 唯一登记（2026-11-26 防重加固）：第一 SN（号池 sn_item，含 SN 导入的号）与第二 SN（sn_item_sub）共用一个主键，
+-- 两张表之间撞号也由数据库拦下（两表各自的唯一键互相管不到）。生成、导入写号时同事务登记，删号、导入整单删除时同事务移除；
+-- 转单、转组织不改 SN，不动这张表
+CREATE TABLE sn_registry (
+  sn    VARCHAR(64) NOT NULL COMMENT '完整 SN（第一 SN 或第二 SN）',
+  kind  TINYINT     NOT NULL COMMENT '1 第一 SN（sn_item）/ 2 第二 SN（sn_item_sub）',
+  PRIMARY KEY (sn)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='全公司 SN 唯一登记（第一 SN 与第二 SN 共用）';
+
+-- 前缀入场在途登记（2026-11-26 防重加固）：生成事务正在用、还没提交的前缀（见 locks 的「前缀入场」）。生成事务结束即删；
+-- 只在该前缀的前缀锁仍被持有时有效（进程退出即失效，下次碰到时删掉）
+CREATE TABLE sn_prefix_claim (
+  prefix      VARCHAR(64) NOT NULL COMMENT '前缀（识别码为前缀层文本）',
+  kind        CHAR(1)     NOT NULL COMMENT 'P 普通前缀 / I 识别码前缀层',
+  pi_no       VARCHAR(64) NOT NULL COMMENT '正在用它生成的 PI',
+  created_at  DATETIME    NOT NULL,
+  PRIMARY KEY (prefix, kind)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='前缀入场在途登记';
 
 -- SN 导入记录：本系统之外已有的 SN 按导入模板（PI、单据编号、行号、完整 SN、物料编码、附件项次、米数、流水号、进制位数、
 -- 流水位数、产品单位、生产组织编号、客户编码）一次导入一个导入单号，逐枚记在这里；导入功能自成一套，只用这张表：

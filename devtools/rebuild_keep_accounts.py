@@ -5,8 +5,6 @@ sn_k3_config（金蝶连接）、flyway_schema_history（迁移记录）。保�
 有一张不一致就不执行、列出差异。sn_seq 里批次号的当天序号（PS- / PL- / XO- 开头的行）重建后写回，
 避免同一天再建批与 MES 已收过的批次号重复。其余 sn_ 表（含旧版本留下的）全部删除，按 V1 的顺序重建（空表），
 最后把 flyway_schema_history 里 V1 的校验和改成当前脚本的，启动时不再报 migration_checksum_mismatch。
-V1 之后的增量脚本（如 V2__sn_registry_and_prefix_claim.sql）里的表一并重建（空表），库里还没有执行记录的补记一笔，
-启动时不再重复执行。
 
     uv run python -m devtools.rebuild_keep_accounts          # 只检查，列出会做什么（不改库）
     uv run python -m devtools.rebuild_keep_accounts --yes    # 检查通过后执行
@@ -58,9 +56,9 @@ _TBL = (
 class Plan:
     database: str
     keep: list[str]
-    #: V1 及之后增量脚本的建表顺序，(表名, 语句)
+    #: V1 的建表顺序，(表名, 语句)
     creates: list[tuple[str, str]]
-    #: 建表之外的语句（sn_sync_state 的初始行、增量脚本的补登记），(表名, 语句)
+    #: V1 里建表之外的语句（sn_sync_state 的初始行），(表名, 语句)
     inserts: list[tuple[str, str]]
     #: 库里现有的 sn_ 表
     existing: list[str]
@@ -86,17 +84,16 @@ class Plan:
 
 
 def v1() -> tuple[list[tuple[str, str]], list[tuple[str, str]], int]:
-    """V1 及之后增量脚本的建表、插入语句（按脚本顺序），与 V1 的校验和。"""
+    m = next(m for m in migrations() if m.version == "1")
     creates, inserts = [], []
-    for m in migrations():
-        for s in m.statements():
-            if c := _CREATE.match(s):
-                creates.append((c.group(1), s))
-            elif i := _INSERT.match(s):
-                inserts.append((i.group(1), s))
-            else:
-                raise SystemExit(f"{m.script} 里有不认识的语句：{s[:60]}")
-    return creates, inserts, next(m for m in migrations() if m.version == "1").checksum()
+    for s in m.statements():
+        if c := _CREATE.match(s):
+            creates.append((c.group(1), s))
+        elif i := _INSERT.match(s):
+            inserts.append((i.group(1), s))
+        else:
+            raise SystemExit(f"V1 里有不认识的语句：{s[:60]}")
+    return creates, inserts, m.checksum()
 
 
 def _shape(c, table: str) -> tuple[list[tuple], list[tuple], tuple]:
@@ -190,8 +187,8 @@ def problems(p: Plan) -> list[str]:
         out.append(f"库里没有 {HISTORY}（或为空）：不是本系统按 V1 建的库，按运维手册 8.1 整体重建")
     elif any(not h["success"] for h in p.history):
         out.append(f"{HISTORY} 里有失败的迁移记录，先人工处理")
-    elif any(h["version"] not in ({None, "0"} | {m.version for m in migrations()}) for h in p.history):
-        out.append(f"{HISTORY} 里有建表脚本之外的迁移（{[h['version'] for h in p.history]}），本工具只处理现有脚本")
+    elif any(h["version"] not in (None, "0", "1") for h in p.history):
+        out.append(f"{HISTORY} 里有 V1 之外的迁移（{[h['version'] for h in p.history]}），本工具只处理 V1")
     return out
 
 
@@ -247,23 +244,6 @@ def execute(c, p: Plan) -> None:
         f"UPDATE {HISTORY} SET checksum = %s WHERE version = '1' AND type = 'SQL'",
         (p.checksum,),
     )
-    # V1 之后的增量脚本：表已按脚本重建，校验和改成当前的；还没有执行记录的补记一笔（启动时不再重复执行）
-    done = {h["version"] for h in p.history}
-    rank = max((h["installed_rank"] for h in p.history), default=0)
-    for m in migrations():
-        if m.version == "1":
-            continue
-        if m.version in done:
-            c.execute(
-                f"UPDATE {HISTORY} SET checksum = %s WHERE version = %s AND type = 'SQL'", (m.checksum(), m.version)
-            )
-            continue
-        rank += 1
-        c.execute(
-            f"INSERT INTO {HISTORY}(installed_rank, version, description, type, script, checksum, installed_by, "
-            "execution_time, success) VALUES (%s,%s,%s,'SQL',%s,%s,CURRENT_USER(),0,1)",
-            (rank, m.version, m.description, m.script, m.checksum()),
-        )
 
 
 def other_connections(c) -> list[dict]:

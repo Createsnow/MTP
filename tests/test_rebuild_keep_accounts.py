@@ -93,13 +93,6 @@ def test_rebuild_keeps_accounts_and_rebuilds_others(cur) -> None:
     # 迁移记录：V1 校验和改成当前脚本的
     cur.execute(f"SELECT checksum FROM {HISTORY} WHERE version = '1'")
     assert cur.fetchone()["checksum"] == migrations()[0].checksum()
-    # V1 之后的增量脚本：表一并重建，没有执行记录的补记（启动时不再重复执行）
-    assert {"sn_registry", "sn_prefix_claim"} <= set(after.existing)
-    cur.execute(f"SELECT version, checksum, success FROM {HISTORY} WHERE version <> '1' ORDER BY installed_rank")
-    assert [(r["version"], r["checksum"], r["success"]) for r in cur.fetchall()] == [
-        (m.version, m.checksum(), 1) for m in migrations()[1:]
-    ]
-    assert rk.problems(after) == [], "补记后再检查不报「建表脚本之外的迁移」"
     # 比对用的临时表不留
     cur.execute("SHOW TABLES LIKE 'tmp\\_rebuild\\_chk\\_%'")
     assert cur.fetchall() == ()
@@ -131,34 +124,3 @@ def test_missing_kept_table_is_created(cur) -> None:
 def test_refuses_without_history(cur) -> None:
     cur.execute(f"DROP TABLE {HISTORY}")
     assert any(HISTORY in b for b in rk.problems(rk.inspect(cur)))
-
-
-def test_v2_upgrades_existing_db_in_place(cur) -> None:
-    """已按 V1 建、有号的库（测试库）按 V2 就地升级：不动已有的表与数据，现有的第一 SN、第二 SN 补登记；
-    历史上第二 SN 与第一 SN 相同的（数据问题）跳过、不报错，可用核对语句查出。"""
-    cols = (
-        "sn, pi_no, customer_code, bill_no, bill_seq, material_code, gen_org_code, gen_bill_no, gen_bill_seq, "
-        "seq_pi_no, seq_dec, length_text, attach_no, rule_version_id, seq_prefix, gen_batch, status, created_at, "
-        "updated_at"
-    )
-    for i, sn in enumerate(("A0001", "A0002", "B0001"), 1):
-        cur.execute(
-            f"INSERT INTO sn_item({cols}) VALUES (%s,'PI1','C','MO1',1,'M','110','MO1',1,'PI1',%s,'','1',1,%s,'G1',"
-            "'PENDING_ALLOC',%s,%s)",
-            (sn, i, sn[0], NOW, NOW),
-        )
-    cur.execute("SELECT id FROM sn_item ORDER BY id")
-    ids = [r["id"] for r in cur.fetchall()]
-    for item_id, sn2, q in ((ids[0], "Z0001", 1), (ids[1], "B0001", 2)):
-        cur.execute(
-            "INSERT INTO sn_item_sub(item_id, sn2, seq_pi_no, seq_dec, seq_prefix, rule_version_id, gen_batch, "
-            "created_at) VALUES (%s,%s,'PI1',%s,'Z',1,'G1',%s)",
-            (item_id, sn2, q, NOW),
-        )
-    v2 = migrations()[1]
-    for s in v2.statements():
-        cur.execute(s)
-    cur.execute("SELECT sn, kind FROM sn_registry ORDER BY sn")
-    assert [(r["sn"], r["kind"]) for r in cur.fetchall()] == [("A0001", 1), ("A0002", 1), ("B0001", 1), ("Z0001", 2)]
-    cur.execute("SELECT COUNT(*) n FROM sn_item")
-    assert cur.fetchone()["n"] == 3, "已有的号不动"
