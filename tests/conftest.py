@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlencode
@@ -540,6 +541,8 @@ class World:
             "F_HX_PI": pi,
             "PrdOrgId": {"Number": org, "Name": [{"Key": 2052, "Value": f"组织{org}"}]},
             "ModifyDate": f"2026-10-01T00:00:{next(_MODIFY) % 60:02d}",
+            # 审核日期：今天（在建库默认的同步起始日期「往前 3 个月」之内）
+            "ApproveDate": f"{date.today().isoformat()}T08:00:00",
             "TreeEntity": entries,
         }
 
@@ -763,6 +766,8 @@ def _fresh_sn(request):
         with raw_conn() as c, c.cursor() as cur:
             for t in _SN_TABLES:
                 cur.execute(f"DELETE FROM {t}")
+            # 同步起始日期恢复为建库默认（往前 3 个月）
+            cur.execute("UPDATE sn_sync_state SET start_date = DATE_SUB(CURDATE(), INTERVAL 3 MONTH) WHERE id = 1")
         BILLS.clear()
         MES.reset()
         RECEIPT_REPLIES.clear()

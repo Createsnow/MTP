@@ -87,11 +87,11 @@ def order_sync_config(cu: AdminDep) -> dict:
 
 @router.put(
     "/sync-config",
-    summary="改同步设置（只有系统管理员）：间隔 5–1440 分钟、暂停 / 恢复自动同步（定时、进页）；"
-    "立即比对同步、按单据同步、全量重建不受影响；下一分钟内生效",
+    summary="改同步设置（只有系统管理员）：间隔 5–1440 分钟、暂停 / 恢复自动同步（定时、进页）、"
+    "同步起始日期（YYYY-MM-DD，不晚于今天；空串 = 不限）；暂停不影响立即比对同步、按单据同步、全量重建；下一分钟内生效",
 )
 def order_sync_config_save(body: SyncConfigIn, cu: AdminDep) -> dict:
-    return orders.save_sync_config(cu, body.interval_minutes, body.paused)
+    return orders.save_sync_config(cu, body.interval_minutes, body.paused, body.start_date)
 
 
 @router.post("/rebuild", summary="全量重建快照（首次上线导入、怀疑快照与金蝶不一致时）")

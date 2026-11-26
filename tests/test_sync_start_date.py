@@ -1,7 +1,9 @@
-"""同步起始日期（.env 的 SN_SYNC_START_DATE）：快照只收审核日期在起始日期及之后的已审核单据 + 已出号单据（不论日期）。
+"""同步起始日期（生产订单页「同步设置」，sn_sync_state.start_date）：快照只收审核日期在起始日期及之后的已审核单据
++ 已出号单据（不论日期）。
 
-没设置时与原来完全相同（查询条件不变）；已出号单据照常比对（PI 变更、反审核、业务状态）；起始日期之前、没出过号的
-单据移出快照，按单据同步也不收；日期不对时报错、快照不改。只涉及金蝶 → 本系统，不涉及 MES 接口。
+建库默认为往前 3 个月（首次启动不会把全部历史拉进来）；改为不限时查询条件与原来完全相同；已出号单据照常比对
+（PI 变更、反审核、业务状态）；起始日期之前、没出过号的单据移出快照，按单据同步也不收。只涉及金蝶 → 本系统，
+不涉及 MES 接口。
 """
 
 from __future__ import annotations
@@ -26,10 +28,14 @@ def approved(bill: str, when: str) -> None:
     BILLS[bill]["ApproveDate"] = when
 
 
-def filters(path_part: str = "ExecuteBillQuery") -> list[str]:
+def set_start(w, value: str) -> dict:
+    return ok(w.api.put("/api/orders/sync-config", {"start_date": value}, w.admin))
+
+
+def filters() -> list[str]:
     out = []
     for c in conftest.K3.calls:
-        if path_part in c.path:
+        if "ExecuteBillQuery" in c.path:
             data = conftest.FakeK3.param(c, 0)
             if data.get("FormId") == "PRD_MO":
                 out.append(data["FilterString"])
@@ -40,22 +46,40 @@ def in_snapshot(sql, bill: str) -> int:
     return sql.count("SELECT COUNT(*) FROM sn_prd_mo WHERE bill_no = %s", bill)
 
 
-def test_no_start_date_keeps_original_filters(w, sql, monkeypatch):
-    """没设置：比对同步的表头、业务状态查询条件与原来完全相同（只有已审核）。"""
-    monkeypatch.delenv("SN_SYNC_START_DATE", raising=False)
+def test_fresh_db_defaults_to_last_three_months(w, api, sql):
+    """建库默认往前 3 个月：首次比对同步只拉最近 3 个月审核的单据，更早的不进快照。"""
+    default = sql.scalar("SELECT DATE_SUB(CURDATE(), INTERVAL 3 MONTH)").isoformat()
+    assert ok(api.get("/api/orders/sync-config", w.admin))["start_date"] == default
+    org = w.org(uid("O")[:10])
+    recent, ancient = uid("MO"), uid("MO")
+    BILLS[recent] = w.doc(recent, org, "C1", "PI-R", ("M1", 5))
+    BILLS[ancient] = w.doc(ancient, org, "C1", "PI-A", ("M1", 5))
+    approved(ancient, f"{(_TODAY - timedelta(days=200)).isoformat()}T08:00:00")
+    conftest.K3.calls.clear()
+    w.compare()
+    assert filters()[0] == f"FDocumentStatus='C' AND FApproveDate>='{default}'"
+    assert in_snapshot(sql, recent) == 1
+    assert in_snapshot(sql, ancient) == 0, "首次同步不拉 3 个月之前的单据"
+
+
+def test_unlimited_keeps_original_filters(w, sql):
+    """改为不限：比对同步的表头、业务状态查询条件与原来完全相同（只有已审核）。"""
+    assert set_start(w, "")["start_date"] is None
     org = w.org(uid("O")[:10])
     a = uid("MO")
     BILLS[a] = w.doc(a, org, "C1", "PI-A", ("M1", 5))
+    del BILLS[a]["ApproveDate"]
     conftest.K3.calls.clear()
     w.compare()
-    assert in_snapshot(sql, a) == 1, "没有审核日期的单据照常进快照"
+    assert in_snapshot(sql, a) == 1, "不限时没有审核日期的单据也照常进快照"
     fs = filters()
     assert fs[0] == "FDocumentStatus='C'", "表头"
     assert fs[-1] == "FDocumentStatus='C'", "业务状态"
     assert not any("FApproveDate" in f for f in fs)
 
 
-def test_compare_scope_new_bills_plus_issued_old_bills(w, api, sql, monkeypatch):
+def test_compare_scope_new_bills_plus_issued_old_bills(w, api, sql):
+    set_start(w, "")
     org = w.org(uid("O")[:10])
     old_plain, new_bill = uid("MO"), uid("MO")
     # 起始日期之前审核：一张没出号、一张已出号
@@ -70,7 +94,7 @@ def test_compare_scope_new_bills_plus_issued_old_bills(w, api, sql, monkeypatch)
     BILLS[new_bill] = w.doc(new_bill, org, "C1", "PI-NEW", ("M1", 3))
     approved(new_bill, NEW)
 
-    monkeypatch.setenv("SN_SYNC_START_DATE", SINCE)
+    assert set_start(w, SINCE)["start_date"] == SINCE
     conftest.K3.calls.clear()
     r = w.compare()
     assert in_snapshot(sql, new_bill) == 1, "起始日期起审核的单据进快照"
@@ -80,8 +104,6 @@ def test_compare_scope_new_bills_plus_issued_old_bills(w, api, sql, monkeypatch)
     fs = filters()
     assert fs[0] == f"FDocumentStatus='C' AND FApproveDate>='{SINCE}'"
     assert any(f"FBillNo IN ('{old_issued}')" in f for f in fs), "已出号的旧单按单据编号另查"
-    cfg = ok(api.get("/api/orders/sync-config", w.admin))
-    assert (cfg["start_date"], cfg["start_date_ok"]) == (SINCE, True)
 
     # 已出号的旧单照常比对：PI 变更提醒、业务状态刷新
     BILLS[old_issued]["TreeEntity"][0].update(Status="5", PickMtrlStatus="2")
@@ -102,20 +124,20 @@ def test_compare_scope_new_bills_plus_issued_old_bills(w, api, sql, monkeypatch)
     assert in_snapshot(sql, old_issued) == 0
     assert sql.scalar("SELECT leave_state FROM sn_bill_ledger WHERE bill_no = %s", old_issued) == "REVERSAL"
 
-    # 清空起始日期：旧单重新拉回
-    monkeypatch.delenv("SN_SYNC_START_DATE")
+    # 改为不限：旧单重新拉回
+    set_start(w, "")
     w.compare()
     assert in_snapshot(sql, old_plain) == 1
 
 
-def test_bill_sync_respects_start_date(w, api, sql, monkeypatch):
+def test_bill_sync_respects_start_date(w, api, sql):
     org = w.org(uid("O")[:10])
     old, new = uid("MO"), uid("MO")
     BILLS[old] = w.doc(old, org, "C1", "PI-O", ("M1", 5))
     approved(old, OLD)
     BILLS[new] = w.doc(new, org, "C1", "PI-N", ("M1", 5))
     approved(new, NEW)
-    monkeypatch.setenv("SN_SYNC_START_DATE", SINCE)
+    set_start(w, SINCE)
     r = ok(api.post("/api/orders/sync", m(bill_no=old), w.admin))
     assert (r["outcome"], r["since"]) == ("OUT_OF_RANGE", SINCE)
     assert in_snapshot(sql, old) == 0
@@ -126,19 +148,21 @@ def test_bill_sync_respects_start_date(w, api, sql, monkeypatch):
     assert ok(api.post("/api/orders/sync", m(bill_no=old), w.admin))["outcome"] == "OUT_OF_RANGE"
 
 
-def test_bill_sync_old_issued_bill_still_synced(w, api, sql, monkeypatch):
+def test_bill_sync_old_issued_bill_still_synced(w, api, sql):
+    set_start(w, "")
     org = w.org(uid("O")[:10])
     pi, bill = uid("PI"), uid("MO")
     w.order(bill, org, "C1", pi, ("M1", 4))
     approved(bill, OLD)
     ok(w.bind_pi(pi, w.rule(P())))
     w.generate(pi)
-    monkeypatch.setenv("SN_SYNC_START_DATE", SINCE)
+    set_start(w, SINCE)
     assert ok(api.post("/api/orders/sync", m(bill_no=bill), w.admin))["outcome"] == "REPLACED"
     assert in_snapshot(sql, bill) == 1
 
 
-def test_rebuild_scope(w, api, sql, monkeypatch):
+def test_rebuild_scope(w, api, sql):
+    set_start(w, "")
     org = w.org(uid("O")[:10])
     old_plain, new_bill = uid("MO"), uid("MO")
     w.order(old_plain, org, "C1", "PI-OLD", ("M1", 5))
@@ -150,7 +174,7 @@ def test_rebuild_scope(w, api, sql, monkeypatch):
     w.generate(pi)
     BILLS[new_bill] = w.doc(new_bill, org, "C1", "PI-NEW", ("M1", 3))
     approved(new_bill, NEW)
-    monkeypatch.setenv("SN_SYNC_START_DATE", SINCE)
+    set_start(w, SINCE)
     r = ok(api.post("/api/orders/rebuild", {}, w.admin))
     assert (r["since"], r["bills"], r["rows"]) == (SINCE, 2, 3)
     assert in_snapshot(sql, new_bill) == 1
@@ -158,17 +182,29 @@ def test_rebuild_scope(w, api, sql, monkeypatch):
     assert in_snapshot(sql, old_plain) == 0
 
 
-def test_invalid_start_date_fails_without_touching_snapshot(w, api, sql, monkeypatch):
-    org = w.org(uid("O")[:10])
-    a = uid("MO")
-    w.order(a, org, "C1", "PI-A", ("M1", 5))
-    for bad in ("2026/11/26", "tomorrow", "2999-01-01"):
-        monkeypatch.setenv("SN_SYNC_START_DATE", bad)
-        r = api.post("/api/orders/compare", {}, w.admin)
-        assert r.code == "SYNC_START_DATE_INVALID", bad
-        assert in_snapshot(sql, a) == 1, "快照不改"
-        assert api.post("/api/orders/sync", m(bill_no=a), w.admin).code == "SYNC_START_DATE_INVALID"
-        assert api.post("/api/orders/rebuild", {}, w.admin).code == "SYNC_START_DATE_INVALID"
-        cfg = ok(api.get("/api/orders/sync-config", w.admin))
-        assert (cfg["start_date"], cfg["start_date_raw"], cfg["start_date_ok"]) == (None, bad, False)
-    assert sql.scalar("SELECT last_ok FROM sn_sync_state WHERE id = 1") == 0, "比对同步记为失败，页面显示原因"
+def test_save_start_date_validation_and_audit(w, api, sql):
+    before = ok(api.get("/api/orders/sync-config", w.admin))["start_date"]
+    future = (_TODAY + timedelta(days=1)).isoformat()
+    for bad in ("2026/11/26", "tomorrow", "2026-1-5", future):
+        r = api.put("/api/orders/sync-config", {"start_date": bad}, w.admin)
+        assert (r.status, r.code) == (400, "SYNC_START_DATE_INVALID"), bad
+    assert ok(api.get("/api/orders/sync-config", w.admin))["start_date"] == before, "不合法时不改"
+    # 只改暂停不动起始日期
+    try:
+        assert ok(api.put("/api/orders/sync-config", {"paused": True}, w.admin))["start_date"] == before
+        cfg = set_start(w, _TODAY.isoformat())
+        assert (cfg["start_date"], cfg["updated_by"], cfg["paused"]) == (_TODAY.isoformat(), "admin", True)
+        a = sql.one(
+            "SELECT * FROM sn_audit WHERE action = 'ORDER_SYNC_CONFIG' AND result = 'OK' ORDER BY id DESC LIMIT 1"
+        )
+        assert f"start {before} -> {_TODAY.isoformat()}" in a["detail"]
+        # 没有变化不留痕
+        n = sql.count("SELECT COUNT(*) FROM sn_audit WHERE action = 'ORDER_SYNC_CONFIG'")
+        set_start(w, _TODAY.isoformat())
+        assert sql.count("SELECT COUNT(*) FROM sn_audit WHERE action = 'ORDER_SYNC_CONFIG'") == n
+        # 操作员不能改
+        org = w.org(uid("O")[:10])
+        tok = w.user(conftest.emp("F"), "operator", None, [org])
+        assert api.put("/api/orders/sync-config", {"start_date": ""}, tok).status == 403
+    finally:
+        sql.exec("UPDATE sn_sync_state SET paused = 0, config_by = NULL, config_at = NULL WHERE id = 1")

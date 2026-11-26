@@ -54,7 +54,7 @@
   "ORDER_LINE_NOT_FOUND": "Material line {bill_no} / {seq} is not in the snapshot",
   "ORDER_SYNC_BUSY": "Order sync is running, please retry later",
   "SYNC_INTERVAL_INVALID": "The sync interval must be a whole number of minutes from {min} to {max}",
-  "SYNC_START_DATE_INVALID": "Sync start date SN_SYNC_START_DATE \"{value}\" is invalid: use YYYY-MM-DD, not later than today (blank = no limit); edit .env and restart",
+  "SYNC_START_DATE_INVALID": "Sync start date \"{value}\" is invalid: use YYYY-MM-DD, not later than today (blank = no limit)",
   "ATTACH_INVALID": "Attachment item cannot be empty and must be at most 64 characters",
   "ATTACH_FILL_K3": "Kingdee already has the attachment item; it cannot be changed on the page",
   "LENGTH_FILL_INVALID": "Length must be at most 64 characters and cannot be empty when set in batch",

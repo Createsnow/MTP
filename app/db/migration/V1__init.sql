@@ -199,12 +199,14 @@ CREATE TABLE sn_sync_state (
   last_full_at  DATETIME     NULL COMMENT '最近一次全量重建',
   interval_minutes INT       NULL COMMENT '定时比对同步间隔（分钟，生产订单页「同步设置」保存）；空 = 用 .env 的 SN_SYNC_INTERVAL_MINUTES',
   paused        TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '暂停自动同步（定时比对同步、进页同步）；手动同步不受影响',
+  start_date    DATE         NULL COMMENT '同步起始日期（生产订单页「同步设置」）：只同步金蝶审核日期在这天及之后的单据，已出号单据不论日期；空 = 不限。建库时为建库当天往前 3 个月',
   config_by     VARCHAR(64)  NULL COMMENT '同步设置最后修改人',
   config_at     DATETIME     NULL COMMENT '同步设置最后修改时间',
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='订单同步状态';
 
-INSERT INTO sn_sync_state (id) VALUES (1);
+-- 首次启动默认只同步最近 3 个月审核的单据（按 MySQL 服务器当天日期），管理员可在页面改早或改为不限
+INSERT INTO sn_sync_state (id, start_date) VALUES (1, DATE_SUB(CURDATE(), INTERVAL 3 MONTH));
 
 -- 金蝶 K3 Cloud 连接参数（生产订单页「金蝶连接」维护，只有一行 id = 1）；没有这一行时沿用 .env 的 K3_*。
 CREATE TABLE sn_k3_config (

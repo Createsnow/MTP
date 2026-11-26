@@ -3,7 +3,7 @@
 - LoginByAppSecret 登录；批量查询用 ExecuteBillQuery 分页，单张用 View。
 - 比对同步只取已审核（FDocumentStatus = 'C'）单据的单据编号与修改时间两列，比对在本地完成；
   变动的单据再按单据编号批量拉明细。全量重建按已审核条件完整拉取。
-- 同步起始日期（.env 的 SN_SYNC_START_DATE，见 orders.sync_start_date）：设置后表头、全量重建、业务状态三种批量查询
+- 同步起始日期（生产订单页「同步设置」，见 orders.sync_start_date）：设置后表头、全量重建、业务状态三种批量查询
   另加 FApproveDate（审核日期）>= 该日；已出号单据不看日期，按单据编号另查（fetch_heads_of、fetch_bills）。
   没设置时查询条件与原来完全相同。
 - 按单据编号同步、离开快照检测用 View，不带单据状态条件，只看单据状态。

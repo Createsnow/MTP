@@ -11,14 +11,15 @@
 4. 全量重建：完整拉取后写入新表、原子换表（RENAME），失败旧快照完整保留；完成后对全部已出号单据比对。
 各种同步共用一把同步锁：按单据同步、全量重建最多排队 30 秒，比对同步和进页同步直接跳过。
 
-同步起始日期（.env 的 SN_SYNC_START_DATE，YYYY-MM-DD；空 = 不限，与原来相同）：设置后快照只收
-「金蝶审核日期在这天及之后的已审核单据」+「已出号单据（sn_bill_ledger，不论日期）」。
+同步起始日期（sn_sync_state.start_date，生产订单页「同步设置」；空 = 不限，查询条件与原来相同）：设置后快照只收
+「金蝶审核日期在这天及之后的已审核单据」+「已出号单据（sn_bill_ledger，不论日期）」。建库时默认为建库当天往前 3 个月，
+所以首次启动的自动同步只拉最近 3 个月审核的单据，不会把全部历史拉进来。
 - 比对同步、全量重建、业务状态刷新按这个范围拉取；已出号单据按单据编号另查，变更比对、反审核、删除检测照旧。
 - 起始日期之前、没出过号的单据视同不在金蝶：下一次比对同步移出快照（不再能生成、导入、作转移目标）；
   把日期改早或清空后，下一次比对同步重新拉回（数量多时建议改用全量重建）。
 - 按单据同步：起始日期之前审核、没出过号的单据不进快照（OUT_OF_RANGE）。
-- 日期格式不对或晚于今天：比对同步、全量重建、按单据同步报错（SYNC_START_DATE_INVALID），快照不改。
-- 只改本系统从金蝶取哪些单据；不改 MES 接口，不改已有的号。改 .env 后须重启生效。
+- 页面保存时校验：须为 YYYY-MM-DD 且不晚于今天（SYNC_START_DATE_INVALID）；保存后下一次同步生效，不用重启。
+- 只改本系统从金蝶取哪些单据；不改 MES 接口，不改已有的号。
 
 同步设置（生产订单页「同步设置」，只有系统管理员；存 sn_sync_state）：定时比对同步的间隔（分钟，没在页面设置过时
 用 .env 的 SN_SYNC_INTERVAL_MINUTES）与暂停自动同步。暂停只停定时比对同步和进页同步；立即比对同步、按单据同步、
@@ -251,19 +252,13 @@ def _interval_of(stored) -> int:
 
 
 def sync_config() -> dict:
-    """同步设置：生效的间隔与来源（PAGE 页面保存 / ENV .env）、.env 的间隔、是否暂停、最后修改。"""
+    """同步设置：生效的间隔与来源（PAGE 页面保存 / ENV .env）、.env 的间隔、是否暂停、同步起始日期、最后修改。"""
     st = db.one("SELECT * FROM sn_sync_state WHERE id = 1") or {}
     stored = st.get("interval_minutes")
-    try:
-        since, start_ok = sync_start_date(), True
-    except BizError:
-        since, start_ok = None, False
+    since = st.get("start_date")
     return {
-        # 同步起始日期（只读，.env 的 SN_SYNC_START_DATE）：start_date 为生效的日期（空 = 不限）；
-        # start_date_ok = False 时 start_date_raw 格式不对或晚于今天，比对同步、全量重建、按单据同步会报错
+        # 同步起始日期：空 = 不限
         "start_date": since.isoformat() if since is not None else None,
-        "start_date_raw": settings.sync_start_date_raw,
-        "start_date_ok": start_ok,
         "interval_minutes": _interval_of(stored),
         "source": "PAGE" if stored else "ENV",
         "env_interval_minutes": settings.sync_interval_minutes,
@@ -275,22 +270,42 @@ def sync_config() -> dict:
     }
 
 
-def save_sync_config(cu: CurrentUser, interval_minutes: int | None, paused: bool | None) -> dict:
+def _start_date_value(value: str) -> date | None:
+    """页面提交的同步起始日期：空串 = 不限（None）；否则须为 YYYY-MM-DD 且不晚于今天
+    （晚于今天时新订单一张都进不来）。"""
+    v = util.trim(value)
+    if not v:
+        return None
+    try:
+        d = date.fromisoformat(v)
+    except ValueError:
+        raise biz(ErrorCode.SYNC_START_DATE_INVALID, value=v) from None
+    if len(v) != 10 or d > util.now().date():
+        raise biz(ErrorCode.SYNC_START_DATE_INVALID, value=v)
+    return d
+
+
+def save_sync_config(
+    cu: CurrentUser, interval_minutes: int | None, paused: bool | None, start_date: str | None = None
+) -> dict:
     """改同步设置（只有系统管理员）：不传的项不变（间隔没在页面设置过时仍用 .env）；没有变化不写、不留痕。
-    下一分钟内生效。"""
-    st = db.one("SELECT interval_minutes, paused FROM sn_sync_state WHERE id = 1") or {}
-    old_stored, old_paused = st.get("interval_minutes"), bool(st.get("paused"))
+    start_date：YYYY-MM-DD 或空串（不限）。下一分钟内生效（起始日期在下一次同步时生效）。"""
+    st = db.one("SELECT interval_minutes, paused, start_date FROM sn_sync_state WHERE id = 1") or {}
+    old_stored, old_paused, old_start = st.get("interval_minutes"), bool(st.get("paused")), st.get("start_date")
     if interval_minutes is not None and not (INTERVAL_MIN <= interval_minutes <= INTERVAL_MAX):
         raise biz(ErrorCode.SYNC_INTERVAL_INVALID, min=INTERVAL_MIN, max=INTERVAL_MAX)
     new_stored = old_stored if interval_minutes is None else interval_minutes
     new_paused = old_paused if paused is None else paused
-    if (new_stored, new_paused) == (old_stored, old_paused):
+    new_start = old_start if start_date is None else _start_date_value(start_date)
+    if (new_stored, new_paused, new_start) == (old_stored, old_paused, old_start):
         return sync_config()
     with db.tx():
         db.exec(
-            "UPDATE sn_sync_state SET interval_minutes = %s, paused = %s, config_by = %s, config_at = %s WHERE id = 1",
+            "UPDATE sn_sync_state SET interval_minutes = %s, paused = %s, start_date = %s, config_by = %s, "
+            "config_at = %s WHERE id = 1",
             new_stored,
             1 if new_paused else 0,
+            new_start,
             cu.emp_no,
             util.now(),
         )
@@ -299,6 +314,7 @@ def save_sync_config(cu: CurrentUser, interval_minutes: int | None, paused: bool
             audit.entry(audit.ORDER_SYNC_CONFIG).info(
                 f"interval {_interval_of(old_stored)} -> {_interval_of(new_stored)}"
                 f" paused {int(old_paused)} -> {int(new_paused)}"
+                f" start {old_start or '-'} -> {new_start or '-'}"
             ),
         )
     return sync_config()
@@ -308,18 +324,8 @@ def save_sync_config(cu: CurrentUser, interval_minutes: int | None, paused: bool
 
 
 def sync_start_date() -> date | None:
-    """同步起始日期（.env 的 SN_SYNC_START_DATE）；没设置为 None（不限）。格式不对或晚于今天报错（不按不限处理：
-    否则一处笔误就会把全部历史单据拉回快照）。"""
-    raw = settings.sync_start_date_raw
-    if not raw:
-        return None
-    try:
-        d = date.fromisoformat(raw)
-    except ValueError:
-        raise biz(ErrorCode.SYNC_START_DATE_INVALID, value=raw) from None
-    if d > util.now().date():
-        raise biz(ErrorCode.SYNC_START_DATE_INVALID, value=raw)
-    return d
+    """同步起始日期（页面「同步设置」保存，建库时默认往前 3 个月）；None = 不限。"""
+    return db.scalar("SELECT start_date FROM sn_sync_state WHERE id = 1")
 
 
 def _ledger_bills() -> list[str]:

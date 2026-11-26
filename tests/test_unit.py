@@ -422,7 +422,7 @@ def test_migration_flyway_checksum():
     """测试阶段只保留一个 V1__init.sql；校验和按 Flyway 算法固定，改了建表脚本须同步更新这里（并重建测试库）。"""
     ours = {m.script: m for m in migrations()}
     assert list(ours) == ["V1__init.sql"]
-    assert ours["V1__init.sql"].checksum() == -382818343
+    assert ours["V1__init.sql"].checksum() == -1413037288
     statements = ours["V1__init.sql"].statements()
     assert len(statements) == 47
     text = "\n".join(statements)

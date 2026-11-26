@@ -77,10 +77,7 @@ class ErrorCode(Enum):
     ORDER_LINE_NOT_FOUND = (404, "物料行 {bill_no} / {seq} 不在快照中")
     ORDER_SYNC_BUSY = (409, "订单同步正在进行，请稍后再试")
     SYNC_INTERVAL_INVALID = (400, "同步间隔须为 {min}–{max} 分钟的整数")
-    SYNC_START_DATE_INVALID = (
-        503,
-        "同步起始日期 SN_SYNC_START_DATE「{value}」不对：须为 YYYY-MM-DD 且不晚于今天（留空 = 不限），改 .env 后重启",
-    )
+    SYNC_START_DATE_INVALID = (400, "同步起始日期「{value}」不对：须为 YYYY-MM-DD 且不晚于今天（留空 = 不限）")
     ATTACH_INVALID = (400, "附件项次不能为空，不超过 64 字")
     ATTACH_FILL_K3 = (409, "金蝶已有附件项次，不能在页面修改")
     LENGTH_FILL_INVALID = (400, "米数不超过 64 字；统一设置时不能为空")
