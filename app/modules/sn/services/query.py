@@ -102,7 +102,10 @@ def _seq_of(text: str, specs: list[codec.Spec]) -> int | None:
     return None
 
 
-def seq_range(f: Filter) -> tuple[str, int | None, int | None] | None:
+def seq_range(f: Filter) -> tuple[str, int | None, int | None, str | None] | None:
+    """流水范围：(PI, 起流水, 止流水, 规则前缀)。一个 PI 可以有多个前缀（按单据选规则）：起止给的是号池里的完整 SN 时
+    只查这个前缀的号（流水相同的别的前缀的号不算在范围内），两端是不同前缀的号时报 QUERY_RANGE_INVALID；
+    只给流水号时前缀为 None（本 PI 各前缀里这段流水的号都算）。"""
     if not f.has_range:
         return None
     if util.blank(f.pi_no):
@@ -113,12 +116,20 @@ def seq_range(f: Filter) -> tuple[str, int | None, int | None] | None:
     )
     specs = [s for s in (rules.cached_spec(v) for v in versions) if s is not None]
     bounds: list[int | None] = []
+    prefixes: list[str] = []
     for v in (f.seq_from, f.seq_to):
         if util.blank(v):
             bounds.append(None)
             continue
         # 完整 SN 先按号池精确取流水（上限自动突破后位数不同，带米数且没有分隔符时按规则反解可能有歧义）
-        n = db.scalar("SELECT seq_dec FROM sn_item WHERE sn = %s AND seq_pi_no = %s AND origin = 'GEN'", v.strip(), pi)
+        hit = db.one(
+            "SELECT seq_dec, seq_prefix FROM sn_item WHERE sn = %s AND seq_pi_no = %s AND origin = 'GEN'", v.strip(), pi
+        )
+        n = None if hit is None else hit["seq_dec"]
+        if hit is not None:
+            if prefixes and prefixes[0] != hit["seq_prefix"]:
+                raise biz(ErrorCode.QUERY_RANGE_INVALID, value=v.strip(), pi=pi)
+            prefixes.append(hit["seq_prefix"])
         if n is None:
             n = _seq_of(v.strip(), specs)
         if n is None:
@@ -127,7 +138,7 @@ def seq_range(f: Filter) -> tuple[str, int | None, int | None] | None:
     lo, hi = bounds
     if lo is not None and hi is not None and lo > hi:
         raise biz(ErrorCode.QUERY_RANGE_REVERSED, start=f.seq_from.strip(), end=f.seq_to.strip())
-    return pi, lo, hi
+    return pi, lo, hi, (prefixes[0] if prefixes else None)
 
 
 def _contains(col: str, key: str, text: str) -> tuple[str, list]:
@@ -203,6 +214,9 @@ def _where(cu: CurrentUser, f: Filter) -> tuple[str, list, tuple | None]:
     if rg is not None:
         sql += " AND i.seq_pi_no = %s"
         args.append(rg[0])
+        if rg[3] is not None:
+            sql += " AND i.seq_prefix = %s"
+            args.append(rg[3])
         for op, n in ((">=", rg[1]), ("<=", rg[2])):
             if n is not None:
                 sql += f" AND i.seq_dec {op} %s"
@@ -288,6 +302,11 @@ def _range_summary(sql: str, args: list, rg: tuple) -> dict:
     by_status = {r["status"]: int(r["n"]) for r in rows}
     found = sum(by_status.values())
     expected = None if rg[1] is None or rg[2] is None else rg[2] - rg[1] + 1
+    if expected is not None and rg[3] is None:
+        # 只给流水号、范围里有多个前缀的号（按单据选规则）时，应有枚数按前缀各算一段，不再给出「应有 / 缺少」
+        n_prefix = db.scalar(f"SELECT COUNT(DISTINCT i.seq_prefix) FROM sn_item i{sql}", *args)
+        if int(n_prefix or 0) > 1:
+            expected = None
     return {
         "found": found,
         "expected": expected,

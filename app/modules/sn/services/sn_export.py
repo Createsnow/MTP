@@ -124,19 +124,22 @@ def segments(cu: CurrentUser, factory: str | None, pi: str | None, bill: str | N
     p, b, where, args = _bill_where(cu, factory, pi, bill)
     grouped = (
         "SELECT factory_code, bill_seq, material_code, MAX(attach_no) attach_no, MAX(length_text) length_text, "
-        "seq_pi_no, MIN(seq_dec) s, MAX(seq_dec) e, "
+        "seq_pi_no, seq_prefix, MIN(seq_dec) s, MAX(seq_dec) e, "
         "SUBSTRING(MIN(CONCAT(LPAD(seq_dec, 20, '0'), sn)), 21) start_sn, "
         "SUBSTRING(MAX(CONCAT(LPAD(seq_dec, 20, '0'), sn)), 21) end_sn, COUNT(*) qty, MAX(suspend) suspend "
         "FROM (SELECT i.factory_code, i.bill_seq, i.material_code, i.attach_no, i.length_text, i.status, i.seq_pi_no, "
-        "i.seq_dec, i.sn, i.suspend, "
+        "i.seq_prefix, i.seq_dec, i.sn, i.suspend, "
         "i.seq_dec - ROW_NUMBER() OVER (PARTITION BY i.factory_code, i.bill_seq, i.material_code, "
-        "i.seq_pi_no ORDER BY i.seq_dec) grp FROM sn_item i"
+        "i.seq_pi_no, i.seq_prefix ORDER BY i.seq_dec) grp FROM sn_item i"
         + where
-        + ") t GROUP BY factory_code, bill_seq, material_code, seq_pi_no, grp"
+        + ") t GROUP BY factory_code, bill_seq, material_code, seq_pi_no, seq_prefix, grp"
     )
     total = db.count("SELECT COUNT(*) FROM (" + grouped + ") g", *args)
     rows = db.all(
-        grouped + " ORDER BY bill_seq, seq_pi_no, s, factory_code LIMIT %s, %s", *args, page.offset, page.size
+        grouped + " ORDER BY bill_seq, seq_pi_no, seq_prefix, s, factory_code LIMIT %s, %s",
+        *args,
+        page.offset,
+        page.size,
     )
     items = [
         {
@@ -198,7 +201,7 @@ def items(
         + where
         + " ORDER BY "
         + rank
-        + "i.bill_seq, i.seq_pi_no, i.seq_dec LIMIT %s, %s",
+        + "i.bill_seq, i.seq_pi_no, i.seq_dec, i.id LIMIT %s, %s",
         *args,
         *(attaches if rank else []),
         page.offset,
@@ -260,7 +263,8 @@ def _filter(
     sn_to: str | None,
 ) -> tuple[str, list] | None:
     """明细与下载共用的筛选：物料行（bill_seq + material）或物料编码、SN 起止号（含两端，可只给一端，按流水归属 PI +
-    十进制流水取范围）。起止号不是该单据已分配的号时返回 None（没有结果）。"""
+    规则前缀 + 十进制流水取范围：一个 PI 可以有多个前缀，流水相同的别的前缀的号不算在范围内）。
+    起止号不是该单据已分配的号时返回 None（没有结果）。"""
     args = list(args)
     if bill_seq is not None:
         where += " AND i.bill_seq = %s AND i.material_code = %s"
@@ -271,11 +275,17 @@ def _filter(
     for sn, op in ((sn_from, ">="), (sn_to, "<=")):
         if util.blank(sn):
             continue
-        at = db.one("SELECT i.seq_pi_no, i.seq_dec FROM sn_item i" + where + " AND i.sn = %s", *args, sn.strip())
+        at = db.one(
+            "SELECT i.seq_pi_no, IFNULL(i.seq_prefix, '') seq_prefix, i.seq_dec FROM sn_item i"
+            + where
+            + " AND i.sn = %s",
+            *args,
+            sn.strip(),
+        )
         if at is None:
             return None
-        where += f" AND (i.seq_pi_no, i.seq_dec) {op} (%s, %s)"
-        args += [at["seq_pi_no"], at["seq_dec"]]
+        where += f" AND (i.seq_pi_no, IFNULL(i.seq_prefix, ''), i.seq_dec) {op} (%s, %s, %s)"
+        args += [at["seq_pi_no"], at["seq_prefix"], at["seq_dec"]]
     return where, args
 
 
@@ -350,21 +360,19 @@ def _file_rows(where: str, args: list) -> Iterator[list]:
 
 
 def _attach_rows(where: str, args: list) -> Iterator[list]:
-    """按单据序号、流水分页读出（键集翻页，不用 OFFSET）。"""
+    """按单据序号、流水分页读出（键集翻页，不用 OFFSET）。键带上号的 id：一个 PI 可以有多个前缀，
+    同一物料行里流水归属 PI、十进制流水相同的号可能有多枚（前缀不同），只按流水翻页会漏掉同键的号。"""
     after: tuple | None = None
     while True:
         cond, extra = "", []
         if after is not None:
-            cond = (
-                " AND (i.bill_seq > %s OR (i.bill_seq = %s AND (i.seq_pi_no > %s "
-                "OR (i.seq_pi_no = %s AND i.seq_dec > %s))))"
-            )
-            extra = [after[0], after[0], after[1], after[1], after[2]]
+            cond = " AND (i.bill_seq, i.seq_pi_no, i.seq_dec, i.id) > (%s, %s, %s, %s)"
+            extra = list(after)
         page = db.all(
             f"SELECT {sn_sheet.COLS} FROM {sn_sheet.FROM}"
             + where
             + cond
-            + " ORDER BY i.bill_seq, i.seq_pi_no, i.seq_dec LIMIT 5000",
+            + " ORDER BY i.bill_seq, i.seq_pi_no, i.seq_dec, i.id LIMIT 5000",
             *args,
             *extra,
         )
@@ -373,7 +381,7 @@ def _attach_rows(where: str, args: list) -> Iterator[list]:
         for r in sn_import.with_details(page):
             yield _file_row(r)
         last = page[-1]
-        after = (last["bill_seq"], last["seq_pi_no"], last["seq_dec"])
+        after = (last["bill_seq"], last["seq_pi_no"], last["seq_dec"], last["id"])
 
 
 def file(

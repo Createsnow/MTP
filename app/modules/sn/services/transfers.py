@@ -63,7 +63,8 @@ SCOPES = frozenset((SCOPE_BILL, SCOPE_MATERIAL, SCOPE_RANGE))
 
 ITEM_COLS = (
     "id, sn, factory_code, pi_no, customer_code, bill_no, bill_seq, material_code, rev, seq_pi_no, seq_dec, "
-    "length_text, attach_no, rule_version_id, status, delivery_batch_no, mes_holder, push_type, delivery_mode, origin"
+    "seq_prefix, length_text, attach_no, rule_version_id, status, delivery_batch_no, mes_holder, push_type, "
+    "delivery_mode, origin"
 )
 
 #: 同 ITEM_COLS，带号池表别名 i.（与导入记录联查时用）
@@ -649,7 +650,7 @@ def _source_items(src: Source, factory: str | None, lock: bool = False) -> list[
         args += mats
     items = _with_import_lines(
         db.all(
-            f"SELECT {ITEM_COLS} FROM sn_item WHERE {cond} ORDER BY seq_pi_no, seq_dec"
+            f"SELECT {ITEM_COLS} FROM sn_item WHERE {cond} ORDER BY seq_pi_no, seq_prefix, seq_dec"
             + (" FOR UPDATE" if lock else ""),
             *args,
         )
@@ -676,18 +677,23 @@ def _source_items(src: Source, factory: str | None, lock: bool = False) -> list[
         if not g:
             raise biz(ErrorCode.TR_LINE_EMPTY, material=p.material or "(空)", attach_no=p.attach or "-")
         out += g
-    out.sort(key=lambda r: (r["seq_pi_no"], r["seq_dec"]))
+    out.sort(key=lambda r: (r["seq_pi_no"], r["seq_prefix"] or "", r["seq_dec"]))
     return out
 
 
 def _slice(items: list[dict], start: str, end: str) -> list[dict]:
-    """单枚或连续号段：起止号须都在范围内、属于同一流水归属 PI。"""
+    """单枚或连续号段：起止号须都在范围内、属于同一流水归属 PI、同一规则前缀（一个 PI 可以有多个前缀，
+    流水相同的别的前缀的号不能落进范围）。"""
     by_sn = {r["sn"]: r for r in items}
     s, e = by_sn.get(start), by_sn.get(end)
-    if s is None or e is None or s["seq_pi_no"] != e["seq_pi_no"]:
+    if s is None or e is None or s["seq_pi_no"] != e["seq_pi_no"] or s["seq_prefix"] != e["seq_prefix"]:
         raise biz(ErrorCode.TR_RANGE_INVALID, start_sn=start, end_sn=end)
     lo, hi = min(s["seq_dec"], e["seq_dec"]), max(s["seq_dec"], e["seq_dec"])
-    return [r for r in items if r["seq_pi_no"] == s["seq_pi_no"] and lo <= r["seq_dec"] <= hi]
+    return [
+        r
+        for r in items
+        if r["seq_pi_no"] == s["seq_pi_no"] and r["seq_prefix"] == s["seq_prefix"] and lo <= r["seq_dec"] <= hi
+    ]
 
 
 def _dest(kind: str, r: TransferRequest, source_bill: str) -> Dest:

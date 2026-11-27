@@ -64,14 +64,16 @@ def _target(
             raise biz(ErrorCode.DELETE_SN_NOT_FOUND, pi=pi, sn=b)
         if (
             e["seq_pi_no"] != s["seq_pi_no"]
+            # 一个 PI 可以有多个前缀（按单据选规则）：起止号须同一前缀，否则流水相同的别的前缀的号也会落进范围
+            or e["seq_prefix"] != s["seq_prefix"]
             or (e["bill_no"], e["bill_seq"]) != (s["bill_no"], s["bill_seq"])
             or e["seq_dec"] < s["seq_dec"]
         ):
             raise biz(ErrorCode.DELETE_RANGE_INVALID)
         return (
             "{t}pi_no = %s AND {t}origin = 'GEN' AND {t}bill_no = %s AND {t}bill_seq = %s AND {t}seq_pi_no = %s "
-            "AND {t}seq_dec BETWEEN %s AND %s",
-            [pi, s["bill_no"], s["bill_seq"], s["seq_pi_no"], s["seq_dec"], e["seq_dec"]],
+            "AND {t}seq_prefix = %s AND {t}seq_dec BETWEEN %s AND %s",
+            [pi, s["bill_no"], s["bill_seq"], s["seq_pi_no"], s["seq_prefix"], s["seq_dec"], e["seq_dec"]],
             f"{s['bill_no']}/{s['bill_seq']} {a}~{b}",
         )
     nos = list(dict.fromkeys(util.trim(x) for x in bills or [] if util.trim(x)))
