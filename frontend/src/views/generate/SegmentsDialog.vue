@@ -180,7 +180,8 @@ async function loadSns(page: number) {
   sns.loading = true;
   try {
     const r = await api.genSegmentSns({
-      pi: props.pi, bill_no: bill.value, bill_seq: seg.bill_seq, seq_pi: seg.seq_pi_no, start: seg.start_seq, end: seg.end_seq,
+      pi: props.pi, bill_no: bill.value, bill_seq: seg.bill_seq, seq_pi: seg.seq_pi_no, seq_prefix: seg.seq_prefix,
+      start: seg.start_seq, end: seg.end_seq,
       page, size: SN_PAGE,
     });
     Object.assign(sns, { items: r.items, sn2: r.sn2 || [], total: r.total, page: r.page });

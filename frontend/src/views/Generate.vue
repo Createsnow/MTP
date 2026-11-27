@@ -89,7 +89,7 @@
           <div class="dh-title">
             <b>{{ ctx.pi_no }}</b>
             <span class="muted">{{ t("common.customer") }} {{ ctx.customer_code || "—" }}</span>
-            <!-- 一个 PI 只有一个规则：本 PI 的规则（编码或自定义）与前缀；还没选时不显示 -->
+            <!-- 按单据选规则：本 PI 的默认规则（编码或自定义）与前缀（没有单据规则的单据、之后同步进来的单据用它）；还没选时不显示 -->
             <el-tag v-if="piRule" size="small" effect="plain" class="pi-rule">
               {{ t("generate.piRule", { rule: piRule.rule_code || t("generate.piRuleCustom"), prefix: piRule.prefix }) }}
             </el-tag>
@@ -155,6 +155,15 @@
             <b>{{ b.bill_no }}</b>
             <!-- 单据所属生产组织名称（小号加粗），在号段标签之前 -->
             <b v-if="billOrg(b)" class="bill-org">{{ billOrg(b) }}</b>
+            <!-- 单据用的规则前缀：单独选（单据规则）/ 默认（沿用 PI 默认规则）；单据有号时前缀锁定（悬停提示）；双 SN 另显示第二前缀 -->
+            <el-tooltip v-if="b.rule_view?.prefix" :disabled="!b.rule_view.locked_prefix" :content="t('generate.billRuleLocked', { prefix: b.rule_view.locked_prefix || '' })" placement="top">
+              <el-tag size="small" effect="plain" :type="b.rule_view.layer === 'BILL' ? 'primary' : 'info'">
+                {{ t("generate.billRule", { prefix: b.rule_view.prefix }) }} · {{ b.rule_view.layer === "BILL" ? t("generate.billRuleOwn") : t("generate.billRuleDefault") }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-if="dualOn && b.rule2_view?.prefix" size="small" effect="plain" type="warning">
+              {{ t("generate.billRule", { prefix: b.rule2_view.prefix }) }} · {{ b.rule2_view.layer === "BILL" ? t("generate.billRuleOwn") : t("generate.billRuleDefault") }}
+            </el-tag>
             <!-- 单据号段：已用号段（本单据现有的号）、空闲号段（本单据删号腾出），没有时不显示，点开看明细 -->
             <span v-if="b.segments?.use_count" class="chip use" @click.stop="segDlg?.open({ bill: b.bill_no, tab: 'use' })">
               {{ t("generate.segUse", { n: num(b.segments.use_count), qty: num(b.segments.use_qty) }) }}
@@ -276,10 +285,10 @@
       <template #footer>
         <div v-if="ctx" class="bar">
           <el-button :disabled="!defaultRows.length" :loading="busy === 'default'" @click="restoreDefault(defaultRows)">{{ t("generate.restoreDefault") }}</el-button>
-          <!-- 选规则作用于整张 PI：有勾选时按所选行（起始号记在这些行上），没有勾选时按本 PI 全部有效物料行 -->
-          <el-button :disabled="!ruleLines.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length)">{{ t("generate.libraryRuleBtn") }}</el-button>
-          <!-- 双 SN：第二 SN 的规则（配置方式与第一 SN 相同，作用于整张 PI） -->
-          <el-button v-if="dualOn" :disabled="!ruleLines.length" :loading="busy === 'rule2'" @click="openRuleDialog(pickedRows.length ? pickedRows : ruleLines, !!pickedRows.length, 2)">{{ t("generate.dual.ruleBtn") }}</el-button>
+          <!-- 选规则按单据：作用于所选物料行所在的整张单据（起始号记在这些单据的登记上）；没有勾选时置灰 -->
+          <el-button :disabled="!pickedRows.length" :loading="busy === 'rule'" @click="openRuleDialog(pickedRows)">{{ t("generate.libraryRuleBtn") }}</el-button>
+          <!-- 双 SN：第二 SN 的规则（配置方式、按单据的逻辑与第一 SN 相同） -->
+          <el-button v-if="dualOn" :disabled="!pickedRows.length" :loading="busy === 'rule2'" @click="openRuleDialog(pickedRows, true, 2)">{{ t("generate.dual.ruleBtn") }}</el-button>
           <!-- 删号：所选行中有号时可点，按所选行删（弹窗里可改为按 SN 起止号）；所选行都没号或未勾选时置灰 -->
           <el-button type="danger" plain :disabled="!!running || !deleteRows.length" @click="deleteDlg?.open({ lines: deleteRows })">
             {{ t("generate.deleteMenu") }}
@@ -287,10 +296,11 @@
           <span class="push" />
           <span class="scope">
             {{ t("generate.scopeLabel") }}<b>{{ pickedRows.length ? t("generate.scopeLines", { n: pickedRows.length }) : t("generate.scopeNone") }}</b><br>
-            {{ pickedRows.length ? t("generate.scopeSelHint") : t("generate.scopeNoneHint") }}
+            <span v-if="multiPrefix" class="warn">{{ multiPrefix }}</span>
+            <template v-else>{{ pickedRows.length ? t("generate.scopeSelHint") : t("generate.scopeNoneHint") }}</template>
           </span>
           <span class="vsep" />
-          <SeqSource v-model="seq" :gaps="ctx.gaps" :first="gen.preview?.generatable ? gen.preview.start_seq : null" />
+          <SeqSource v-model="seq" :gaps="selGaps" :first="gen.preview?.generatable ? gen.preview.start_seq : null" />
           <el-button type="primary" :loading="gen.loading" :disabled="!canGen" @click="genDlg = true">
             {{ dualOn ? t("generate.dual.genBtn", { n: num(gen.preview?.generatable ? gen.preview.qty : 0), m: num(gen.preview?.generatable ? gen.preview.qty * 2 : 0) })
               : t("generate.genBtn", { n: num(gen.preview?.generatable ? gen.preview.qty : 0) }) }}
@@ -299,9 +309,10 @@
       </template>
     </el-drawer>
 
-    <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="ctx.rule_prefix" :prefix-locked="ctx.prefix_locked" :next-seq="ctx.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
+    <!-- 默认值按所选单据（selRule：单据规则相同时为它，有锁定的单据时为锁定的，否则为 PI 默认规则） -->
+    <RuleDialog v-if="ctx" v-model="ruleDlg.open" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule_options" :rule-prefix="selRule(1).rulePrefix" :prefix-locked="ctx.prefix_locked" :next-seq="selRule(1).nextSeq" :pi-quota="piQuota" :has-default="!!ctx.pi_rule" @saved="reloadCtx" />
     <!-- 双 SN：第二 SN 的规则（同一个对话框，规则选项、默认前缀、锁定前缀取 ctx.rule2） -->
-    <RuleDialog v-if="ctx?.rule2" v-model="ruleDlg.open2" :slot="2" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule2.rule_options" :rule-prefix="ctx.rule2.rule_prefix" :prefix-locked="ctx.rule2.prefix_locked" :next-seq="ctx.rule2.counter?.next_seq" :pi-quota="piQuota" @saved="reloadCtx" />
+    <RuleDialog v-if="ctx?.rule2" v-model="ruleDlg.open2" :slot="2" :pi="ctx.pi_no" :lines="ruleDlg.lines" :options="ctx.rule2.rule_options" :rule-prefix="selRule(2).rulePrefix" :prefix-locked="ctx.rule2.prefix_locked" :next-seq="selRule(2).nextSeq" :pi-quota="piQuota" :has-default="!!ctx.rule2.rule" @saved="reloadCtx" />
 
     <GenConfirmDialog v-model="genDlg" :preview="gen.preview" :unlock-limit="unlockLimit"
       :loading="busy === 'run'" @confirm="runGen" />
@@ -399,10 +410,10 @@ const { fmt: fmtTime } = useTime();
 const issueText = (c: string) => t(`generate.issue.${c}`);
 /** 重新填写即可（缺附件项次、米数、产品单位，附件项次不是数字）：状态「待填写」（FILL） */
 const FILL_ISSUES = ["ATTACH_EMPTY", "LENGTH_EMPTY", "UNIT_EMPTY", "ATTACH_NOT_NUMERIC"];
-/** 重新选规则即可（没有规则、规则须换前缀、与本 PI 已用前缀不同）：状态「需先选规则」（NO_RULE） */
-const RULE_ISSUES = ["NO_RULE", "RULE_PREFIX", "RULE_PI_PREFIX"];
-/** 双 SN：第二 SN 的规则要重新选（没选、须换前缀、与本 PI 已用的第二前缀不同）：状态「需先选第二 SN 规则」（NO_RULE2） */
-const RULE2_ISSUES = ["NO_RULE2", "RULE2_PREFIX", "RULE2_PI_PREFIX"];
+/** 重新选规则即可（没有规则、规则须换前缀、与单据登记的前缀不同、单据已用别的前缀出号）：状态「需先选规则」（NO_RULE） */
+const RULE_ISSUES = ["NO_RULE", "RULE_PREFIX", "RULE_PI_PREFIX", "RULE_BILL_LOCKED"];
+/** 双 SN：第二 SN 的规则要重新选（没选、须换前缀、与单据登记的第二前缀不同、单据已用别的第二前缀出号）：状态「需先选第二 SN 规则」（NO_RULE2） */
+const RULE2_ISSUES = ["NO_RULE2", "RULE2_PREFIX", "RULE2_PI_PREFIX", "RULE2_BILL_LOCKED"];
 /** 状态列的不能生成原因（只显示一个，按先后取第一个）：待填写 → 需先选规则 → 其他拦截原因（PI 变更冻结、
  *  失去对应等，按后端给的先后）；没有额度或没有原因时为 null（按 lineState 显示可生成 / 已生成 / 已分配 / 无额度 / 失效）。 */
 function stateIssue(l: OrderLine): string | null {
@@ -527,8 +538,54 @@ const ctxLoading = ref(false);
 const allLines = computed<OrderLine[]>(() => (ctx.value ? ctx.value.bills.flatMap((b: any) => b.lines) : []));
 /** 可选规则的物料行（失效的除外）：没有勾选时「选规则」按这些行。 */
 const ruleLines = computed(() => allLines.value.filter((l) => !l.void));
-/** 本 PI 的规则（一个 PI 只有一个规则）：取有效物料行上的规则，没选时为 null。 */
-const piRule = computed<any>(() => ruleLines.value.find((l: any) => l.rule?.prefix)?.rule ?? null);
+/** 本 PI 的默认规则（没有单据规则的单据用它），没选时为 null。 */
+const piRule = computed<any>(() => (ctx.value?.pi_rule?.prefix ? ctx.value.pi_rule : null));
+/** 所选单据（ruleDlg 打开时为对话框的单据）的「选规则」默认值与下一个流水（slot 2 = 第二 SN）：
+ *  所选单据用同一个单据规则时为它；有单据已出号锁定时为锁定单据的；否则为 PI 默认规则（rules.pi_prefix）。 */
+function selRule(slot: number): { rulePrefix: any; nextSeq: number | undefined } {
+  const c = ctx.value;
+  const base = slot === 2 ? c?.rule2 : c;
+  const def = { rulePrefix: base?.rule_prefix, nextSeq: base?.counter?.next_seq };
+  if (!c) return def;
+  const rows = ruleDlg.lines.length ? ruleDlg.lines : pickedRows.value;
+  const nos = [...new Set(rows.map((l) => l.bill_no))];
+  const views = nos.map((no) => c.bills.find((b: any) => b.bill_no === no)?.[slot === 2 ? "rule2_view" : "rule_view"]).filter(Boolean);
+  if (!views.length) return def;
+  const keyOf = (v: any) => (v.layer === "BILL" ? `B:${v.prefix}:${JSON.stringify(v.rule_prefix?.custom ?? null)}` : "PI");
+  const locked = views.find((v: any) => v.locked_prefix);
+  const pick = new Set(views.map(keyOf)).size === 1 ? views[0] : locked;
+  if (!pick || pick.layer !== "BILL" || !pick.rule_prefix) return def;
+  const gaps = c.prefix_gaps?.[pick.prefix];
+  return { rulePrefix: pick.rule_prefix, nextSeq: gaps ? gaps.next_seq : def.nextSeq };
+}
+/** 勾选的、还有额度的物料行所在单据用的前缀（第一 SN；双 SN 另看第二 SN）：前缀不止一个时不能一起生成，返回提示，否则为 ""。 */
+const multiPrefix = computed(() => {
+  const c = ctx.value;
+  if (!c) return "";
+  for (const key of ["rule_view", ...(dualOn.value ? ["rule2_view"] : [])]) {
+    const by = new Map<string, string[]>();
+    for (const l of pickedRows.value) {
+      if (!(Number(l.quota) > 0)) continue;
+      const p = c.bills.find((b: any) => b.bill_no === l.bill_no)?.[key]?.prefix;
+      if (!p) continue;
+      const xs = by.get(p) ?? [];
+      if (!xs.includes(l.bill_no)) xs.push(l.bill_no);
+      by.set(p, xs);
+    }
+    if (by.size > 1) {
+      const detail = [...by.entries()].map(([p, xs]) => `${xs.join("、")} → ${p}`).join("；");
+      return t("generate.multiPrefix", { detail: (key === "rule2_view" ? `${t("generate.dual.label")} ` : "") + detail });
+    }
+  }
+  return "";
+});
+/** 「流水」弹层的空号段：按所选单据用的前缀（与 PI 默认规则不同时取 ctx.prefix_gaps），没有勾选时为 PI 默认规则的。 */
+const selGaps = computed(() => {
+  const c = ctx.value;
+  if (!c) return null;
+  const p = [...new Set(pickedRows.value.map((l) => c.bills.find((b: any) => b.bill_no === l.bill_no)?.rule_view?.prefix).filter(Boolean))];
+  return p.length === 1 && c.prefix_gaps?.[p[0] as string] ? c.prefix_gaps[p[0] as string] : c.gaps;
+});
 /** 本 PI 全部物料行还可生成的数量之和：各物料行共用 PI 的一套流水，规则对话框按它给流水位数的默认值 */
 const piQuota = computed(() => allLines.value.reduce((n, l) => n + (Number(l.quota) || 0), 0));
 const limits = computed(() => ctx.value?.limits || { default: 10000, max: 500000, sync_threshold: 5000 });
@@ -642,7 +699,8 @@ async function toggleDual(on: boolean) {
   }
 }
 
-/** 底部「选规则」打开规则对话框（一个 PI 只有一个规则，保存时作用于整张 PI；默认自定义页签，前缀默认点选的第一个单据编码后 7 位，本 PI 已生成的号还在时沿用已用的前缀）。
+/** 底部「选规则」打开规则对话框（按单据：保存时作用于所选物料行所在的整张单据，勾选了本 PI 全部单据时同时改 PI 默认规则；
+ *  默认自定义页签，默认值见 selRule：本 PI 还没有规则时前缀默认点选的第一个单据编码后 7 位）。
  *  打开前先查附件项次（只查还有额度、要生成的行；生成时所选物料行不分单据按附件项次从小到大排号）：
  *  1. 有没填的：跳到第一条没填的行（按排号顺序），提示补全，不打开；
  *  2. 有相同的（不分单据）：跳到这些行，提示同一项次内按单据勾选先后、单据内按行号生成，可继续选规则或回去修改。 */
@@ -684,6 +742,12 @@ async function openRuleDialog(lines: OrderLine[], check = true, slot = 1) {
     }
   }
   ruleDlg.lines = rows;
+  // 按单据选规则：只勾了单据里一部分物料行时提示作用于整张单据（失效的行不算）
+  const partial = [...new Set(rows.map((l) => l.bill_no))].filter((no) => {
+    const b = ctx.value?.bills.find((x: any) => x.bill_no === no);
+    return b && b.lines.some((l: OrderLine) => !l.void && !rows.some((r) => lineKey(r) === lineKey(l)));
+  });
+  if (partial.length) ElMessage.info(t("generate.ruleWholeBill", { bills: partial.join("、") }));
   if (slot === 2) ruleDlg.open2 = true;
   else ruleDlg.open = true;
 }
@@ -956,8 +1020,8 @@ async function runPreview() {
   if (!ctx.value || running.value) return;
   const scope = genScope.value;
   const src = seqSource(seq.value.mode, seq.value.start, seq.value.end, seq.value.gaps);
-  // 手动起止号还没填好：不预演
-  if (!scope || !src.body) return resetGen();
+  // 手动起止号还没填好、所选单据的前缀不同（底部栏提示）：不预演
+  if (!scope || !src.body || multiPrefix.value) return resetGen();
   gen.loading = true;
   try {
     gen.preview = await api.genPreview({ pi_no: ctx.value.pi_no, ...scope, ...src.body }, true);

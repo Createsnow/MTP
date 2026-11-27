@@ -273,10 +273,14 @@
       </div>
     </div>
 
-    <!-- 底部：左「恢复默认」（自定义页签），右取消、确定；不提供「改回按 PI / 客户默认」（规则登记在 PI 上，要换规则重新选） -->
+    <!-- 底部：左「恢复默认」（自定义页签）、「使用 PI 默认规则」（所选单据清掉单据规则、改用本 PI 的默认规则；本 PI 已有默认规则时），
+         右取消、确定 -->
     <template #footer>
       <div class="foot">
-        <span><el-button v-if="mode === 'CUSTOM'" link type="primary" @click="resetParts">{{ t("generate.rule.resetParts") }}</el-button></span>
+        <span>
+          <el-button v-if="mode === 'CUSTOM'" link type="primary" @click="resetParts">{{ t("generate.rule.resetParts") }}</el-button>
+          <el-button v-if="hasDefault" link type="primary" :loading="busy === 'default'" @click="useDefault">{{ t("generate.rule.useDefault") }}</el-button>
+        </span>
         <span>
           <el-button @click="emit('update:modelValue', false)">{{ t("common.cancel") }}</el-button>
           <el-button type="primary" :loading="busy === 'save'" :disabled="!canSave" @click="save">{{ t("common.confirm") }}</el-button>
@@ -332,6 +336,8 @@ const props = defineProps<{
   prefixLocked?: Record<string, CustomRule>;
   /** 2 = 第二 SN 的规则（双 SN 的 PI；规则、默认前缀、锁定前缀取 ctx.rule2）；不给为第一 SN */
   slot?: number;
+  /** 本 PI 已有默认规则：显示「使用 PI 默认规则」（所选单据清掉单据规则） */
+  hasDefault?: boolean;
 }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void; (e: "saved"): void }>();
 const { t } = useI18n();
@@ -855,10 +861,25 @@ async function save() {
       // rule_code：新前缀时带上（生成成功后按它存入规则库；留空后台按时间哈希）
       body.custom = { ...fullSpec.value, seq_start: seqStart(), ...(outcome.value?.kind === "NEW" && ruleCode.value ? { rule_code: ruleCode.value } : {}) };
     }
-    // 一个 PI 只有一个规则：后台按整张 PI 保存，返回作用的物料行数
+    // 按单据选规则：后台按所选物料行所在的整张单据保存（勾选了本 PI 全部单据时同时改 PI 默认规则），返回作用的物料行数
     const r: any = await api.selectLineRule(body);
     ElMessage.success(t("generate.rule.savedPi", { n: r?.lines ?? props.lines.length }));
     if (r?.rule?.inc?.prefix) ElMessage.info(t("generate.rule.savedInc", { prefix: r.rule.inc.prefix }));
+    emit("saved");
+    emit("update:modelValue", false);
+  } finally {
+    busy.value = "";
+  }
+}
+
+/** 所选单据改用本 PI 的默认规则（清掉单据规则；单据有号时默认规则的前缀须与号上的相同，后台校验）。 */
+async function useDefault() {
+  busy.value = "default";
+  try {
+    const r: any = await api.selectLineRule({
+      pi_no: props.pi, lines: refs(), use_default: true, ...(props.slot === 2 ? { slot: 2 } : {}),
+    });
+    ElMessage.success(t("generate.rule.savedPi", { n: r?.lines ?? props.lines.length }));
     emit("saved");
     emit("update:modelValue", false);
   } finally {
