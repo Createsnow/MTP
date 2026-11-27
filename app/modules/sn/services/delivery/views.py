@@ -77,14 +77,18 @@ def batch_detail(cu: CurrentUser, batch_no: str | None) -> dict:
 
 def segments_of(b: dict) -> list[dict]:
     """号段清单：连续的号合并为一段（被拉取、转移打散后可有多段）。"""
-    # 段内首尾号用窗口函数一并取出（一个批次内同一流水归属 PI 的十进制流水不重复）
+    # 段内首尾号用窗口函数一并取出（一个批次内同一流水归属 PI、同一规则前缀的十进制流水不重复；一个 PI 可以有多个
+    # 前缀，不同前缀的号各自成段：前缀取号池里的号，导入的号没有前缀）
     rows = db.all(
-        "SELECT seq_pi_no, MIN(seq_dec) s, MAX(seq_dec) e, COUNT(*) n, MAX(first_sn) first_sn, MAX(last_sn) last_sn "
-        "FROM (SELECT seq_pi_no, seq_dec, g, FIRST_VALUE(sn) OVER w first_sn, "
+        "SELECT seq_pi_no, p, MIN(seq_dec) s, MAX(seq_dec) e, COUNT(*) n, MAX(first_sn) first_sn, "
+        "MAX(last_sn) last_sn "
+        "FROM (SELECT seq_pi_no, p, seq_dec, g, FIRST_VALUE(sn) OVER w first_sn, "
         "LAST_VALUE(sn) OVER (w ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) last_sn "
-        "FROM (SELECT seq_pi_no, seq_dec, sn, seq_dec - ROW_NUMBER() OVER (PARTITION BY seq_pi_no ORDER BY seq_dec) g "
-        "FROM sn_delivery_item WHERE batch_id = %s) t WINDOW w AS (PARTITION BY seq_pi_no, g ORDER BY seq_dec)) u "
-        "GROUP BY seq_pi_no, g ORDER BY seq_pi_no, s LIMIT 500",
+        "FROM (SELECT d.seq_pi_no, IFNULL(i.seq_prefix, '') p, d.seq_dec, d.sn, "
+        "d.seq_dec - ROW_NUMBER() OVER (PARTITION BY d.seq_pi_no, IFNULL(i.seq_prefix, '') ORDER BY d.seq_dec) g "
+        "FROM sn_delivery_item d LEFT JOIN sn_item i ON i.id = d.item_id WHERE d.batch_id = %s) t "
+        "WINDOW w AS (PARTITION BY seq_pi_no, p, g ORDER BY seq_dec)) u "
+        "GROUP BY seq_pi_no, p, g ORDER BY seq_pi_no, p, s LIMIT 500",
         b["id"],
     )
     return [

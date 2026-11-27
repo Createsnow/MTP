@@ -259,9 +259,14 @@ def test_pi_change_freezes_until_confirmed(w, api, sql):
     ok(api.post(f"/api/orders/alerts/{al[0]['id']}/handle", m(action="CONFIRM"), w.admin))
     assert sql.scalar("SELECT pi_frozen FROM sn_bill_ledger WHERE bill_no = %s", bill) == 0
     assert sql.count("SELECT COUNT(*) FROM sn_item WHERE bill_no = %s AND suspend IS NOT NULL", bill) == 0
-    ok(w.bind_pi(p2, w.rule(P())))
+    # 单据已有号：前缀锁定（2026-11-27 按单据选规则），新 PI 的默认规则不能改用别的前缀；选同一前缀的规则接着编
+    assert w.bind_pi(p2, w.rule(P())).code == "RULE_BILL_PREFIX_LOCKED"
+    used = sql.scalar("SELECT seq_prefix FROM sn_item WHERE bill_no = %s LIMIT 1", bill)
+    rid = sql.scalar("SELECT id FROM sn_rule WHERE prefix = %s", used)
+    ok(w.select(p2, [(bill, 2)], rule_id=rid))
     j = w.generate(p2)
-    assert j["pi_no"] == p2 and j["start_seq_dec"] == 1, "之后该单生成的号进新 PI 的流水"
+    assert j["pi_no"] == p2 and j["start_seq_dec"] == 5, "之后该单生成的号进新 PI，前缀不变、接着前缀的最大号"
+    assert sql.scalar("SELECT COUNT(*) FROM sn_item WHERE bill_no = %s AND seq_pi_no = %s", bill, p2) == 6
 
 
 def test_reversal_suspends_undelivered_and_resumes(w, api, sql):

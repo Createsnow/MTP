@@ -1,6 +1,8 @@
 """SN 生成与删号（F-09、F-10）：系统管理员、普通操作员（只含授权组织的单据）。分配见 allocation。"""
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
 
 from app.api.deps import OperatorDep, page_of
 from app.modules.order.services import line_void, orders
@@ -57,9 +59,13 @@ def gen_preview(body: PreviewIn, cu: OperatorDep) -> dict:
     )
 
 
-@router.get("/gaps", summary="空号段：PI 流水 1～最大号之间没有号的连续段（删号腾出），最大号与下一个号")
-def gen_gaps(cu: OperatorDep, pi: str | None = None) -> dict:
-    return generate.gaps(pi, cu)
+@router.get(
+    "/gaps",
+    summary="空号段：前缀流水 1～最大号之间没有号的连续段（删号腾出），最大号与下一个号；"
+    "bills 给出时按这些单据用的前缀（须同一个前缀），否则按 PI 默认规则的前缀",
+)
+def gen_gaps(cu: OperatorDep, pi: str | None = None, bills: Annotated[list[str] | None, Query()] = None) -> dict:
+    return generate.gaps(pi, cu, bills)
 
 
 @router.get(
@@ -73,7 +79,8 @@ def gen_segments(cu: OperatorDep, pi: str | None = None, bill_no: str | None = N
 
 @router.get(
     "/segments/sns",
-    summary="号段 SN 明细：单据（给 bill_seq 时只看该物料行）在流水归属 PI 的 start～end 内的号，按流水排、分页",
+    summary="号段 SN 明细：单据（给 bill_seq 时只看该物料行）在流水归属 PI 的 start～end 内的号（给 seq_prefix 时只看"
+    "这个前缀的），按流水排、分页",
 )
 def gen_segment_sns(
     cu: OperatorDep,
@@ -85,8 +92,9 @@ def gen_segment_sns(
     page: OptInt = None,
     size: OptInt = None,
     bill_seq: OptInt = None,
+    seq_prefix: str | None = None,
 ) -> dict:
-    return generate.segment_sns(cu, pi, bill_no, seq_pi, start, end, page, size, bill_seq)
+    return generate.segment_sns(cu, pi, bill_no, seq_pi, start, end, page, size, bill_seq, seq_prefix)
 
 
 @router.post("/run", summary="凭预演令牌生成：数量不大时当场完成，否则返回 RUNNING，轮询进度")

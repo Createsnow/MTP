@@ -52,7 +52,16 @@ def set_dual(cu: CurrentUser, pi_in: str | None, on: bool) -> dict:
             reg = db.one("SELECT * FROM sn_pi_rule2 WHERE pi_no = %s FOR UPDATE", pi)
             db.exec("DELETE FROM sn_pi_dual WHERE pi_no = %s", pi)
             db.exec("DELETE FROM sn_pi_rule2 WHERE pi_no = %s", pi)
-            note = "关闭双 SN" + ("" if reg is None else f"（清除第二 SN 规则登记 {reg['prefix']}）")
+            # 本 PI 各单据的第二 SN 单据规则一起清（按单据选规则，见 rules.bill_table）
+            bills = rules.pi_bills(pi)
+            n2 = 0
+            if bills:
+                n2 = db.exec(f"DELETE FROM sn_bill_rule2 WHERE bill_no IN ({marks(len(bills))})", *bills)
+            note = (
+                "关闭双 SN"
+                + ("" if reg is None else f"（清除第二 SN 规则登记 {reg['prefix']}）")
+                + ("" if not n2 else f"（清除 {n2} 张单据的第二 SN 单据规则）")
+            )
         audit.record(cu, audit.entry(audit.PI_DUAL_SET).pi(pi).info(note))
     return view(pi)
 

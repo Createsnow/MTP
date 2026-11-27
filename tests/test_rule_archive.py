@@ -1,6 +1,7 @@
 """规则库按前缀归档、一个 PI 一个规则（2026-11-17 变更）：
 - 规则库按前缀归档（GET /rules/prefixes、/rules/prefixes/usage），新建规则不填 PI；
-- 选规则作用于整张 PI 的全部有效物料行；PI 已生成的号还在时前缀锁定，号全部删掉后可改选；
+- 选规则（2026-11-27 起按单据，见 test_bill_rule）：本 PI 第一次选的规则为 PI 默认规则，勾选全部单据才改默认规则，
+  其余写单据规则；单据已生成的号还在时该单据前缀锁定，号全部删掉后可改选；
 - 自定义规则与规则库里前缀、格式完全相同的规则归到那条规则下，不另建；
 - 别的 PI 用同一前缀时流水接号（共用前缀，原逻辑不变）；MES 报文不变。"""
 
@@ -26,7 +27,7 @@ def group(api, w, prefix: str) -> dict:
 
 
 def reg(sql, pi: str) -> dict | None:
-    """PI 的规则登记（一个 PI 一个规则前缀）。"""
+    """PI 的默认规则（2026-11-27 起按单据选规则：单据规则见 sn_bill_rule）。"""
     return sql.one("SELECT * FROM sn_pi_rule WHERE pi_no = %s", pi)
 
 
@@ -47,25 +48,31 @@ def test_create_rule_without_pi(w, api, sql):
 
 
 def test_select_applies_to_whole_pi_and_prefix_locks(w, api, sql):
-    """选规则作用于整张 PI：点一个物料行，规则登记在 PI 上（各单据都用它）；生成后前缀锁定，
-    换别的前缀报 RULE_PI_PREFIX_LOCKED，同前缀可以（如改后缀）；号全部删掉后可以改选。"""
+    """第一次选规则登记为 PI 默认规则（各单据都用它）；只勾一部分单据改选时写单据规则，勾选全部单据才改默认规则；
+    单据生成后前缀锁定，换别的前缀报 RULE_BILL_PREFIX_LOCKED，同前缀可以（如改后缀）；号全部删掉后可以改选。"""
     org, pi, b1 = mk(w, ("M1", 3), ("M2", 2))
     _, _, b2 = mk(w, ("M1", 4), pi=pi, org=org)
     pre, other = P(), P()
     r = ok(w.select(pi, [(b1, 1)], custom={"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}))
-    assert r["lines"] == 3
+    assert (r["lines"], r["layer"]) == (3, "PI")
     row = reg(sql, pi)
     assert (row["prefix"], row["rule_id"]) == (pre, None) and pre in row["custom_json"]
-    # 还没有号：可以改选，仍作用于整张 PI
+    # 只勾 b2：写 b2 的单据规则，默认规则不变
     rid = w.rule(other, seq_len=5, with_length=False)
-    ok(w.select(pi, [(b2, 1)], rule_id=rid))
+    assert ok(w.select(pi, [(b2, 1)], rule_id=rid))["layer"] == "BILL"
+    assert (reg(sql, pi)["prefix"], sql.scalar("SELECT prefix FROM sn_bill_rule WHERE bill_no = %s", b2)) == (
+        pre,
+        other,
+    )
+    # 勾选全部单据：改默认规则，单据规则清掉
+    ok(w.select(pi, [(b1, 1), (b2, 1)], rule_id=rid))
     assert (reg(sql, pi)["rule_id"], reg(sql, pi)["prefix"]) == (rid, other)
-    ok(w.select(pi, [(b1, 1)], custom={"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}))
+    ok(w.select(pi, [(b1, 1), (b2, 1)], custom={"prefix": pre, "base": 10, "seq_len": 4, "with_length": False}))
     w.generate(pi)
     # 已有号：前缀锁定
     res = w.select(pi, [(b1, 1)], rule_id=rid)
-    assert res.code == "RULE_PI_PREFIX_LOCKED", str(res)
-    assert w.bind_pi(pi, rid).code == "RULE_PI_PREFIX_LOCKED"
+    assert res.code == "RULE_BILL_PREFIX_LOCKED", str(res)
+    assert w.bind_pi(pi, rid).code == "RULE_BILL_PREFIX_LOCKED"
     assert reg(sql, pi)["rule_id"] == sql.scalar(
         "SELECT id FROM sn_rule WHERE category_scope = 'PI' AND category_value = %s", pi
     ), "没有改动"
@@ -74,7 +81,7 @@ def test_select_applies_to_whole_pi_and_prefix_locks(w, api, sql):
     ok(w.select(pi, [(b1, 1)], custom={**c, "suffix": "Z"}))
     # 号全部删掉：回到可以改选
     ok(w.delete(pi, bills=[b1, b2], reason="t"))
-    ok(w.select(pi, [(b1, 1)], rule_id=rid))
+    ok(w.select(pi, [(b1, 1), (b2, 1)], rule_id=rid))
     assert reg(sql, pi)["rule_id"] == rid
 
 
@@ -89,8 +96,11 @@ def test_generation_blocked_when_rule_prefix_differs_from_pi(w, api, sql):
     body = {"rule_name": "x", "prefix": P(), "base": 10, "seq_len": 5, "with_length": False}
     assert api.put(f"/api/rules/{rid}", body, w.admin).code == "RULE_USED_FORMAT_LOCKED"
     _, _, b2 = mk(w, ("M1", 3), pi=pi, org=org)
+    assert ok(w.preview(pi, bills=[b2]))["generatable"], "新单据沿用 PI 默认规则"
     other = w.rule(P(), seq_len=5, with_length=False)
-    assert w.select(pi, [(b2, 1)], rule_id=other).code == "RULE_PI_PREFIX_LOCKED"
+    assert w.select(pi, [(b1, 1)], rule_id=other).code == "RULE_BILL_PREFIX_LOCKED", "有号的单据前缀锁定"
+    # 按单据选规则（2026-11-27）：没号的新单据可以改用别的前缀
+    assert ok(w.select(pi, [(b2, 1)], rule_id=other))["layer"] == "BILL"
     assert ok(w.preview(pi, bills=[b2]))["generatable"]
 
 
@@ -147,8 +157,8 @@ def test_custom_rule_selected_before_other_pi_generates_is_merged_at_generation(
 
 
 def test_changing_rule_of_multi_org_pi_needs_all_orgs(w, api, sql):
-    """PI 跨两个组织：只授权 A 的普通操作员可以给还没有规则的 PI 选规则（作用于整张 PI），
-    B 的物料行已选了别的规则时改选须对全部组织有授权；沿用同一规则可以。"""
+    """PI 跨两个组织：只授权 A 的普通操作员可以给还没有规则的 PI 选规则（登记为 PI 默认规则）；之后改选只作用于
+    A 的单据（单据规则），勾不了 B 的单据，改不了 PI 默认规则；系统管理员勾选全部单据才改默认规则。"""
     a, b = w.org(uid("O")[:10]), w.org(uid("O")[:10])
     _, pi, ba = mk(w, ("M1", 2), org=a)
     _, _, bb = mk(w, ("M1", 2), pi=pi, org=b)
@@ -158,6 +168,9 @@ def test_changing_rule_of_multi_org_pi_needs_all_orgs(w, api, sql):
     assert ok(api.post("/api/rules/line-select", body, tok))["lines"] == 2
     assert reg(sql, pi)["rule_id"] == r1
     ok(api.post("/api/rules/line-select", body, tok))
-    assert api.post("/api/rules/line-select", {**body, "rule_id": r2}, tok).code == "FACTORY_FORBIDDEN"
-    ok(w.select(pi, [(ba, 1)], rule_id=r2))
+    r = ok(api.post("/api/rules/line-select", {**body, "rule_id": r2}, tok))
+    assert r["layer"] == "BILL" and reg(sql, pi)["rule_id"] == r1, "只改 A 的单据，默认规则不变"
+    both = {**body, "rule_id": r2, "lines": [{"bill_no": ba, "seq": 1}, {"bill_no": bb, "seq": 1}]}
+    assert api.post("/api/rules/line-select", both, tok).code == "FACTORY_FORBIDDEN"
+    ok(w.select(pi, [(ba, 1), (bb, 1)], rule_id=r2))
     assert reg(sql, pi)["rule_id"] == r2

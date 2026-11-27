@@ -382,7 +382,8 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
     counts, fills, lens, units = orders.line_extras(keys)
     # 表头客户取本 PI 第一个非空的客户编码（客户编码为空的单据照常列出）
     customer = next((r["customer_code"] for r in snap if r["customer_code"]), None) or orders.customer_of_pi(pi) or ""
-    # 接号的最大号：本 PI 规则前缀的最大号（同一前缀各 PI 共用一套流水）；没选规则为 0
+    # 接号的最大号：本 PI 默认规则前缀的最大号（同一前缀各 PI 共用一套流水）；没选规则为 0。
+    # 按单据选规则：各物料行按所在单据用的前缀的最大号（lasts）
     prefix = generate.prefix_of(pi)
     last = rules.prefix_last(prefix)
     # 双 SN：第二 SN 的前缀与最大号
@@ -391,6 +392,11 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
         prefix2 = generate.prefix_of(pi) if is_dual else None
     last2 = rules.prefix_last(prefix2)
     ls = {(x.bill_no, x.seq): x for x in generate._load_lines(pi, keys)}
+    lasts: dict[str | None, int] = {prefix: last, prefix2: last2}
+    for x in ls.values():
+        for p_ in (x.reg_prefix, x.reg_prefix2):
+            if p_ not in lasts:
+                lasts[p_] = rules.prefix_last(p_)
     bills: dict[str, dict] = {}
     for r in snap:
         k = (r["bill_no"], r["seq"])
@@ -413,13 +419,15 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
             r,
             counts.get(k),
             fills.get(k),
-            rules.info(x.res, x.length, last + 1, x.unit, x.attach),
+            rules.info(x.res, x.length, lasts.get(x.reg_prefix, 0) + 1, x.unit, x.attach),
             lens.get(k),
             units.get(k),
         )
         v["issues"] = x.issues
         # 双 SN：第二 SN 的规则（单 SN 为 None）
-        v["rule2"] = rules.info(x.res2, x.length, last2 + 1, x.unit, x.attach) if is_dual else None
+        v["rule2"] = (
+            rules.info(x.res2, x.length, lasts.get(x.reg_prefix2, 0) + 1, x.unit, x.attach) if is_dual else None
+        )
         # 物料行失效（line_void）：整行置灰、不能勾选，不计订单数、可生成
         v["void"] = x.void
         # 金蝶业务状态、领料状态（状态码，空 = 未取到）：生成页「业务状态」列显示
@@ -474,16 +482,31 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
     # 单据号段：现有号的号段数与枚数、本单据删号腾出的空闲号段数与枚数（单据头标签，点开看明细）
     gap = generate.gaps_of(pi)
     seg_counts = generate.bill_segment_counts(pi, list(bills), facs)
+    # 按单据选规则：各单据用的规则（单据规则 / 沿用 PI 默认规则）、锁定的前缀；第二 SN 同样
+    views = rules.bill_views(pi, list(bills))
+    views2: dict[str, dict] = {}
+    if is_dual:
+        with rules.second():
+            views2 = rules.bill_views(pi, list(bills))
+    # 各单据用的前缀的最大号与空号段（勾选单据的前缀与 PI 默认规则不同时，「流水」按它）
+    used = sorted({v["prefix"] for v in views.values() if v["prefix"]} - {prefix})
+    by_prefix = {p_: generate.gaps_of(pi, p_) for p_ in used}
+    if prefix:
+        by_prefix[prefix] = gap
     free_counts: dict[str, list[int]] = {}
-    for g in generate.free_segments(prefix, gap["last_seq"]) if gap["truncated"] else gap["segments"]:
-        c = free_counts.setdefault(g["bill_no"], [0, 0])
-        c[0] += 1
-        c[1] += g["qty"]
+    for p_, g_ in by_prefix.items():
+        for g in generate.free_segments(p_, g_["last_seq"]) if g_["truncated"] else g_["segments"]:
+            c = free_counts.setdefault(g["bill_no"], [0, 0])
+            c[0] += 1
+            c[1] += g["qty"]
     for no, b in bills.items():
         uc, fc = seg_counts.get(no, (0, 0)), free_counts.get(no, [0, 0])
         b["segments"] = {"use_count": uc[0], "use_qty": uc[1], "free_count": fc[0], "free_qty": fc[1]}
         b["modify_time"] = orders.k3_time(b.get("_mt"))
         b["state"] = states.get(no, changes.EMPTY_STATE)
+        # 单据用的规则：layer BILL 单据规则 / PI 沿用 PI 默认规则 / None 未选规则；locked_prefix 单据有号时锁定的前缀
+        b["rule_view"] = views.get(no)
+        b["rule2_view"] = views2.get(no) if is_dual else None
         b["pending_alloc"] = items[no][0] if no in items else 0
         # 单据分配状态：PENDING 待分配 / PROCESSING 待处理 / ALLOCATED 已分配；本 PI 下还没有号为 None。
         # 已分配的单据在生成页「可生成」页签置灰、不可勾选（生成须先勾选）
@@ -523,6 +546,8 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
         "dual": dual.view(pi),
         "rule2": None if not is_dual else _rule2_context(pi, customer, facs, prefix2, last2),
         "rule_options": rules.options(pi, customer, facs),
+        # 本 PI 的默认规则（没有单据规则的单据、之后同步进来的单据用它；同 rules.info，没选为 None）
+        "pi_rule": rules.info(rules.pi_default(pi)),
         # 「选规则」的默认前缀：本 PI 已生成的号还在时为已用的前缀及其格式（见 rules.pi_prefix）
         "rule_prefix": rules.pi_prefix(pi),
         # 本 PI 已占用的前缀 → 锁定的格式（进制、流水位数不能改；号全部删掉后仍锁定，
@@ -531,8 +556,10 @@ def context(cu: CurrentUser, pi_in: str | None, bill_no: str | None = None) -> d
         "limits": generate.limits(),
         "running_job": None if running is None else generate.progress(running["gen_batch"]),
         "jobs": generate.jobs(pi, 20, facs),
-        # 空号段（删号腾出的流水）：生成时可选用（预演的流水来源 RANGE）
+        # 空号段（删号腾出的流水）：生成时可选用（预演的流水来源 RANGE）；按 PI 默认规则的前缀
         "gaps": gap,
+        # 各单据用的前缀（含 PI 默认规则的）→ 最大号与空号段（勾选单据的前缀与默认不同时，「流水」按这里的）
+        "prefix_gaps": by_prefix,
         # 物料行失效条件（全系统一套，页签行「过滤配置」弹窗）
         "void_rule": line_void.view(),
     }

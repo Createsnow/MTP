@@ -113,6 +113,8 @@ class LineSelectIn(In):
     custom: CustomRuleIn | None = None
     #: 2 = 第二 SN 的规则（双 SN 的 PI）；不填为第一 SN
     slot: int | None = None
+    #: true = 所选单据改用本 PI 的默认规则（清掉单据规则；不带 rule_id / custom）
+    use_default: bool | None = None
 
 
 class PiBindIn(In):

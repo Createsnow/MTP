@@ -142,6 +142,12 @@ class ErrorCode(Enum):
         "PI {pi} 已用前缀 {prefix} 生成过号，一个 PI 只能用一个规则前缀，不能改用 {new}；"
         "要改米数、单位、后缀请在「选规则 → 自定义」中修改",
     )
+    RULE_BILL_PREFIX_LOCKED = (
+        409,
+        "单据 {bill_no} 已用前缀 {prefix} 生成过号，不能改用 {new}（号全部删掉后才能改选）；"
+        "要改米数、单位、后缀请在「选规则 → 自定义」中修改",
+    )
+    RULE_PI_DEFAULT_NONE = (400, "PI {pi} 还没有默认规则，请选规则")
     RULE_PREFIX_GROW_LOCKED = (409, "前缀 {prefix} 的流水已超出规则位数（已自动突破），不能关闭流水上限自动突破")
     RULE_LINE_REQUIRED = (400, "请选择物料行")
     RULE_GLOBAL_READONLY = (403, "全局规则只有系统管理员能修改、删除：{rule_code}")
@@ -181,6 +187,7 @@ class ErrorCode(Enum):
     # ---------- 生成 ----------
     GEN_SCOPE_INVALID = (400, "生成范围须为同一张 PI 下的单据或物料行")
     GEN_NOT_GENERATABLE = (400, "所选范围不能生成：{detail}")
+    GEN_MULTI_PREFIX = (400, "所选单据的前缀不同，请按前缀分开生成：{detail}")
     GEN_PI_QUOTA_EMPTY = (400, "所选范围没有可生成额度")
     GEN_RULE_EXHAUSTED = (400, "规则位数已用尽：最大流水 {max}，本次需要排到 {end}")
     GEN_PREVIEW_REQUIRED = (400, "没有完成本次预演，不能生成")

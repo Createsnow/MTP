@@ -203,12 +203,17 @@ def test_pi_prefix_registered_inherited_and_locked(w, api, sql):
     assert sql.scalar("SELECT COUNT(*) FROM sn_rule WHERE rule_code LIKE %s", f"PI-{pi}-%") == 0, "生成前不存规则库"
     late = bill(w, pi, ("M2", 1, "1"), org=org)
     assert ok(w.preview(pi, bills=[late]))["generatable"], "新单据继承本 PI 的规则"
+    # 按单据选规则（2026-11-27）：只勾 a 时只改 a（单据规则），勾选本 PI 全部单据才改 PI 默认规则
     ok(w.select(pi, [(a, 1)], custom=C(p2)))
+    assert sql.scalar("SELECT prefix FROM sn_pi_rule WHERE pi_no = %s", pi) == p1, "只勾一部分单据：默认规则不变"
+    assert sql.scalar("SELECT prefix FROM sn_bill_rule WHERE bill_no = %s", a) == p2
+    ok(w.select(pi, [(a, 1), (late, 1)], custom=C(p2)))
     assert sql.scalar("SELECT prefix FROM sn_pi_rule WHERE pi_no = %s", pi) == p2, "还没号：可以改前缀"
+    assert sql.scalar("SELECT COUNT(*) FROM sn_bill_rule WHERE bill_no IN (%s, %s)", a, late) == 0
     w.generate(pi)
     assert sql.scalar("SELECT rule_id FROM sn_pi_rule WHERE pi_no = %s", pi) is not None, "生成后存入规则库并登记"
-    assert w.select(pi, [(a, 1)], custom=C(p1)).code == "RULE_PI_PREFIX_LOCKED"
-    assert api.delete(f"/api/rules/pi-binding?pi={pi}", w.admin).code == "RULE_PI_PREFIX_LOCKED"
+    assert w.select(pi, [(a, 1)], custom=C(p1)).code == "RULE_BILL_PREFIX_LOCKED"
+    assert api.delete(f"/api/rules/pi-binding?pi={pi}", w.admin).code == "RULE_BILL_PREFIX_LOCKED"
     ok(w.delete(pi, bills=[a, late], reason="t"))
     ok(w.select(pi, [(a, 1)], custom=C(p1)))
     other = uid("PI")

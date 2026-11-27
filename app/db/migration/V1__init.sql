@@ -126,7 +126,8 @@ CREATE TABLE sn_rule_version (
   KEY ix_rule_inc_customer (inc_customer)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='SN 规则版本';
 
--- PI 规则登记：一个 PI 一个规则前缀，选规则时登记（本 PI 全部物料行、之后同步进来的单据都用它）。
+-- PI 默认规则（2026-11-27 起按单据选规则）：本 PI 第一次选规则时登记，勾选本 PI 全部单据再选规则时改；
+-- 没有单据规则（sn_bill_rule）的单据都用它，含之后同步进来的单据。改默认规则前，沿用旧默认规则的单据先固化为单据规则。
 -- 规则库规则记 rule_id（本 PI 用哪一版按规则版本的归属 PI 解析，见 rules.resolve）；自定义规则记 custom_json，
 -- 生成成功后存入规则库、改记 rule_id
 CREATE TABLE sn_pi_rule (
@@ -140,7 +141,25 @@ CREATE TABLE sn_pi_rule (
   PRIMARY KEY (pi_no),
   KEY ix_pi_rule_prefix (prefix),
   KEY ix_pi_rule_rule (rule_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 规则登记';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='PI 默认规则';
+
+-- 单据规则（2026-11-27）：生成页勾选单据后选的规则，一张单据一个；单据用的规则 = 单据规则，没有时为 PI 默认规则。
+-- 物料行一律用所在单据的规则。单据有本单生成、还没删的号时前缀锁定（删号不动登记，号删光后可改选）。
+-- 字段同 sn_pi_rule；pi_no 为登记时单据所属的 PI（单据在金蝶改 PI 时：没号的清掉登记，有号的保留）
+CREATE TABLE sn_bill_rule (
+  bill_no     VARCHAR(64)  NOT NULL,
+  pi_no       VARCHAR(64)  NOT NULL COMMENT '登记时单据所属的 PI',
+  prefix      VARCHAR(64)  NOT NULL COMMENT '本单据的规则前缀（排号以前缀为准，见 sn_prefix_counter）',
+  rule_id     BIGINT       NULL COMMENT '规则库规则；自定义规则生成前为空',
+  custom_json VARCHAR(4000) NULL COMMENT '自定义规则参数（生成前；带识别码的含适用客户及待生效的增删）',
+  seq_start   BIGINT       NULL COMMENT '起始号（十进制流水）：下次生成第一个号不小于它，生成后清掉',
+  bound_by    VARCHAR(32)  NOT NULL,
+  bound_at    DATETIME     NOT NULL,
+  PRIMARY KEY (bill_no),
+  KEY ix_bill_rule_pi (pi_no),
+  KEY ix_bill_rule_prefix (prefix),
+  KEY ix_bill_rule_rule (rule_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='单据规则';
 
 -- 规则前缀：排号的基准。同一前缀下各 PI 共用一套十进制流水，最大号只增不减；流水上限自动突破按前缀统一设置
 CREATE TABLE sn_prefix_counter (
@@ -454,9 +473,10 @@ CREATE TABLE sn_item (
   updated_at        DATETIME    NOT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY ux_item_sn (sn) COMMENT '完整 SN 全局唯一（utf8mb4_bin，区分大小写）',
-  UNIQUE KEY ux_item_seq (seq_pi_no, seq_dec) COMMENT '流水归属 PI 内十进制流水唯一',
+  KEY ix_item_seq (seq_pi_no, seq_dec) COMMENT '流水归属 PI + 十进制流水（不唯一：一个 PI 可以有多个前缀，流水唯一见 ux_item_prefix_seq）',
   UNIQUE KEY ux_item_prefix_seq (seq_prefix, seq_dec) COMMENT '同一规则前缀下十进制流水唯一（跨 PI）',
   KEY ix_item_prefix_attach (seq_prefix, attach_no) COMMENT '前缀下已开始的项次',
+  KEY ix_item_gen_bill (gen_bill_no, origin, seq_prefix) COMMENT '单据自己生成的号的前缀（按单据锁定前缀，见 rules.bills_used_prefixes）',
   KEY ix_item_claim (pi_no, factory_code, status, suspend, delivery_batch_no, seq_pi_no, seq_dec) COMMENT '取号：过滤和排序都在索引内',
   KEY ix_item_status (status, factory_code, pi_no),
   KEY ix_item_bill (bill_no, bill_seq, status),
@@ -545,7 +565,7 @@ CREATE TABLE sn_pi_dual (
   PRIMARY KEY (pi_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='双 SN 的 PI';
 
--- 第二 SN 规则登记：结构同 sn_pi_rule（一个 PI 一个第二前缀；规则库规则记 rule_id，自定义规则记 custom_json，生成成功后存入规则库）
+-- 第二 SN 的 PI 默认规则：结构、用法同 sn_pi_rule（规则库规则记 rule_id，自定义规则记 custom_json，生成成功后存入规则库）
 CREATE TABLE sn_pi_rule2 (
   pi_no       VARCHAR(64)  NOT NULL,
   prefix      VARCHAR(64)  NOT NULL COMMENT '本 PI 的第二 SN 规则前缀（不能与第一前缀相同，前缀用途须为第二 SN，见 sn_prefix_role）',
@@ -557,7 +577,23 @@ CREATE TABLE sn_pi_rule2 (
   PRIMARY KEY (pi_no),
   KEY ix_pi_rule2_prefix (prefix),
   KEY ix_pi_rule2_rule (rule_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN 规则登记';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN 的 PI 默认规则';
+
+-- 第二 SN 单据规则：结构、用法同 sn_bill_rule（第二 SN 与第一 SN 按单据选规则的逻辑相同）
+CREATE TABLE sn_bill_rule2 (
+  bill_no     VARCHAR(64)  NOT NULL,
+  pi_no       VARCHAR(64)  NOT NULL COMMENT '登记时单据所属的 PI',
+  prefix      VARCHAR(64)  NOT NULL COMMENT '本单据的第二 SN 规则前缀（前缀用途须为第二 SN，见 sn_prefix_role）',
+  rule_id     BIGINT       NULL COMMENT '规则库规则；自定义规则生成前为空',
+  custom_json VARCHAR(4000) NULL COMMENT '自定义规则参数（生成前）',
+  seq_start   BIGINT       NULL COMMENT '起始号（十进制流水）：下次生成第一个第二 SN 不小于它，生成后清掉',
+  bound_by    VARCHAR(32)  NOT NULL,
+  bound_at    DATETIME     NOT NULL,
+  PRIMARY KEY (bill_no),
+  KEY ix_bill_rule2_pi (pi_no),
+  KEY ix_bill_rule2_prefix (prefix),
+  KEY ix_bill_rule2_rule (rule_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN 单据规则';
 
 -- 前缀用途：第二 SN 用的前缀（规则前缀，带识别码的为前缀层文本）在第一次被选作第二 SN 时登记，之后不变；
 -- 没有记录的前缀为第一 SN 用（已被用过）或还没用过。一个前缀只能当第一 SN 或第二 SN 中的一种
@@ -583,7 +619,7 @@ CREATE TABLE sn_item_sub (
   PRIMARY KEY (item_id),
   UNIQUE KEY ux_item_sub_sn (sn2) COMMENT '第二 SN 全局唯一（与第一 SN 的前缀用途分开，见 sn_prefix_role）',
   UNIQUE KEY ux_item_sub_prefix_seq (seq_prefix, seq_dec),
-  UNIQUE KEY ux_item_sub_seq (seq_pi_no, seq_dec)
+  KEY ix_item_sub_seq (seq_pi_no, seq_dec) COMMENT '不唯一：一个 PI 可以有多个第二前缀，流水唯一见 ux_item_sub_prefix_seq'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='第二 SN';
 
 -- 第二 SN 删号存档（随号删除，del_no 同 sn_item_deleted）

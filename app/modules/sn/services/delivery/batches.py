@@ -304,7 +304,8 @@ def claim(
         args.append(btype)
     if imported is not None:
         sql += f" AND {'' if imported else 'NOT '}{_IMPORTED}"
-    sql += " ORDER BY seq_pi_no, seq_dec LIMIT %s FOR UPDATE SKIP LOCKED"
+    # 一个 PI 可以有多个前缀（流水归属 PI + 流水可能相同）：再按 id 排，取号顺序稳定（id 在索引末尾，仍走索引排序）
+    sql += " ORDER BY seq_pi_no, seq_dec, id LIMIT %s FOR UPDATE SKIP LOCKED"
     return db.all(sql, *args, limit)
 
 

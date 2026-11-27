@@ -185,8 +185,14 @@ def last_seq(pi: str) -> int:
 
 
 def prefix_of(pi: str) -> str | None:
-    """本 PI 登记的规则前缀（一个 PI 一个前缀，见 rules.pi_rule）；没选规则为 None。第二 SN 上下文为第二 SN 的前缀。"""
+    """本 PI 默认规则的前缀（见 rules.pi_rule；单据用的前缀见 bill_prefixes）；没选规则为 None。
+    第二 SN 上下文为第二 SN 的前缀。"""
     return db.scalar(f"SELECT prefix FROM {rules.reg_table()} WHERE pi_no = %s", pi)
+
+
+def bill_prefixes(pi: str, bills) -> dict[str, str | None]:
+    """各单据用的前缀（单据规则，没有时为本 PI 默认规则的；都没有为 None）。第二 SN 上下文为第二 SN 的。"""
+    return {b: (None if r is None else r["prefix"]) for b, r in rules.effective_regs(pi, bills).items()}
 
 
 # ================================================================== 空号段（按前缀）
@@ -216,8 +222,9 @@ def gap_segments(prefix: str | None, last: int | None = None) -> list[tuple[int,
     return out
 
 
-def gaps(pi_in: str | None, cu: CurrentUser | None = None) -> dict:
-    """本 PI 前缀的空号段：起止流水号与枚数（最多列 GAP_LIST_MAX 段，合计照常给全）、前缀最大号与下一个号。"""
+def gaps(pi_in: str | None, cu: CurrentUser | None = None, bills: list[str] | None = None) -> dict:
+    """前缀的空号段：起止流水号与枚数（最多列 GAP_LIST_MAX 段，合计照常给全）、前缀最大号与下一个号。
+    bills 给出时按这些单据用的前缀（须是同一个前缀，见 _one_prefix），否则按本 PI 默认规则的前缀。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -225,7 +232,13 @@ def gaps(pi_in: str | None, cu: CurrentUser | None = None) -> dict:
         cu.check_read(
             *(orders.bill_orgs(db.column("SELECT DISTINCT bill_no FROM sn_prd_mo WHERE pi = %s", pi)) or {"-"})
         )
-    return gaps_of(pi)
+    xs = [b for b in (util.trim(x) for x in bills or []) if b]
+    if not xs:
+        return gaps_of(pi)
+    ps = {p for p in bill_prefixes(pi, xs).values() if p}
+    if len(ps) > 1:
+        raise biz(ErrorCode.GEN_MULTI_PREFIX, detail="、".join(sorted(ps)))
+    return gaps_of(pi, next(iter(ps), None))
 
 
 def free_segments(prefix: str | None, last: int | None = None) -> list[dict]:
@@ -272,10 +285,10 @@ def free_segments(prefix: str | None, last: int | None = None) -> list[dict]:
     return [{"start_seq": a, "end_seq": b, "qty": b - a + 1, "bill_no": bill} for a, b, bill in out]
 
 
-def gaps_of(pi: str) -> dict:
-    """本 PI 前缀的空号段与前缀最大号（同前缀各 PI 看到的相同）；没选规则时为空。
+def gaps_of(pi: str, prefix: str | None | bool = False) -> dict:
+    """前缀的空号段与前缀最大号（同前缀各 PI 看到的相同）；prefix 不给时为本 PI 默认规则的前缀，没选规则时为空。
     reserve_start / reserved*：早先的号段预留已取消，保留字段（空），页面接口不变。"""
-    prefix = prefix_of(pi)
+    prefix = prefix_of(pi) if prefix is False else prefix
     last = rules.prefix_last(prefix)
     segs = free_segments(prefix, last)
     return {
@@ -301,7 +314,8 @@ SEG_LIST_MAX = 500
 #: SN 明细每页最多条数
 SN_PAGE_MAX = 200
 
-#: 号段：单据挂在本 PI 下的号按（流水归属 PI，十进制流水）连续合并；g 相同即连续。
+#: 号段：单据挂在本 PI 下的号按（流水归属 PI，规则前缀，十进制流水）连续合并；g 相同即连续
+#: （一个 PI 可以有多个前缀：不同前缀的号各自成段）。
 #: 只含本系统生成的号：导入的号没有流水，不在生成页（只能在分配页分配）
 _ISLAND = (
     "SELECT {cols}, seq_dec - ROW_NUMBER() OVER (PARTITION BY {part} ORDER BY seq_dec) g "
@@ -315,14 +329,17 @@ def bill_segment_counts(pi: str, bill_nos: list[str], facs: tuple[str, ...] | No
         return {}
     isql, iargs = factories.item_scope_sql(facs)
     inner = _ISLAND.format(
-        cols="bill_no, bill_seq, seq_pi_no", part="bill_no, bill_seq, seq_pi_no", bills=marks(len(bill_nos)), scope=isql
+        cols="bill_no, bill_seq, seq_pi_no, seq_prefix",
+        part="bill_no, bill_seq, seq_pi_no, seq_prefix",
+        bills=marks(len(bill_nos)),
+        scope=isql,
     )
     return {
         r["bill_no"]: (int(r["segs"]), int(r["qty"]))
         for r in db.all(
             "SELECT bill_no, COUNT(*) segs, SUM(n) qty FROM ("
-            f"SELECT bill_no, bill_seq, seq_pi_no, g, COUNT(*) n FROM ({inner}) t "
-            "GROUP BY bill_no, bill_seq, seq_pi_no, g"
+            f"SELECT bill_no, bill_seq, seq_pi_no, seq_prefix, g, COUNT(*) n FROM ({inner}) t "
+            "GROUP BY bill_no, bill_seq, seq_pi_no, seq_prefix, g"
             ") u GROUP BY bill_no",
             pi,
             *bill_nos,
@@ -350,19 +367,20 @@ def bill_segments(cu: CurrentUser, pi_in: str | None, bill_in: str | None) -> di
     pi, bill, facs = _bill_key(cu, pi_in, bill_in)
     isql, iargs = factories.item_scope_sql(facs)
     inner = _ISLAND.format(
-        cols="sn, bill_seq, material_code, attach_no, seq_pi_no, seq_dec, status",
-        part="bill_seq, seq_pi_no",
+        cols="sn, bill_seq, material_code, attach_no, seq_pi_no, seq_prefix, seq_dec, status",
+        part="bill_seq, seq_pi_no, seq_prefix",
         bills="%s",
         scope=isql,
     )
     rows = db.all(
-        "SELECT bill_seq, MIN(material_code) material_code, MIN(attach_no) attach_no, seq_pi_no, "
+        "SELECT bill_seq, MIN(material_code) material_code, MIN(attach_no) attach_no, seq_pi_no, seq_prefix, "
         "MIN(seq_dec) s, MAX(seq_dec) e, COUNT(*) n, SUM(status = 'PENDING_ALLOC') pending, "
-        "MIN(fs) start_sn, MIN(ls) end_sn FROM (SELECT bill_seq, material_code, attach_no, seq_pi_no, seq_dec, "
-        "status, g, FIRST_VALUE(sn) OVER (PARTITION BY bill_seq, seq_pi_no, g ORDER BY seq_dec) fs, "
-        "FIRST_VALUE(sn) OVER (PARTITION BY bill_seq, seq_pi_no, g ORDER BY seq_dec DESC) ls "
-        f"FROM ({inner}) a) b GROUP BY bill_seq, seq_pi_no, g "
-        "ORDER BY bill_seq, seq_pi_no = %s DESC, seq_pi_no, s",
+        "MIN(fs) start_sn, MIN(ls) end_sn FROM (SELECT bill_seq, material_code, attach_no, seq_pi_no, seq_prefix, "
+        "seq_dec, status, g, "
+        "FIRST_VALUE(sn) OVER (PARTITION BY bill_seq, seq_pi_no, seq_prefix, g ORDER BY seq_dec) fs, "
+        "FIRST_VALUE(sn) OVER (PARTITION BY bill_seq, seq_pi_no, seq_prefix, g ORDER BY seq_dec DESC) ls "
+        f"FROM ({inner}) a) b GROUP BY bill_seq, seq_pi_no, seq_prefix, g "
+        "ORDER BY bill_seq, seq_pi_no = %s DESC, seq_pi_no, seq_prefix, s",
         pi,
         bill,
         *iargs,
@@ -374,6 +392,8 @@ def bill_segments(cu: CurrentUser, pi_in: str | None, bill_in: str | None) -> di
             "material_code": r["material_code"] or "",
             "attach_no": r["attach_no"] or "",
             "seq_pi_no": r["seq_pi_no"],
+            # 号段的规则前缀（一个 PI 可以有多个前缀；点 SN 明细时带上）
+            "seq_prefix": r["seq_prefix"],
             "start_seq": int(r["s"]),
             "end_seq": int(r["e"]),
             "start_sn": r["start_sn"],
@@ -387,7 +407,8 @@ def bill_segments(cu: CurrentUser, pi_in: str | None, bill_in: str | None) -> di
     ]
     # 稳定排序：同一物料行的几段保持 SQL 里的先后（本 PI 的在前、按流水），截断前排好，列出的是排在最前的号段
     use.sort(key=lambda x: (not x["attach_no"].strip(), attach_order(x["attach_no"]), x["bill_seq"]))
-    prefix = prefix_of(pi)
+    # 空闲号段按本单据用的前缀（单据规则，没有时为 PI 默认规则的）
+    prefix = bill_prefixes(pi, [bill]).get(bill)
     last = rules.prefix_last(prefix)
     free = [x for x in free_segments(prefix, last) if x["bill_no"] == bill]
     return {
@@ -419,9 +440,11 @@ def segment_sns(
     page: int | None,
     size: int | None,
     bill_seq: int | None = None,
+    seq_prefix: str | None = None,
 ) -> dict:
     """号段 SN 明细：单据挂在本 PI 下、流水归属 seq_pi_no、流水在 start～end 的号，按流水排，分页。
-    bill_seq：只看该物料行（单据序号）的号（已用号段按物料行分开列出，点明细时带上）；不给为整张单据。"""
+    bill_seq：只看该物料行（单据序号）的号（已用号段按物料行分开列出，点明细时带上）；不给为整张单据。
+    seq_prefix：只看这个规则前缀的号（一个 PI 可以有多个前缀，号段带着它）；不给为各前缀。"""
     pi, bill, facs = _bill_key(cu, pi_in, bill_in)
     seq_pi = util.trim(seq_pi_in) or pi
     if start is None or end is None or start < 1 or end < start:
@@ -431,11 +454,23 @@ def segment_sns(
     isql, iargs = factories.item_scope_sql(facs)
     where = (
         "FROM sn_item WHERE pi_no = %s AND bill_no = %s AND seq_pi_no = %s AND seq_dec BETWEEN %s AND %s "
-        "AND origin = 'GEN'" + ("" if bill_seq is None else " AND bill_seq = %s") + isql
+        "AND origin = 'GEN'"
+        + ("" if bill_seq is None else " AND bill_seq = %s")
+        + ("" if util.blank(seq_prefix) else " AND seq_prefix = %s")
+        + isql
     )
-    args = [pi, bill, seq_pi, start, end, *([] if bill_seq is None else [bill_seq]), *iargs]
+    args = [
+        pi,
+        bill,
+        seq_pi,
+        start,
+        end,
+        *([] if bill_seq is None else [bill_seq]),
+        *([] if util.blank(seq_prefix) else [util.trim(seq_prefix)]),
+        *iargs,
+    ]
     total = db.count("SELECT COUNT(*) " + where, *args)
-    rows = db.all("SELECT id, sn " + where + " ORDER BY seq_dec LIMIT %s OFFSET %s", *args, sz, (pg - 1) * sz)
+    rows = db.all("SELECT id, sn " + where + " ORDER BY seq_dec, id LIMIT %s OFFSET %s", *args, sz, (pg - 1) * sz)
     from app.modules.sn.services import dual
 
     subs = dual.sn2_of(r["id"] for r in rows)
@@ -589,9 +624,15 @@ class Line:
     issues: list[str] = field(default_factory=list)
     #: 物料行失效（line_void）：不参与排号，额度按 0 算
     void: bool = False
-    #: 双 SN 的 PI：第二 SN 的规则（PI 登记在 sn_pi_rule2）；单 SN 为 False / None
+    #: 双 SN 的 PI：第二 SN 的规则（单据规则 sn_bill_rule2，没有时为 PI 默认规则 sn_pi_rule2）；单 SN 为 False / None
     dual: bool = False
     res2: rules.Resolved | None = None
+    #: 所在单据用的登记的前缀（单据规则，没有时为 PI 默认规则；没选规则为 None）：一次生成只能有一个前缀
+    reg_prefix: str | None = None
+    reg_prefix2: str | None = None
+    #: 所在单据自己生成、还没删的号的前缀（单据前缀锁定；没号为 None）
+    locked: str | None = None
+    locked2: str | None = None
 
     @property
     def quota(self) -> int:
@@ -628,14 +669,31 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
     for pi, keys in groups.items():
         if not keys:
             continue
-        reg = regs.get(pi)
-        res = rules._registered(pi, reg)
+        # 按单据选规则：各单据用单据规则，没有时为本 PI 的默认规则（同一登记只解析一次）
+        pbills = {k[0] for k in keys}
+        eff = rules.effective_regs(pi, pbills, regs.get(pi))
         dual = pi in duals
-        reg2 = regs2.get(pi)
-        res2 = None
+        eff2: dict[str, dict | None] = {}
+        used = rules.bills_used_prefixes(pbills)
+        used2: dict[str, str] = {}
         if dual:
             with rules.second():
-                res2 = rules._registered(pi, reg2)
+                eff2 = rules.effective_regs(pi, pbills, regs2.get(pi))
+                used2 = rules.bills_used_prefixes(pbills)
+        memo_res: dict[tuple, rules.Resolved | None] = {}
+
+        def res_of(row: dict | None, second: bool, pi: str = pi, memo_res: dict = memo_res):
+            if row is None:
+                return None
+            mk = (second, row["prefix"], row["rule_id"], row["custom_json"], row["seq_start"])
+            if mk not in memo_res:
+                if second:
+                    with rules.second():
+                        memo_res[mk] = rules._registered(pi, row)
+                else:
+                    memo_res[mk] = rules._registered(pi, row)
+            return memo_res[mk]
+
         for k in keys:
             r = snap.get(k)
             if r is None:
@@ -643,6 +701,10 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
             if r["pi"] != pi:
                 raise biz(ErrorCode.GEN_SCOPE_INVALID)
             c = counts.get(k)
+            reg = eff.get(k[0])
+            res = res_of(reg, False)
+            reg2 = eff2.get(k[0]) if dual else None
+            res2 = res_of(reg2, True) if dual else None
             attach, _src = orders.effective_attach(r, fills.get(k))
             length, length_src = orders.effective_length(r, lens.get(k))
             unit, unit_src = orders.effective_unit(r, units.get(k))
@@ -665,14 +727,22 @@ def load_lines_of(groups: dict[str, list[tuple[str, int]]]) -> dict[str, list[Li
                 void=vrule.is_void(r),
                 dual=dual,
                 res2=res2,
+                reg_prefix=None if reg is None else reg["prefix"],
+                reg_prefix2=None if reg2 is None else reg2["prefix"],
+                locked=used.get(k[0]),
+                locked2=used2.get(k[0]),
             )
             _check(line, reg, taken, reg2)
             out[pi].append(line)
     return out
 
 
-def _rule_issue(line: Line, res: rules.Resolved | None, reg: dict | None, taken: dict) -> str | None:
-    """规则这一项的生成条件：NO_RULE 没选规则 / RULE_PREFIX 前缀不能用 / RULE_PI_PREFIX 与登记的前缀不同。"""
+def _rule_issue(
+    line: Line, res: rules.Resolved | None, reg: dict | None, taken: dict, locked: str | None = None
+) -> str | None:
+    """规则这一项的生成条件：NO_RULE 没选规则 / RULE_PREFIX 前缀不能用 / RULE_PI_PREFIX 与登记的前缀不同 /
+    RULE_BILL_LOCKED 单据已用别的前缀出号（如单据在金蝶改了 PI 后沿用的新 PI 默认规则是别的前缀），
+    须选这个前缀的规则。"""
     if res is None:
         return "NO_RULE"
     if not res.ready:
@@ -684,13 +754,20 @@ def _rule_issue(line: Line, res: rules.Resolved | None, reg: dict | None, taken:
         # 与别的前缀一个是另一个的开头，或已按别的进制 / 位数用了这个前缀：须改前缀，免得生成时才失败
         return "RULE_PREFIX"
     if reg is not None and res.spec().prefix != reg["prefix"]:
-        # 一个 PI 一个规则前缀：规则在规则库换了前缀（另出版本）后与本 PI 登记的前缀不同，须重新选规则
+        # 规则在规则库换了前缀（另出版本）后与单据用的登记的前缀不同，须重新选规则
         return "RULE_PI_PREFIX"
+    if locked is not None and res.spec().prefix != locked:
+        return "RULE_BILL_LOCKED"
     return None
 
 
 #: 第二 SN 规则的生成条件（与第一 SN 的同名条件对应）
-ISSUE2 = {"NO_RULE": "NO_RULE2", "RULE_PREFIX": "RULE2_PREFIX", "RULE_PI_PREFIX": "RULE2_PI_PREFIX"}
+ISSUE2 = {
+    "NO_RULE": "NO_RULE2",
+    "RULE_PREFIX": "RULE2_PREFIX",
+    "RULE_PI_PREFIX": "RULE2_PI_PREFIX",
+    "RULE_BILL_LOCKED": "RULE2_BILL_LOCKED",
+}
 
 
 def _check(line: Line, reg: dict | None, taken: dict, reg2: dict | None = None) -> None:
@@ -700,13 +777,13 @@ def _check(line: Line, reg: dict | None, taken: dict, reg2: dict | None = None) 
         return
     if line.block:
         line.issues.append(line.block)
-    code = _rule_issue(line, line.res, reg, taken)
+    code = _rule_issue(line, line.res, reg, taken, line.locked)
     if code is not None:
         line.issues.append(code)
     spec = line.res.spec() if line.res is not None and line.res.ready else None
     specs = [spec]
     if line.dual:
-        code = _rule_issue(line, line.res2, reg2, taken)
+        code = _rule_issue(line, line.res2, reg2, taken, line.locked2)
         if code is not None:
             line.issues.append(ISSUE2[code])
         specs.append(line.res2.spec() if line.res2 is not None and line.res2.ready else None)
@@ -775,18 +852,27 @@ LOWER_LIST_MAX = 3
 
 
 def _prefix_pending(prefix: str, memo: dict, only_pi: str | None = None) -> list[dict]:
-    """登记了这个前缀的 PI（only_pi 给定时只看这张 PI）里还有额度、项次为数字的物料行。
+    """用这个前缀的单据（单据规则，没有时为所在 PI 的默认规则；only_pi 给定时只看这张 PI）里还有额度、项次为数字的
+    物料行。
     失效的物料行、冻结或暂停交付单据的行、删过号的行（删号后重新生成接在最大号之后）不算。
     第二 SN 上下文看登记了第二前缀的 PI。"""
     mk = ("pending", rules.slot(), prefix, only_pi)
     if mk in memo:
         return memo[mk]
+    # 用这个前缀的物料行：所在单据的单据规则是它，或没有单据规则、所在 PI 的默认规则是它（按单据选规则）
+    only = "" if only_pi is None else "AND m.pi = %s "
+    oargs = [] if only_pi is None else [only_pi]
+    bt, pt = rules.bill_table(), rules.reg_table()
     snap = db.all(
-        f"SELECT m.* FROM sn_prd_mo m JOIN {rules.reg_table()} r ON r.pi_no = m.pi WHERE r.prefix = %s "
-        + ("" if only_pi is None else "AND m.pi = %s ")
-        + "ORDER BY m.pi, m.bill_no, m.seq",
+        "SELECT * FROM ("
+        f"SELECT m.* FROM sn_prd_mo m JOIN {bt} b ON b.bill_no = m.bill_no WHERE b.prefix = %s {only}"
+        f"UNION ALL SELECT m.* FROM sn_prd_mo m JOIN {pt} r ON r.pi_no = m.pi WHERE r.prefix = %s {only}"
+        f"AND NOT EXISTS (SELECT 1 FROM {bt} b WHERE b.bill_no = m.bill_no)"
+        ") t ORDER BY pi, bill_no, seq",
         prefix,
-        *([] if only_pi is None else [only_pi]),
+        *oargs,
+        prefix,
+        *oargs,
     )
     out: list[dict] = []
     if snap:
@@ -836,8 +922,7 @@ def _lower_pending(pi: str, todo: list[Line]) -> dict:
     memo: dict = {}
     found: dict[tuple[str, int], dict] = {}
 
-    def scan(res: rules.Resolved | None) -> None:
-        prefix = prefix_of(pi)
+    def scan(res: rules.Resolved | None, prefix: str | None) -> None:
         if prefix is None:
             return
         only = pi if res is not None and res.inc is not None else None
@@ -846,10 +931,11 @@ def _lower_pending(pi: str, todo: list[Line]) -> dict:
             if k not in run and b["key"] < top:
                 found.setdefault(k, b)
 
-    scan(todo[0].res)
+    # 本次生成的前缀（一次生成只有一个，见 _one_prefix）
+    scan(todo[0].res, _one_prefix(todo, False))
     if todo[0].dual:
         with rules.second():
-            scan(todo[0].res2)
+            scan(todo[0].res2, _one_prefix(todo, True))
     if not found:
         return empty
     ls = sorted(found.values(), key=lambda b: (b["key"], b["pi_no"], b["bill_no"], b["seq"]))
@@ -895,16 +981,37 @@ def _scope_keys(pi: str, scope: str, bills_in: list[str] | None, lines_in: list[
 # ================================================================== 预演
 
 
+#: 前缀不同的提示里最多列出的单据
+MULTI_PREFIX_LIST_MAX = 6
+
+
+def _one_prefix(todo: list[Line], second: bool) -> str | None:
+    """本次生成的前缀（各行所在单据用的登记的前缀；没选规则的行不算）：不止一个时报 GEN_MULTI_PREFIX（按单据列出）。"""
+    by: dict[str, list[str]] = {}
+    for x in todo:
+        p = x.reg_prefix2 if second else x.reg_prefix
+        if p is not None and x.bill_no not in by.setdefault(p, []):
+            by[p].append(x.bill_no)
+    if len(by) <= 1:
+        return next(iter(by), None)
+    parts = []
+    for p, bills in sorted(by.items()):
+        shown = "、".join(bills[:MULTI_PREFIX_LIST_MAX]) + ("…" if len(bills) > MULTI_PREFIX_LIST_MAX else "")
+        parts.append(f"{shown} → {p}")
+    raise biz(ErrorCode.GEN_MULTI_PREFIX, detail=("第二SN " if second else "") + "；".join(parts))
+
+
 def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = None) -> dict:
     """按排号顺序（见 _gen_order）给每个还有额度的物料行切号（整行额度，不拆行），接在本 PI 规则前缀的最大号之后；
     流水来源见 seq（默认 MAX）。返回计划（不落库）；不能生成时 issues 非空。
     可生成时另带 lower_pending：同前缀没选中的行里还有更小项次没生成（只提示，不拦，不参与确认生成时的比对）。"""
     seq = seq or {"mode": SEQ_MAX}
-    prefix = prefix_of(pi)
-    base = rules.prefix_last(prefix)
     ls = _gen_order(_load_lines(pi, keys), scope)
     todo = [x for x in ls if x.quota > 0]
     quota = sum(x.quota for x in todo)
+    # 按单据选规则：一次生成只能有一个前缀（第一 SN、第二 SN 各一个），按还有额度的物料行所在单据用的规则判断
+    prefix = _one_prefix(todo, False)
+    base = rules.prefix_last(prefix)
     issues = [
         {
             "bill_no": x.bill_no,
@@ -951,7 +1058,7 @@ def _plan(pi: str, scope: str, keys: list[tuple[str, int]], seq: dict | None = N
     if dual:
         # 双 SN：第二 SN 在第二前缀下从最大号之后接着编（按第二 SN 的起始号），同一物料行内第 i 个对第 i 个
         with rules.second():
-            prefix2 = prefix_of(pi)
+            prefix2 = _one_prefix(todo, True)
             base2 = rules.prefix_last(prefix2)
             got2 = _assign(prefix2, todo, base2, {"mode": SEQ_MAX}, second=True)
         out["dual"] = True
@@ -1234,11 +1341,15 @@ def generate(cu: CurrentUser, token: str | None) -> dict:
         for i in fresh["issues"]:
             if i.get("prefix") or i.get("inc"):
                 ln = _load_lines(pi, [(i["bill_no"], i["seq"])])
-                rules.check_line_prefix(ln[0].res if ln else None, i.get("prefix"), pi, prefix_of(pi))
+                rules.check_line_prefix(
+                    ln[0].res if ln else None, i.get("prefix"), pi, ln[0].reg_prefix if ln else None
+                )
             if i.get("prefix2") or i.get("inc2"):
                 ln = _load_lines(pi, [(i["bill_no"], i["seq"])])
                 with rules.second():
-                    rules.check_line_prefix(ln[0].res2 if ln else None, i.get("prefix2"), pi, prefix_of(pi))
+                    rules.check_line_prefix(
+                        ln[0].res2 if ln else None, i.get("prefix2"), pi, ln[0].reg_prefix2 if ln else None
+                    )
         if fresh["issues"] or not _same_plan(stored, fresh):
             raise biz(ErrorCode.GEN_PREVIEW_CHANGED)
         batch = util.next_id("G") + util.token_hex()[:4]
@@ -1472,9 +1583,9 @@ def _generate_in_tx(cu: CurrentUser, j: dict, plan: dict) -> None:
                     continue
                 same = [(y["bill_no"], y["seq"]) for y in plan["items"] if y["sub"]["rule_key"] == sub["rule_key"]]
                 versions2[sub["rule_key"]] = rules.realize(cu, pi, _resolved_of(pi, sub), same)
-            db.exec("UPDATE sn_pi_rule2 SET seq_start = NULL WHERE pi_no = %s", pi)
-    # PI 登记的起始号只管这一次生成：生成后清掉（之后流水接续）
-    db.exec("UPDATE sn_pi_rule SET seq_start = NULL WHERE pi_no = %s", pi)
+            _clear_seq_start(pi, plan["items"])
+    # 登记的起始号只管这一次生成：生成后清掉（之后流水接续）——所选单据的单据规则，没有单据规则的单据用的 PI 默认规则
+    _clear_seq_start(pi, plan["items"])
     for no in sorted({x["bill_no"] for x in plan["items"]}):
         changes.ensure_ledger(no)
         # 写号之前先给台账加共享锁：订单变更正在改这张单的暂停时等它提交，之后改暂停的等这次生成提交，
@@ -1627,6 +1738,19 @@ _INSERT_SUB = (
     "INSERT INTO sn_item_sub(item_id, sn2, seq_pi_no, seq_dec, seq_prefix, rule_version_id, gen_batch, created_at) "
     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
 )
+
+
+def _clear_seq_start(pi: str, items: list[dict]) -> None:
+    """生成后清掉这次用到的登记上的起始号（当前用途：第一 / 第二 SN）。"""
+    bills = sorted({x["bill_no"] for x in items})
+    if not bills:
+        return
+    own = rules.valid_bill_rules(pi, bills)
+    if own:
+        xs = sorted(own)
+        db.exec(f"UPDATE {rules.bill_table()} SET seq_start = NULL WHERE bill_no IN ({marks(len(xs))})", *xs)
+    if len(own) < len(bills):
+        db.exec(f"UPDATE {rules.reg_table()} SET seq_start = NULL WHERE pi_no = %s", pi)
 
 
 def _seq_iter(segs: list[list[int]]):

@@ -59,6 +59,8 @@ TABLE_OWNER: dict[str, str] = {
             "sn_rule_version",
             "sn_pi_rule",
             "sn_pi_rule2",
+            "sn_bill_rule",
+            "sn_bill_rule2",
             "sn_pi_dual",
             "sn_prefix_counter",
             "sn_prefix_role",

@@ -125,22 +125,26 @@ def rule_options(cu: OperatorDep, pi: str | None = None, customer: str | None = 
 
 @router.post(
     "/line-select",
-    summary="选定 / 改选本 PI 的规则（一个 PI 一个规则前缀）：规则库（rule_id）或自定义（前缀已有规则时归到它下面）",
+    summary="选定 / 改选所选单据的规则（按单据：勾选的物料行作用于所在的整张单据）：规则库（rule_id）、自定义（前缀已有"
+    "规则时归到它下面）或改用本 PI 的默认规则（use_default）；勾选本 PI 全部单据时同时改 PI 默认规则",
 )
 def rule_line_select(body: LineSelectIn, cu: OperatorDep) -> dict:
     lines = [x.model_dump() for x in body.lines or []]
     custom = None if body.custom is None else body.custom.model_dump()
     with rules.use_slot(body.slot or rules.SLOT1):
-        return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom)
+        return rules.select_for_lines(cu, body.pi_no, lines, body.rule_id, custom, bool(body.use_default))
 
 
-@router.put("/pi-binding", summary="给 PI 登记规则库规则（已归属别的 PI 时共用前缀）")
+@router.put(
+    "/pi-binding",
+    summary="给 PI 登记默认规则（规则库规则，已归属别的 PI 时共用前缀）：同勾选本 PI 全部单据选规则",
+)
 def rule_pi_bind(body: PiBindIn, cu: OperatorDep) -> dict:
     with rules.use_slot(body.slot or rules.SLOT1):
         return rules.bind_pi(cu, body.pi_no, body.rule_id)
 
 
-@router.delete("/pi-binding", summary="解除 PI 的规则登记（本 PI 有号时不能解除）")
+@router.delete("/pi-binding", summary="解除 PI 的默认规则（沿用它的单据有号时不能解除；单据规则不动）")
 def rule_pi_unbind(cu: OperatorDep, pi: str | None = None, slot: int | None = None) -> dict:
     with rules.use_slot(slot or rules.SLOT1):
         return rules.unbind_pi(cu, pi)

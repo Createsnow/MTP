@@ -224,7 +224,7 @@ def test_released_prefix_allows_overlapping_prefix(w, api, sql):
     assert w.select(p2, [(b2, 1)], rule_id=rid).code == "RULE_PREFIX_OVERLAP"
     assert w.select(p2, [(b2, 1)], custom=custom(pre)).code == "RULE_PREFIX_OVERLAP"
     # 本 PI 有号时也不能回到旧前缀
-    assert w.select(pi, [(b, 1)], custom=custom(pre)).code == "RULE_PI_PREFIX_LOCKED"
+    assert w.select(pi, [(b, 1)], custom=custom(pre)).code == "RULE_BILL_PREFIX_LOCKED"
 
 
 def test_abandoned_prefix_does_not_block_sharing_new_prefix(w, api, sql):

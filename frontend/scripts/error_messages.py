@@ -100,6 +100,8 @@ E = {
 "RULE_PREFIX_OVERLAP": ("Prefix {prefix} and prefix {other} of PI {pi} start with one another and may produce identical SNs; please change it", "Tiền tố {prefix} và tiền tố {other} của PI {pi} cái này là phần đầu của cái kia, có thể tạo SN trùng; vui lòng đổi"),
 "RULE_USED_FORMAT_LOCKED": ("Rule {rule_code} has been used for generation; its prefix, base, serial length and charset cannot change. One prefix has one rule, so create a new rule (new prefix)", "Quy tắc {rule_code} đã dùng để tạo số, không thể đổi tiền tố, hệ cơ số, số chữ số và bộ ký tự; mỗi tiền tố một quy tắc, vui lòng tạo quy tắc mới (tiền tố mới)"),
 "RULE_PI_PREFIX_LOCKED": ("PI {pi} already has SNs generated with prefix {prefix}; a PI can use only one rule prefix, so {new} cannot be used. To change length, unit or suffix, use \"Select rule → Custom\"", "PI {pi} đã tạo số với tiền tố {prefix}; mỗi PI chỉ dùng một tiền tố quy tắc, không thể đổi sang {new}. Muốn đổi chiều dài, đơn vị, hậu tố hãy sửa trong \"Chọn quy tắc → Tùy chỉnh\""),
+"RULE_BILL_PREFIX_LOCKED": ("Bill {bill_no} already has SNs generated with prefix {prefix}, so {new} cannot be used (re-select only after all its SNs are deleted). To change length, unit or suffix, use \"Select rule → Custom\"", "Phiếu {bill_no} đã tạo số với tiền tố {prefix}, không thể đổi sang {new} (chỉ chọn lại được sau khi xóa hết số). Muốn đổi chiều dài, đơn vị, hậu tố hãy sửa trong \"Chọn quy tắc → Tùy chỉnh\""),
+"RULE_PI_DEFAULT_NONE": ("PI {pi} has no default rule yet; please select a rule", "PI {pi} chưa có quy tắc mặc định, vui lòng chọn quy tắc"),
 "RULE_PREFIX_GROW_LOCKED": ("The serials of prefix {prefix} already exceed the rule length (auto-extended); auto-extend cannot be turned off", "Dãy số của tiền tố {prefix} đã vượt số chữ số của quy tắc (đã tự mở rộng); không thể tắt tự mở rộng"),
 "RULE_LINE_REQUIRED": ("Please select material lines", "Vui lòng chọn dòng vật tư"),
 "RULE_GLOBAL_READONLY": ("Only the system administrator can modify or delete global rules: {rule_code}", "Chỉ quản trị hệ thống mới được sửa, xóa quy tắc dùng chung: {rule_code}"),
@@ -129,6 +131,7 @@ E = {
 "RULE_INC_READONLY": ("Rule {rule_code} has an ID code; only its name and customers can be changed in the rule library, edit the format in \"Select rule\" on the generate page", "Quy tắc {rule_code} có mã nhận dạng, trong thư viện quy tắc chỉ đổi được tên và khách hàng áp dụng; định dạng sửa ở \"Chọn quy tắc\" trên trang tạo"),
 # ---------- 生成 ----------
 "GEN_SCOPE_INVALID": ("Generation scope must be bills or material lines under the same PI", "Phạm vi tạo phải là chứng từ hoặc dòng vật tư trong cùng một PI"),
+"GEN_MULTI_PREFIX": ("The selected bills use different prefixes; generate them separately by prefix: {detail}", "Các phiếu đã chọn dùng tiền tố khác nhau, vui lòng tạo riêng theo từng tiền tố: {detail}"),
 "GEN_NOT_GENERATABLE": ("The selected scope cannot be generated: {detail}", "Phạm vi đã chọn không thể tạo: {detail}"),
 "GEN_PI_QUOTA_EMPTY": ("The selected scope has no quota left to generate", "Phạm vi đã chọn không còn hạn mức để tạo"),
 "GEN_RULE_EXHAUSTED": ("Rule digits exhausted: max serial {max}, this run needs up to {end}", "Hết chữ số của quy tắc: tuần tự tối đa {max}, lần này cần tới {end}"),

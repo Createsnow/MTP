@@ -853,7 +853,7 @@ def _line_view_of(line: dict) -> dict:
     return line_view(line, counts.get(k), fills.get(k), lfill=lens.get(k), ufill=units.get(k))
 
 
-#: 物料行在本系统做的配置：手填的附件项次、手填的米数、手填的产品单位（规则登记在 PI 上，见 rules.pi_rule，
+#: 物料行在本系统做的配置：手填的附件项次、手填的米数、手填的产品单位（规则按单据登记，见 sn 的 rules.effective_regs，
 #: 在生成页「选规则」改选）
 _LINE_CONFIG = (
     ("sn_line_attach", "attach"),
@@ -865,7 +865,7 @@ _LINE_CONFIG = (
 def revoke_config(cu: CurrentUser, pi_in: str | None, lines_in: list[dict] | None) -> dict:
     """恢复默认值（生成页底部「恢复默认值」按钮，原「撤销配置」，可多行，不分页签）：所选物料行中还没有号的，
     手填的附件项次、手填的米数、手填的产品单位一并删除，恢复为未配置（取金蝶值，金蝶为空时待填写）。
-    规则登记在 PI 上（一个 PI 一个规则前缀），不在这里撤销。
+    规则（PI 默认规则、单据规则）不在这里撤销（删号、恢复默认值都不动规则）。
     有号的行不动（有号的行先删号）。一个事务内完成。返回撤销了配置的行数与因有号跳过的行数。"""
     pi = util.trim(pi_in)
     if not pi:

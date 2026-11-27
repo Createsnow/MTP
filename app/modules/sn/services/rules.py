@@ -142,8 +142,13 @@ INC_MAX = 999
 SLOT1 = 1
 SLOT2 = 2
 _SLOT: contextvars.ContextVar[int] = contextvars.ContextVar("sn_rule_slot", default=SLOT1)
-#: 两张登记表合在一起（列相同）：按前缀、规则看全部登记时用
-REG_ALL = "(SELECT * FROM sn_pi_rule UNION ALL SELECT * FROM sn_pi_rule2)"
+#: 登记表的公共列（PI 默认规则 sn_pi_rule(2) 与单据规则 sn_bill_rule(2) 相同的列）
+REG_COLS = "pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at"
+#: 全部登记（第一、第二 SN 的 PI 默认规则与单据规则合在一起）：按前缀、规则看全部登记时用
+REG_ALL = (
+    f"(SELECT {REG_COLS} FROM sn_pi_rule UNION ALL SELECT {REG_COLS} FROM sn_pi_rule2 "
+    f"UNION ALL SELECT {REG_COLS} FROM sn_bill_rule UNION ALL SELECT {REG_COLS} FROM sn_bill_rule2)"
+)
 
 
 def slot() -> int:
@@ -165,8 +170,18 @@ def second():
 
 
 def reg_table(s: int | None = None) -> str:
-    """PI 规则登记表：第一 SN sn_pi_rule / 第二 SN sn_pi_rule2。"""
+    """PI 默认规则表：第一 SN sn_pi_rule / 第二 SN sn_pi_rule2。"""
     return "sn_pi_rule2" if (s or slot()) == SLOT2 else "sn_pi_rule"
+
+
+def bill_table(s: int | None = None) -> str:
+    """单据规则表：第一 SN sn_bill_rule / 第二 SN sn_bill_rule2。"""
+    return "sn_bill_rule2" if (s or slot()) == SLOT2 else "sn_bill_rule"
+
+
+def reg_any(s: int | None = None) -> str:
+    """当前用途（第一 / 第二 SN）的全部登记：PI 默认规则 + 单据规则（列为 REG_COLS）。"""
+    return f"(SELECT {REG_COLS} FROM {reg_table(s)} UNION ALL SELECT {REG_COLS} FROM {bill_table(s)})"
 
 
 def slot_text(s: int | None = None) -> str:
@@ -196,7 +211,7 @@ def _used_as_first(key: str, inc: bool) -> bool:
     cond = "prefix = %s" + (" OR prefix LIKE %s" if inc else "")
     args = (key, like) if inc else (key,)
     return (
-        db.exists(f"SELECT EXISTS(SELECT 1 FROM sn_pi_rule WHERE {cond})", *args)
+        db.exists(f"SELECT EXISTS(SELECT 1 FROM {reg_any(SLOT1)} b WHERE {cond})", *args)
         or db.exists(f"SELECT EXISTS(SELECT 1 FROM sn_prefix_counter WHERE {cond})", *args)
         or db.exists(
             "SELECT EXISTS(SELECT 1 FROM sn_rule r JOIN sn_rule_version v ON v.rule_id = r.id "
@@ -278,23 +293,30 @@ def check_pair(pi: str, key: str, prefix: str) -> None:
     """双 SN 的 PI：本 PI 第一、第二 SN 的前缀（规则前缀 key、完整前缀 prefix）不能相同或一个是另一个的开头
     （与另一个 SN 已登记的前缀比）。"""
     other = SLOT1 if slot() == SLOT2 else SLOT2
-    first = db.one(f"SELECT prefix, rule_id, custom_json FROM {reg_table(other)} WHERE pi_no = %s", pi)
-    if first is None:
-        return
-    heads = {first["prefix"]}
-    if first["rule_id"] is not None:
-        r = db.one("SELECT prefix FROM sn_rule WHERE id = %s", first["rule_id"])
-        if r is not None:
-            heads.add(r["prefix"])
-    else:
-        c = json.loads(first["custom_json"] or "{}")
-        if util.trim(c.get("prefix")):
-            heads.add(util.trim(c.get("prefix")))
-    for h in sorted(heads):
-        if _overlap(h, key) or _overlap(h, prefix):
-            if other == SLOT1:
-                raise biz(ErrorCode.RULE2_SAME_PREFIX, prefix=key, first=first["prefix"])
-            raise biz(ErrorCode.RULE2_SAME_PREFIX, prefix=first["prefix"], first=key)
+    # 按单据选规则：本 PI 另一个 SN 的 PI 默认规则与各单据规则都要比（本 PI 的单据，含登记时属于本 PI 的）
+    rows = db.all(
+        f"SELECT prefix, rule_id, custom_json FROM {reg_table(other)} WHERE pi_no = %s "
+        f"UNION ALL SELECT prefix, rule_id, custom_json FROM {bill_table(other)} WHERE pi_no = %s "
+        f"OR bill_no IN (SELECT DISTINCT bill_no FROM sn_prd_mo WHERE pi = %s)",
+        pi,
+        pi,
+        pi,
+    )
+    for first in rows:
+        heads = {first["prefix"]}
+        if first["rule_id"] is not None:
+            r = db.one("SELECT prefix FROM sn_rule WHERE id = %s", first["rule_id"])
+            if r is not None:
+                heads.add(r["prefix"])
+        else:
+            c = json.loads(first["custom_json"] or "{}")
+            if util.trim(c.get("prefix")):
+                heads.add(util.trim(c.get("prefix")))
+        for h in sorted(heads):
+            if _overlap(h, key) or _overlap(h, prefix):
+                if other == SLOT1:
+                    raise biz(ErrorCode.RULE2_SAME_PREFIX, prefix=key, first=first["prefix"])
+                raise biz(ErrorCode.RULE2_SAME_PREFIX, prefix=first["prefix"], first=key)
 
 
 @dataclass(frozen=True)
@@ -1270,13 +1292,13 @@ def pi_used_prefix(pi: str) -> str | None:
     return None if v is None else v["prefix"]
 
 
-def pi_prefix(pi: str) -> dict:
+def pi_prefix(pi: str, row: dict | None | bool = False) -> dict:
     """生成页「选规则」的默认前缀：prefix、custom（格式；没有为 None）、seq_grow（前缀的自动突破开关）、
-    registered（本 PI 已登记规则）。
-    - 本 PI 已登记规则（一个 PI 一个规则前缀）：为登记的前缀与格式，各单据都沿用；
+    registered（已登记规则）。row 为登记行（单据规则或 PI 默认规则；False = 本 PI 的默认规则）。
+    - 已登记规则：为登记的前缀与格式（没有单据规则的单据都沿用 PI 默认规则）；
     - 还没登记：custom 为 None，页面按默认规则取点选的第一个单据编码后 7 位；
       prefix 为 PI 第一张单据（单据编号最小）编码后 7 位，只在取不到点选的单据时兜底。"""
-    row = pi_rule(pi)
+    row = pi_rule(pi) if row is False else row
     res = _registered(pi, row)
     if res is not None and res.inc is not None:
         # 已登记带识别码的规则：前缀为前缀层文本，custom 另带自增范围与本 PI 的值（取不到时 inc_error 为原因）
@@ -2547,6 +2569,119 @@ def pi_rules(pis: list[str]) -> dict[str, dict]:
     return {r["pi_no"]: r for r in db.all(f"SELECT * FROM {reg_table()} WHERE pi_no IN ({marks(len(pis))})", *pis)}
 
 
+# ---------------------------------------------------------------- 单据规则（2026-11-27 按单据选规则）
+# 一张单据用的规则 = 单据规则（sn_bill_rule(2)），没有时为本 PI 的默认规则（sn_pi_rule(2)）；物料行一律用所在单据的。
+# 第一 SN、第二 SN 逻辑相同（按 slot() 用各自的表）。
+
+
+def bill_rules(bills) -> dict[str, dict]:
+    """单据规则（当前用途）：单据编号 → 登记行；没有单据规则的单据不在结果里。"""
+    xs = sorted({b for b in bills if b})
+    if not xs:
+        return {}
+    return {r["bill_no"]: r for r in db.all(f"SELECT * FROM {bill_table()} WHERE bill_no IN ({marks(len(xs))})", *xs)}
+
+
+def valid_bill_rules(pi: str, bills) -> dict[str, dict]:
+    """本 PI 下有效的单据规则：登记时就属于本 PI 的；单据在金蝶改了 PI 时，单据有号的保留（前缀锁定），没号的不算
+    （沿用新 PI 的默认规则，之后在新 PI 选规则时覆盖）。"""
+    own = bill_rules(bills)
+    stale = [b for b, r in own.items() if r["pi_no"] != pi]
+    if stale:
+        used = bills_used_prefixes(stale)
+        for b in stale:
+            if b not in used:
+                del own[b]
+    return own
+
+
+def effective_regs(pi: str, bills, default: dict | None | bool = False) -> dict[str, dict | None]:
+    """各单据用的登记行：单据规则，没有时为本 PI 的默认规则（都没有为 None）。default 已取出时传入（False = 现取）。"""
+    xs = sorted({b for b in bills if b})
+    d = pi_rule(pi) if default is False else default
+    own = valid_bill_rules(pi, xs)
+    return {b: own.get(b, d) for b in xs}
+
+
+def bill_reg(pi: str, bill_no: str) -> dict | None:
+    """单据用的登记行（见 effective_regs）。"""
+    return effective_regs(pi, [bill_no]).get(bill_no)
+
+
+def bills_used_prefixes(bills) -> dict[str, str]:
+    """单据自己生成、还没删的号（含已转出的）的前缀：单据编号 → 前缀；没有号的单据不在结果里。
+    单据有号时前缀锁定（只能选这个前缀的规则），号全部删掉后可以改选。第二 SN 上下文按第二 SN 的前缀。"""
+    xs = sorted({b for b in bills if b})
+    if not xs:
+        return {}
+    if slot() == SLOT2:
+        rows = db.all(
+            "SELECT i.gen_bill_no b, MIN(s.seq_prefix) p FROM sn_item i JOIN sn_item_sub s ON s.item_id = i.id "
+            f"WHERE i.gen_bill_no IN ({marks(len(xs))}) AND i.origin = 'GEN' GROUP BY i.gen_bill_no",
+            *xs,
+        )
+    else:
+        rows = db.all(
+            f"SELECT gen_bill_no b, MIN(seq_prefix) p FROM sn_item WHERE gen_bill_no IN ({marks(len(xs))}) "
+            "AND origin = 'GEN' GROUP BY gen_bill_no",
+            *xs,
+        )
+    return {r["b"]: r["p"] for r in rows if r["p"]}
+
+
+def check_bills_locked(bills, target: str | None) -> None:
+    """单据有号（自己生成、还没删的）时前缀锁定：所选规则的前缀须与号上的前缀相同（RULE_BILL_PREFIX_LOCKED）。"""
+    used = bills_used_prefixes(bills)
+    for b in sorted(used):
+        if used[b] != target:
+            raise biz(ErrorCode.RULE_BILL_PREFIX_LOCKED, bill_no=b, prefix=used[b], new=target or "-")
+
+
+def pi_bills(pi: str) -> list[str]:
+    """本 PI 的单据：快照里的，加上已离开快照、台账记在本 PI 下的（之后可能回到快照）。"""
+    return sorted(
+        set(db.column("SELECT DISTINCT bill_no FROM sn_prd_mo WHERE pi = %s", pi))
+        | set(
+            db.column(
+                "SELECT l.bill_no FROM sn_bill_ledger l WHERE l.pi = %s "
+                "AND NOT EXISTS (SELECT 1 FROM sn_prd_mo m WHERE m.bill_no = l.bill_no)",
+                pi,
+            )
+        )
+    )
+
+
+def eligible_bills(pi: str) -> set[str]:
+    """「本 PI 全部单据」：快照里有未失效物料行的单据（全部物料行都失效的单据勾选不了，不算）。不看账户授权：
+    只授权了部分组织的操作员勾不全，改不了 PI 默认规则。"""
+    vrule = line_void.current()
+    return {r["bill_no"] for r in db.all("SELECT * FROM sn_prd_mo WHERE pi = %s", pi) if not vrule.is_void(r)}
+
+
+def _pin_followers(cu: CurrentUser, pi: str, prev: dict, exclude: set[str]) -> list[str]:
+    """改 PI 默认规则前：沿用旧默认规则（没有单据规则）、这次没勾选的单据固化为单据规则（仍是旧规则，起始号不带），
+    默认规则的变化只影响之后同步进来的单据。返回固化的单据。"""
+    followers = [b for b in pi_bills(pi) if b not in exclude]
+    have = set(valid_bill_rules(pi, followers))
+    pinned = [b for b in followers if b not in have]
+    now = util.now()
+    for b in pinned:
+        db.exec(
+            f"INSERT INTO {bill_table()}(bill_no, pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
+            "VALUES (%s,%s,%s,%s,%s,NULL,%s,%s) ON DUPLICATE KEY UPDATE pi_no = VALUES(pi_no), "
+            "prefix = VALUES(prefix), rule_id = VALUES(rule_id), custom_json = VALUES(custom_json), seq_start = NULL, "
+            "bound_by = VALUES(bound_by), bound_at = VALUES(bound_at)",
+            b,
+            pi,
+            prev["prefix"],
+            prev["rule_id"],
+            prev["custom_json"],
+            cu.emp_no,
+            now,
+        )
+    return pinned
+
+
 def prefix_row(prefix: str) -> dict | None:
     return db.one("SELECT * FROM sn_prefix_counter WHERE prefix = %s", prefix)
 
@@ -2655,8 +2790,44 @@ def _err_json(e: BizError | None) -> dict | None:
 
 
 def pi_default(pi: str) -> Resolved | None:
-    """本 PI 的规则（一个 PI 一个规则，全部物料行都用它）；没选过时 None。"""
+    """本 PI 的默认规则（没有单据规则的单据都用它）；没选过时 None。"""
     return _registered(pi, pi_rule(pi))
+
+
+def bill_views(pi: str, bills) -> dict[str, dict]:
+    """生成页单据头的规则：rule（单据用的规则，同 info）、layer（BILL 单据规则 / PI 沿用默认规则 / None 未选规则）、
+    prefix（登记的前缀）、rule_prefix（「选规则」默认值，同 pi_prefix；沿用默认规则的同 PI 的）、
+    locked_prefix（单据有号时锁定的前缀，没号为 None）。"""
+    xs = sorted({b for b in bills if b})
+    d = pi_rule(pi)
+    own = valid_bill_rules(pi, xs)
+    used = bills_used_prefixes(xs)
+    d_info = info(_registered(pi, d)) if d is not None else None
+    out: dict[str, dict] = {}
+    memo: dict[str, tuple] = {}
+    for b in xs:
+        row = own.get(b)
+        if row is None:
+            out[b] = {
+                "layer": None if d is None else "PI",
+                "prefix": None if d is None else d["prefix"],
+                "rule": d_info,
+                "rule_prefix": None,
+                "locked_prefix": used.get(b),
+            }
+            continue
+        k = json.dumps([row["rule_id"], row["custom_json"], row["seq_start"], row["prefix"]], sort_keys=True)
+        if k not in memo:
+            memo[k] = (info(_registered(pi, row)), pi_prefix(pi, row))
+        r_info, r_prefix = memo[k]
+        out[b] = {
+            "layer": "BILL",
+            "prefix": row["prefix"],
+            "rule": r_info,
+            "rule_prefix": r_prefix,
+            "locked_prefix": used.get(b),
+        }
+    return out
 
 
 def info(
@@ -2726,11 +2897,20 @@ def info(
 
 
 def line_rules_brief(pi: str, keys: list[tuple[str, int]]) -> dict[tuple[str, int], dict]:
-    """订单页右表的「SN 规则」列：一个 PI 一个规则，各物料行相同。"""
+    """订单页右表的「SN 规则」列：按单据（单据规则，没有时为 PI 默认规则），同一单据的物料行相同。"""
     if not keys or not pi:
         return {}
-    v = info(pi_default(pi))
-    return dict.fromkeys(keys, v)
+    d = pi_rule(pi)
+    regs = effective_regs(pi, {no for no, _ in keys}, d)
+    memo: dict[str, dict | None] = {}
+    out: dict[tuple[str, int], dict] = {}
+    for k in keys:
+        row = regs.get(k[0])
+        mk = "" if row is None else json.dumps([row["rule_id"], row["custom_json"], row["seq_start"]], sort_keys=True)
+        if mk not in memo:
+            memo[mk] = info(_registered(pi, row))
+        out[k] = memo[mk]
+    return out
 
 
 # ================================================================== 选取 / 绑定
@@ -2814,56 +2994,124 @@ def same_format_rule(cu: CurrentUser | None, pi: str, spec: codec.Spec) -> Resol
     return None
 
 
-def _check_locked(pi: str, target: str | None) -> None:
-    """一个 PI 一个规则前缀：本 PI 有号（生成过、没全删）时只能用号上的前缀；没有号时可以改选。"""
-    locked = pi_used_prefix(pi)
-    if locked is not None and target != locked:
-        raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=locked, new=target or "-")
-
-
 def _register(
     cu: CurrentUser,
     pi: str,
+    bills: set[str],
     res: Resolved,
     rule_id: int | None,
     custom: dict | None,
     seq_start: int | None,
     grow: bool | None,
     label: str,
-) -> None:
-    """登记本 PI 的规则（覆盖原登记；之后同步进来的单据也用它），前缀第一次被选时登记前缀与自动突破开关。
-    改选（原来登记的是别的规则）作用于整张 PI，须对本 PI 全部单据的生产组织都有授权。"""
+) -> str:
+    """登记所选单据的规则（按单据），前缀第一次被选时登记前缀与自动突破开关。返回登记到哪一层：
+    - PI：本 PI 还没有默认规则，或勾选了本 PI 全部单据（eligible_bills）——写 PI 默认规则（之后同步进来的单据、
+      没有单据规则的单据都用它），所选单据的单据规则清掉（沿用默认）；改默认规则前，沿用旧默认规则、这次没勾选的单据
+      先固化为单据规则（仍是旧规则）。
+    - BILL：其余情况——所选单据各写单据规则（起始号记在单据规则上）。"""
     prefix = res.version["prefix"]
     check_slot_use(pi, res)
     if slot() == SLOT2:
         mark_second(cu, role_key(res))
-    table = reg_table()
+    table, btable = reg_table(), bill_table()
     prev = db.one(f"SELECT * FROM {table} WHERE pi_no = %s FOR UPDATE", pi)
     ident = ("R", int(rule_id)) if rule_id is not None else ("C", json.dumps(custom, sort_keys=True))
-    if prev is not None and _row_ident(prev) != ident:
-        _check_pi_scope(cu, pi)
     ensure_prefix(cu, prefix, grow)
     now = util.now()
-    db.exec(
-        f"INSERT INTO {table}(pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE prefix = VALUES(prefix), rule_id = VALUES(rule_id), "
-        "custom_json = VALUES(custom_json), seq_start = VALUES(seq_start), bound_by = VALUES(bound_by), "
-        "bound_at = VALUES(bound_at)",
-        pi,
-        prefix,
-        rule_id,
-        None if custom is None else json.dumps(custom, ensure_ascii=False, sort_keys=True),
-        seq_start,
-        cu.emp_no,
-        now,
-    )
+    cj = None if custom is None else json.dumps(custom, ensure_ascii=False, sort_keys=True)
+    xs = sorted(bills)
+    pinned: list[str] = []
+    if prev is None or set(xs) >= eligible_bills(pi):
+        if prev is not None and _row_ident(prev) != ident:
+            pinned = _pin_followers(cu, pi, prev, set(xs))
+        db.exec(
+            f"INSERT INTO {table}(pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE prefix = VALUES(prefix), "
+            "rule_id = VALUES(rule_id), custom_json = VALUES(custom_json), seq_start = VALUES(seq_start), "
+            "bound_by = VALUES(bound_by), bound_at = VALUES(bound_at)",
+            pi,
+            prefix,
+            rule_id,
+            cj,
+            seq_start,
+            cu.emp_no,
+            now,
+        )
+        if xs:
+            db.exec(f"DELETE FROM {btable} WHERE bill_no IN ({marks(len(xs))})", *xs)
+        layer = "PI"
+    else:
+        for no in xs:
+            db.exec(
+                f"INSERT INTO {btable}(bill_no, pi_no, prefix, rule_id, custom_json, seq_start, bound_by, bound_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE pi_no = VALUES(pi_no), "
+                "prefix = VALUES(prefix), rule_id = VALUES(rule_id), custom_json = VALUES(custom_json), "
+                "seq_start = VALUES(seq_start), bound_by = VALUES(bound_by), bound_at = VALUES(bound_at)",
+                no,
+                pi,
+                prefix,
+                rule_id,
+                cj,
+                seq_start,
+                cu.emp_no,
+                now,
+            )
+        layer = "BILL"
     audit.record(
         cu,
         audit.entry(audit.RULE_PI_BIND)
         .pi(pi)
         .info(
-            slot_text() + label + ("" if prev is None else f" (was {prev['prefix']} rule_id={prev['rule_id'] or '-'})")
+            slot_text()
+            + label
+            + (" (PI 默认规则" if layer == "PI" else " (单据规则")
+            + (f" 单据 {util.cut(','.join(xs), 300)}" if xs else "")
+            + ("" if prev is None or layer != "PI" else f"；原默认 {prev['prefix']} rule_id={prev['rule_id'] or '-'}")
+            + (f"；沿用原默认规则的单据固化为单据规则 {util.cut(','.join(pinned), 300)}" if pinned else "")
+            + ")"
         ),
+    )
+    return layer
+
+
+def _bills_of(keys: list[tuple[str, int, dict]]) -> set[str]:
+    return {no for no, _, _ in keys}
+
+
+def _use_default(cu: CurrentUser, pi: str, bills: set[str]) -> dict:
+    """所选单据改用本 PI 的默认规则：清掉单据规则（单据有号时默认规则的前缀须与号上的相同）。"""
+    prev = db.one(f"SELECT * FROM {reg_table()} WHERE pi_no = %s", pi)
+    if prev is None:
+        raise biz(ErrorCode.RULE_PI_DEFAULT_NONE, pi=pi)
+    res = _registered(pi, prev)
+    check_bills_locked(bills, prev["prefix"])
+    xs = sorted(bills)
+    gone = sorted(bill_rules(xs))
+    if gone:
+        db.exec(f"DELETE FROM {bill_table()} WHERE bill_no IN ({marks(len(gone))})", *gone)
+        audit.record(
+            cu,
+            audit.entry(audit.RULE_PI_BIND)
+            .pi(pi)
+            .info(f"{slot_text()}单据 {util.cut(','.join(gone), 300)} 改用 PI 默认规则 {prev['prefix']}"),
+        )
+    if res is not None:
+        res = replace(res, seq_grow=prefix_grow(prev["prefix"]))
+    return {"pi_no": pi, "rule": info(res), "lines": _lines_of_bills(pi, xs), "layer": "DEFAULT"}
+
+
+def _lines_of_bills(pi: str, bills: list[str]) -> int:
+    """所选单据的有效物料行数（失效的不算）。"""
+    if not bills:
+        return 0
+    vrule = line_void.current()
+    return sum(
+        1
+        for r in db.all(
+            f"SELECT * FROM sn_prd_mo WHERE pi = %s AND bill_no IN ({marks(len(bills))})", pi, *sorted(bills)
+        )
+        if not vrule.is_void(r)
     )
 
 
@@ -2873,23 +3121,27 @@ def select_for_lines(
     lines: list[dict] | None,
     rule_id: int | None,
     custom: dict | None,
+    use_default: bool = False,
 ) -> dict:
-    """选定 / 改选规则：一个 PI 一个规则前缀，登记在 PI 上，本 PI 全部物料行、之后同步进来的单据都用它。
+    """选定 / 改选所选单据的规则（按单据，勾选的物料行作用于所在的整张单据；物料行不能单独选规则）。
     规则库（rule_id；版本已归属别的 PI 时共用前缀）或自定义（custom；与本 PI 已有的、或前缀的规则在本 PI 下将用的
-    版本格式完全相同时登记为那条规则；不同的生成成功后才落库：前缀已有规则时归到它下面，否则新建规则）。
+    版本格式完全相同时登记为那条规则；不同的生成成功后才落库：前缀已有规则时归到它下面，否则新建规则），
+    或 use_default：所选单据改用本 PI 的默认规则。登记到哪一层见 _register。
     - lines：点选 / 勾选的物料行（须属本 PI、有写权限）。
-    - 起始号（custom.seq_start）记在 PI 上，只管下一次生成。
+    - 起始号（custom.seq_start）记在登记上，只管下一次生成。
     - 流水上限自动突破（custom.seq_grow）按前缀：前缀第一次被选时按这次的选择（不填默认开启），之后在规则库改。
-    - 本 PI 有号时前缀锁定（RULE_PI_PREFIX_LOCKED），号全部删掉（或还没生成）可以改选。"""
+    - 所选单据有号时前缀锁定（RULE_BILL_PREFIX_LOCKED），号全部删掉（或还没生成）可以改选。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
-    # 与生成、删号、分配、转移共用 PI 操作锁：生成进行中改选时，「本 PI 有号」的判断（_check_locked）
-    # 看不到还没提交的号，会把登记改成别的前缀，生成提交后号在旧前缀、登记却是新前缀（一个 PI 用了两个前缀）。
-    # 拿不到锁报 PI_BUSY
+    # 与生成、删号、分配、转移共用 PI 操作锁：生成进行中改选时，「单据有号」的判断（check_bills_locked）
+    # 看不到还没提交的号，会把登记改成别的前缀，生成提交后号在旧前缀、登记却是新前缀。拿不到锁报 PI_BUSY
     with locks.with_pi_lock(pi), db.tx():
         keys = _line_keys(pi, lines)
         cu.check_write(*{line["org_code"] for _, _, line in keys})
+        bills = _bills_of(keys)
+        if use_default:
+            return _use_default(cu, pi, bills)
         grow = None
         if custom is not None:
             if custom.get("inc_end") is not None:
@@ -2899,7 +3151,7 @@ def select_for_lines(
             grow = None if grow is None else bool(grow)
             if res.fail is not None:
                 raise res.fail
-            _check_locked(pi, res.version["prefix"])
+            check_bills_locked(bills, res.version["prefix"])
             start = res.seq_start
             if res.inc is not None:
                 # 带识别码：只预显示本 PI 的值（生成时才占用，见 realize）；前缀防重按前缀层文本
@@ -2934,15 +3186,16 @@ def select_for_lines(
             pre = resolve(rule, pi, SRC_LINE)
             if pre.fail is not None:
                 raise pre.fail
-            _check_locked(pi, pre.version["prefix"] if pre.version is not None else None)
+            check_bills_locked(bills, pre.version["prefix"] if pre.version is not None else None)
             res = _resolve_for_select(rule, pi, SRC_LINE)
             rid, cj, start = rule["id"], None, None
             label = f"{rule['rule_code']} v{res.version['version']}"
-        _register(cu, pi, res, rid, cj, start, grow, label)
+        layer = _register(cu, pi, bills, res, rid, cj, start, grow, label)
         if res.inc_scope is not None and res.inc_scope.pick is not None:
             _resume_released(res.version["prefix"])
         res = replace(res, seq_grow=prefix_grow(res.version["prefix"]))
-        return {"pi_no": pi, "rule": info(res), "lines": len(_pi_lines(pi))}
+        n = len(_pi_lines(pi)) if layer == "PI" else _lines_of_bills(pi, sorted(bills))
+        return {"pi_no": pi, "rule": info(res), "lines": n, "layer": layer}
 
 
 def _resume_released(prefix: str) -> None:
@@ -3017,7 +3270,7 @@ def _check_pi_scope(cu: CurrentUser, pi: str) -> None:
 
 
 def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None) -> dict:
-    """给 PI 登记规则库规则（同生成页选规则，不带物料行）；版本已归属别的 PI 时共用前缀。"""
+    """给 PI 登记默认规则（规则库规则；同勾选本 PI 全部单据选规则，不带物料行）；版本已归属别的 PI 时共用前缀。"""
     pi = util.trim(pi_in)
     if not pi:
         raise biz(ErrorCode.PI_REQUIRED)
@@ -3029,23 +3282,27 @@ def bind_pi(cu: CurrentUser, pi_in: str | None, rule_id: int | None) -> dict:
         pre = resolve(rule, pi, SRC_PI)
         if pre.fail is not None:
             raise pre.fail
-        _check_locked(pi, pre.version["prefix"] if pre.version is not None else None)
+        bills = eligible_bills(pi)
+        check_bills_locked(bills, pre.version["prefix"] if pre.version is not None else None)
         res = _resolve_for_select(rule, pi, SRC_PI)
-        _register(cu, pi, res, rule["id"], None, None, None, f"{rule['rule_code']} v{res.version['version']}")
+        _register(cu, pi, bills, res, rule["id"], None, None, None, f"{rule['rule_code']} v{res.version['version']}")
         return {"pi_no": pi, "rule": info(replace(res, seq_grow=prefix_grow(res.version["prefix"])))}
 
 
 def unbind_pi(cu: CurrentUser, pi_in: str | None) -> dict:
-    """解除 PI 的规则登记：本 PI 有号时不能解除（前缀锁定）。"""
+    """解除 PI 的默认规则：沿用它（没有单据规则）的单据有号时不能解除（前缀锁定）；单据规则不动。"""
     pi = util.trim(pi_in)
     _check_pi_scope(cu, pi)
     # PI 操作锁：同 select_for_lines（生成进行中解除登记，同样看不到还没提交的号）
     with locks.with_pi_lock(pi), db.tx():
         b = db.one(f"SELECT * FROM {reg_table()} WHERE pi_no = %s FOR UPDATE", pi)
         if b is not None:
-            used = pi_used_prefix(pi)
-            if used is not None:
-                raise biz(ErrorCode.RULE_PI_PREFIX_LOCKED, pi=pi, prefix=used, new="-")
+            xs = pi_bills(pi)
+            own = valid_bill_rules(pi, xs)
+            used = bills_used_prefixes([x for x in xs if x not in own])
+            if used:
+                no = sorted(used)[0]
+                raise biz(ErrorCode.RULE_BILL_PREFIX_LOCKED, bill_no=no, prefix=used[no], new="-")
             db.exec(f"DELETE FROM {reg_table()} WHERE pi_no = %s", pi)
             audit.record(
                 cu,
@@ -3075,7 +3332,7 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
     firsts: set[str] = set()
     if slot() == SLOT2:
         firsts = set(db.column("SELECT prefix FROM sn_prefix_counter")) | set(
-            db.column("SELECT prefix FROM sn_pi_rule")
+            db.column(f"SELECT prefix FROM {reg_any(SLOT1)} b")
         )
         firsts |= set(
             db.column(
@@ -3083,7 +3340,7 @@ def options(pi: str | None, customer: str | None, facs: tuple[str, ...] | None =
                 "WHERE v.claimed_pi IS NOT NULL"
             )
         )
-        firsts |= set(db.column("SELECT DISTINCT r.prefix FROM sn_rule r JOIN sn_pi_rule b ON b.rule_id = r.id"))
+        firsts |= set(db.column(f"SELECT DISTINCT r.prefix FROM sn_rule r JOIN {reg_any(SLOT1)} b ON b.rule_id = r.id"))
     for r in db.all("SELECT * FROM sn_rule WHERE 1=1" + vsql + " ORDER BY rule_code", *vargs):
         if slot() == SLOT1 and r["prefix"] in seconds:
             continue
@@ -3208,12 +3465,55 @@ def _custom_names(res: Resolved) -> tuple[str, str]:
     return code, code
 
 
+#: realize 期间这次生成的物料行（_bind_rule 按它找登记）
+_REALIZE_LINES: contextvars.ContextVar[list[tuple[str, int]] | None] = contextvars.ContextVar(
+    "sn_realize_lines", default=None
+)
+
+
 def _bind_rule(pi: str, rule_id: int) -> None:
-    """自定义规则存入规则库后：PI 登记改记为这条规则（前缀、起始号不变）。"""
-    db.exec(f"UPDATE {reg_table()} SET rule_id = %s, custom_json = NULL WHERE pi_no = %s", rule_id, pi)
+    """自定义规则存入规则库后：这次生成用的登记改记为这条规则（前缀、起始号不变）——所选单据的单据规则，没有单据规则的
+    单据用的 PI 默认规则；本 PI 别的单据登记了同一个自定义规则（参数完全相同）的也一起改，免得之后再存一次。"""
+    lines = _REALIZE_LINES.get() or []
+    bills = sorted({no for no, _ in lines})
+    own = valid_bill_rules(pi, bills)
+    customs = {r["custom_json"] for r in own.values() if r["rule_id"] is None and r["custom_json"]}
+    if not bills or any(b not in own for b in bills):
+        d = pi_rule(pi)
+        if d is not None and d["rule_id"] is None and d["custom_json"]:
+            customs.add(d["custom_json"])
+    if not customs:
+        return
+    cs = sorted(customs)
+    db.exec(
+        f"UPDATE {reg_table()} SET rule_id = %s, custom_json = NULL WHERE pi_no = %s AND rule_id IS NULL "
+        f"AND custom_json IN ({marks(len(cs))})",
+        rule_id,
+        pi,
+        *cs,
+    )
+    db.exec(
+        f"UPDATE {bill_table()} SET rule_id = %s, custom_json = NULL WHERE rule_id IS NULL "
+        f"AND custom_json IN ({marks(len(cs))}) AND (pi_no = %s"
+        + ("" if not bills else f" OR bill_no IN ({marks(len(bills))})")
+        + ")",
+        rule_id,
+        *cs,
+        pi,
+        *bills,
+    )
 
 
 def realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
+    """生成事务内：把本次要用的版本落库（见 _realize）。"""
+    tok = _REALIZE_LINES.set(list(lines))
+    try:
+        return _realize(cu, pi, res, lines)
+    finally:
+        _REALIZE_LINES.reset(tok)
+
+
+def _realize(cu: CurrentUser, pi: str, res: Resolved, lines: list[tuple[str, int]]) -> dict:
     """生成事务内：把本次要用的版本落库、标记已使用并归属本 PI，返回版本行。
     自定义规则（PLAN_NEW）这时才落库（生成失败或取消不留）：前缀已有规则时归到那条规则下（_attach），前缀是新的才
     新建规则；PI 登记改记为这条规则。
@@ -3540,10 +3840,17 @@ def _reg_of_key(key: str) -> str:
 
 
 def _inc_regs(rule: dict) -> list[dict]:
-    """登记在这个识别码前缀上的 PI（规则库规则登记为这条规则，或自定义规则的前缀层是它）。"""
+    """登记在这个识别码前缀上的登记（规则库规则登记为这条规则，或自定义规则的前缀层是它）：PI 默认规则与单据规则，
+    单据规则带 bill_no（PI 默认规则的 bill_no 为空）。"""
     head = rule["prefix"]
+    s = _role_of_key(head)
     out = []
-    for r in db.all(f"SELECT * FROM {_reg_of_key(head)} WHERE prefix LIKE %s", util.like_prefix(head)):
+    for r in db.all(
+        f"SELECT '' bill_no, {REG_COLS} FROM {reg_table(s)} WHERE prefix LIKE %s "
+        f"UNION ALL SELECT bill_no, {REG_COLS} FROM {bill_table(s)} WHERE prefix LIKE %s",
+        util.like_prefix(head),
+        util.like_prefix(head),
+    ):
         if r["rule_id"] is not None:
             if int(r["rule_id"]) == int(rule["id"]):
                 out.append(r)
@@ -3588,7 +3895,8 @@ def _customer_impact(rule: dict, before: list[str], after: list[str], by_pi: str
             free = pi_used_prefix(p) is None
         if cust in removed and free:
             x = out.setdefault(p, {"pi_no": p, "customer": cust, "prefix": reg["prefix"], "actions": []})
-            x["actions"].append("UNBIND")
+            if "UNBIND" not in x["actions"]:
+                x["actions"].append("UNBIND")
     return [x for x in sorted(out.values(), key=lambda x: x["pi_no"]) if x["actions"]]
 
 
@@ -3609,7 +3917,15 @@ def _apply_customers(
             )
             released.append(f"{x['pi_no']}({x['prefix']})")
         if "UNBIND" in x["actions"]:
-            db.exec(f"DELETE FROM {_reg_of_key(head)} WHERE pi_no = %s", x["pi_no"])
+            # 解除本 PI 登记在这个识别码前缀上的 PI 默认规则与单据规则（登记在别的前缀上的单据不动）
+            s = _role_of_key(head)
+            for reg in _inc_regs(rule):
+                if reg["pi_no"] != x["pi_no"]:
+                    continue
+                if reg["bill_no"]:
+                    db.exec(f"DELETE FROM {bill_table(s)} WHERE bill_no = %s", reg["bill_no"])
+                else:
+                    db.exec(f"DELETE FROM {reg_table(s)} WHERE pi_no = %s", reg["pi_no"])
             unbound.append(x["pi_no"])
             audit.record(
                 cu,

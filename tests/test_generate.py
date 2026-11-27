@@ -558,8 +558,8 @@ def test_pi_prefix_kept_until_all_sns_deleted(w, api):
     rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
     assert rp["prefix"] == hand and rp["custom"] is not None, "还剩 1 个号：沿用"
     assert w.select(pi, [(a, 1)], custom=m(prefix=P(), base=10, seq_len=4, with_length=False)).code == (
-        "RULE_PI_PREFIX_LOCKED"
-    )
+        "RULE_BILL_PREFIX_LOCKED"
+    ), "按单据锁定前缀（2026-11-27 按单据选规则）"
     ok(w.delete(pi, lines=[(a, 1)], reason="t"))
     rp = ok(api.get(f"/api/generate/context?pi={pi}", w.admin))["rule_prefix"]
     assert (rp["prefix"], rp["registered"]) == (hand, True)
@@ -687,7 +687,8 @@ def test_rules_bound_by_pi_only(w, api):
     p = ok(w.preview(p2))
     assert p["generatable"] is False and p["issues"][0]["issues"] == ["NO_RULE"]
     ctx = ok(api.get(f"/api/generate/context?pi={p2}", w.admin))
-    assert "pi_rule" not in ctx.body and "customer_rule" not in ctx.body, "生成页不再提供 PI 绑定入口，详情不带 PI 规则"
+    assert "customer_rule" not in ctx.body, "生成页不再提供客户绑定"
+    assert ctx["pi_rule"] is None, "p2 还没有 PI 默认规则（2026-11-27 起详情带 pi_rule：本 PI 的默认规则）"
     assert all(x["rule"] is None for b in ctx["bills"] for x in b["lines"]), "p1 的 PI 绑定不影响 p2"
 
 
